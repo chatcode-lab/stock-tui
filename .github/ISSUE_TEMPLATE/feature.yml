@@ -1,0 +1,21 @@
+name: Feature request
+description: Propose a focused product or provider improvement
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: Workflow
+      description: Describe the user workflow and the limitation you encountered.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Data licensing impact
+      description: Note whether the proposal adds, stores, or redistributes third-party data.
+

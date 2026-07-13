@@ -1,0 +1,57 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Rust
+/target/
+*.profraw
+
+# Runtime logs
+*.log
+*.log.*
+
+# Application state
+.stock-tui/
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.sqlite3-journal
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+# User-supplied design references (not licensed for redistribution)
+/20130722-221817.jpg
+/20131005-171420.jpg
+/20131005-171434.jpg
+/20131005-171441.jpg
+/20131005-171447.jpg
+/20131005-171454.jpg
+/20131005-171516.jpg
+/AtfNpQTCQAElNh9.png-large.png
+/ScreenShot2015-08-20at12.45.03PM.png
+/maxresdefault.jpg

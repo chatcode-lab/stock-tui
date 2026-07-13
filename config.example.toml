@@ -1,0 +1,10 @@
+# Copy to the platform config directory shown by `stock-tui --print-config`.
+feed = "iex"
+refresh_seconds = 300
+request_limit_per_minute = 180
+snapshot_batch_size = 100
+history_batch_size = 50
+
+# Advanced provider endpoints:
+# data_url = "https://data.alpaca.markets"
+# trading_url = "https://paper-api.alpaca.markets"

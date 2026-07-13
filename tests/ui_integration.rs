@@ -1,0 +1,442 @@
+use chrono::{Duration, TimeZone, Utc};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
+use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
+use stock_tui::{
+    app::{AppCommand, handle_event},
+    domain::{Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, TickerDetail},
+    ui::{
+        render,
+        state::{DetailTab, Overlay, Route, UiAction, UiState},
+    },
+};
+
+const VIEWPORTS: [(u16, u16); 5] = [(60, 20), (80, 24), (120, 40), (160, 48), (200, 60)];
+
+#[test]
+fn overview_renders_at_supported_viewports_with_visible_hit_targets() {
+    for (width, height) in VIEWPORTS {
+        let mut state = fixture_state();
+        let buffer = render_at(&mut state, width, height);
+        let screen = screen_text(&buffer);
+
+        assert_eq!(buffer.area, Rect::new(0, 0, width, height));
+        assert!(
+            screen.contains("STOCK TUI"),
+            "missing header at {width}x{height}"
+        );
+        assert!(
+            screen.contains("Consumer"),
+            "missing heatmap content at {width}x{height}"
+        );
+        assert!(
+            !screen.contains("needs at least"),
+            "supported viewport was rejected at {width}x{height}"
+        );
+        assert!(
+            state.hit_targets.len() >= 20,
+            "too few hit targets at {width}x{height}: {}",
+            state.hit_targets.len()
+        );
+
+        for target in &state.hit_targets {
+            assert!(target.rect.width > 0 && target.rect.height > 0);
+            assert!(target.rect.right() <= width && target.rect.bottom() <= height);
+            assert!(
+                rect_has_visible_cell(&buffer, target.rect),
+                "blank target {:?} at {width}x{height}",
+                target.action
+            );
+        }
+
+        if width < 120 || height < 36 {
+            assert!(
+                buffer.content().iter().any(|cell| cell.symbol() == "▀"),
+                "compact overview did not use paired heatmap rows at {width}x{height}"
+            );
+        }
+    }
+}
+
+#[test]
+fn keyboard_drills_from_overview_through_sector_to_ticker() {
+    let mut state = fixture_state();
+    state.selected_sector = Sector::ALL
+        .iter()
+        .position(|sector| *sector == Sector::Technology)
+        .expect("technology is in the fixed sector list");
+
+    let commands = press(&mut state, KeyCode::Enter, KeyModifiers::NONE);
+    assert!(commands.is_empty());
+    assert_eq!(state.route, Route::Sector(Sector::Technology));
+
+    let buffer = render_at(&mut state, 80, 24);
+    let screen = screen_text(&buffer);
+    assert!(screen.contains("TECHNOLOGY / TOP 100"));
+    assert!(screen.contains("ACME"));
+    assert!(
+        state
+            .hit_targets
+            .iter()
+            .any(|target| target.action == UiAction::OpenTicker("ACME".to_owned()))
+    );
+
+    let commands = press(&mut state, KeyCode::Enter, KeyModifiers::NONE);
+    assert_eq!(commands, vec![AppCommand::LoadTicker("ACME".to_owned())]);
+    assert_eq!(state.route, Route::Ticker("ACME".to_owned()));
+}
+
+#[test]
+fn detail_renders_combined_full_view_and_each_compact_tab() {
+    let mut full = detail_state();
+    let full_buffer = render_at(&mut full, 160, 48);
+    let full_screen = screen_text(&full_buffer);
+
+    for expected in [
+        "ACME / DETAIL",
+        "$103.75",
+        "PRICE",
+        "VOLUME",
+        "STATISTICS",
+        "MARKET CAP",
+        "NEWS",
+        "Acme expands terminal analytics coverage",
+    ] {
+        assert!(
+            full_screen.contains(expected),
+            "missing {expected:?} in full detail"
+        );
+    }
+    assert!(full.chart_rect.is_some());
+    assert!(!full.chart_sample_indices.is_empty());
+    assert!(
+        full.hit_targets
+            .iter()
+            .any(|target| target.action == UiAction::OpenNews(0))
+    );
+
+    let mut compact = detail_state();
+    let chart_buffer = render_at(&mut compact, 80, 24);
+    let chart_screen = screen_text(&chart_buffer);
+    assert!(chart_screen.contains("Chart"));
+    assert!(chart_screen.contains("PRICE"));
+    assert!(chart_screen.contains("VOLUME"));
+    assert!(compact.chart_rect.is_some());
+
+    assert!(press(&mut compact, KeyCode::Tab, KeyModifiers::NONE).is_empty());
+    assert_eq!(compact.detail_tab, DetailTab::Statistics);
+    let statistics_screen = screen_text(&render_at(&mut compact, 80, 24));
+    assert!(statistics_screen.contains("STATISTICS"));
+    assert!(statistics_screen.contains("OPEN"));
+    assert!(statistics_screen.contains("MARKET CAP"));
+
+    assert!(press(&mut compact, KeyCode::Tab, KeyModifiers::NONE).is_empty());
+    assert_eq!(compact.detail_tab, DetailTab::News);
+    let news_buffer = render_at(&mut compact, 80, 24);
+    let news_screen = screen_text(&news_buffer);
+    assert!(news_screen.contains("NEWS"));
+    assert!(news_screen.contains("Acme expands terminal analytics coverage"));
+    assert!(
+        compact
+            .hit_targets
+            .iter()
+            .any(|target| target.action == UiAction::OpenNews(0))
+    );
+}
+
+#[test]
+fn search_accepts_input_renders_results_and_opens_selection() {
+    let mut state = fixture_state();
+    state.search_results = state
+        .tiles
+        .iter()
+        .filter(|tile| tile.company.sector == Some(Sector::Technology))
+        .map(|tile| tile.company.clone())
+        .collect();
+
+    assert_eq!(
+        press(&mut state, KeyCode::Char('/'), KeyModifiers::NONE),
+        vec![AppCommand::Search(String::new())]
+    );
+    assert_eq!(state.overlay, Some(Overlay::Search));
+    assert_eq!(
+        press(&mut state, KeyCode::Char('a'), KeyModifiers::NONE),
+        vec![AppCommand::Search("a".to_owned())]
+    );
+
+    let buffer = render_at(&mut state, 80, 24);
+    let screen = screen_text(&buffer);
+    assert!(screen.contains("COMPANY SEARCH"));
+    assert!(screen.contains('⌕'));
+    assert_eq!(state.search_query, "a");
+    assert!(screen.contains("ACME"));
+    assert!(screen.contains("BETA"));
+    assert!(
+        state
+            .hit_targets
+            .iter()
+            .any(|target| target.action == UiAction::SearchResult("ACME".to_owned()))
+    );
+
+    assert!(press(&mut state, KeyCode::Down, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.search_selected, 1);
+    assert_eq!(
+        press(&mut state, KeyCode::Enter, KeyModifiers::NONE),
+        vec![AppCommand::LoadTicker("BETA".to_owned())]
+    );
+    assert_eq!(state.overlay, None);
+    assert_eq!(state.route, Route::Ticker("BETA".to_owned()));
+}
+
+#[test]
+fn rendered_mouse_target_hovers_and_opens_ticker() {
+    let mut state = fixture_state();
+    state.route = Route::Sector(Sector::Technology);
+    render_at(&mut state, 80, 24);
+
+    let target = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("ACME".to_owned()))
+        .cloned()
+        .expect("sector render registers the ACME tile");
+    let column = target.rect.x + target.rect.width / 2;
+    let row = target.rect.y + target.rect.height / 2;
+
+    let hover_commands = handle_event(
+        &mut state,
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+    assert!(hover_commands.is_empty());
+    assert_eq!(state.hovered_symbol.as_deref(), Some("ACME"));
+
+    let click_commands = handle_event(
+        &mut state,
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+    assert_eq!(
+        click_commands,
+        vec![AppCommand::LoadTicker("ACME".to_owned())]
+    );
+    assert_eq!(state.route, Route::Ticker("ACME".to_owned()));
+}
+
+#[test]
+fn keyboard_changes_ranges_opens_favorites_toggles_star_and_goes_back() {
+    let mut state = fixture_state();
+    state.route = Route::Sector(Sector::Technology);
+
+    assert_eq!(
+        press(&mut state, KeyCode::Char('f'), KeyModifiers::NONE),
+        vec![AppCommand::ToggleFavorite("ACME".to_owned())]
+    );
+    assert_eq!(
+        press(&mut state, KeyCode::Char('7'), KeyModifiers::NONE),
+        vec![AppCommand::ReloadTiles]
+    );
+    assert_eq!(state.date_range, DateRange::FiveYears);
+    assert_eq!(
+        press(&mut state, KeyCode::Char('['), KeyModifiers::NONE),
+        vec![AppCommand::ReloadTiles]
+    );
+    assert_eq!(state.date_range, DateRange::Year);
+
+    assert!(press(&mut state, KeyCode::Char('F'), KeyModifiers::SHIFT).is_empty());
+    assert_eq!(state.route, Route::Favorites);
+    assert!(press(&mut state, KeyCode::Backspace, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.route, Route::Overview);
+
+    state.route = Route::Ticker("ACME".to_owned());
+    state.detail = Some(fixture_detail());
+    assert!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.route, Route::Sector(Sector::Technology));
+    assert!(state.detail.is_none());
+    assert!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.route, Route::Overview);
+}
+
+fn fixture_state() -> UiState {
+    let mut tiles = Vec::new();
+    for (sector_index, sector) in Sector::ALL.into_iter().enumerate() {
+        for rank in 0..2 {
+            let symbol = match (sector, rank) {
+                (Sector::Technology, 0) => "ACME".to_owned(),
+                (Sector::Technology, 1) => "BETA".to_owned(),
+                _ => format!("S{sector_index}{rank}"),
+            };
+            let name = match symbol.as_str() {
+                "ACME" => "Acme Systems".to_owned(),
+                "BETA" => "Beta Computing".to_owned(),
+                _ => format!("{} Fixture {rank}", sector.label()),
+            };
+            let ordinal = sector_index * 2 + rank;
+            let company = fixture_company(
+                &symbol,
+                &name,
+                sector,
+                u16::try_from(rank + 1).expect("fixture rank fits u16"),
+                900_000_000_000.0 - ordinal as f64 * 23_000_000_000.0,
+            );
+            tiles.push(MarketTile {
+                company,
+                price: Some(82.0 + ordinal as f64 * 3.25),
+                period_return: Some((ordinal as f64 - 8.5) / 100.0),
+                volume: Some(1_200_000.0 + ordinal as f64 * 75_000.0),
+                starred: rank == 0 && sector_index.is_multiple_of(3),
+                stale: ordinal.is_multiple_of(7),
+                updated_at: Some(fixture_time()),
+            });
+        }
+    }
+
+    UiState {
+        tiles,
+        status: "Fixture cache ready".to_owned(),
+        last_refresh: Some(fixture_time()),
+        ..UiState::default()
+    }
+}
+
+fn detail_state() -> UiState {
+    UiState {
+        route: Route::Ticker("ACME".to_owned()),
+        detail: Some(fixture_detail()),
+        ..fixture_state()
+    }
+}
+
+fn fixture_detail() -> TickerDetail {
+    let company = fixture_company(
+        "ACME",
+        "Acme Systems",
+        Sector::Technology,
+        1,
+        875_000_000_000.0,
+    );
+    let bars = (0..48)
+        .map(|index| {
+            let baseline = 96.0 + index as f64 * 0.16;
+            let close = baseline + (index as f64 / 4.0).sin() * 1.8;
+            Bar {
+                symbol: "ACME".to_owned(),
+                timeframe: "1Hour".to_owned(),
+                timestamp: fixture_time() - Duration::hours(47 - index),
+                open: close - 0.35,
+                high: close + 0.9,
+                low: close - 1.1,
+                close,
+                volume: 800_000.0 + index as f64 * 18_000.0,
+                trade_count: Some(12_000 + u64::try_from(index).expect("fixture index fits u64")),
+                vwap: Some(close - 0.08),
+                source: "fixture".to_owned(),
+            }
+        })
+        .collect();
+    let news = vec![
+        NewsItem {
+            id: "acme-analytics".to_owned(),
+            headline: "Acme expands terminal analytics coverage".to_owned(),
+            source: "Fixture Wire".to_owned(),
+            published_at: fixture_time() - Duration::hours(3),
+            url: "https://example.invalid/acme/analytics".to_owned(),
+            summary: "A concise fixture summary.".to_owned(),
+            symbols: vec!["ACME".to_owned()],
+        },
+        NewsItem {
+            id: "acme-results".to_owned(),
+            headline: "Acme reports steady demand across its portfolio".to_owned(),
+            source: "Test Ledger".to_owned(),
+            published_at: fixture_time() - Duration::days(1),
+            url: "https://example.invalid/acme/results".to_owned(),
+            summary: "A second concise fixture summary.".to_owned(),
+            symbols: vec!["ACME".to_owned()],
+        },
+    ];
+
+    TickerDetail {
+        company,
+        snapshot: Some(Snapshot {
+            symbol: "ACME".to_owned(),
+            price: Some(103.75),
+            previous_close: Some(101.2),
+            open: Some(101.25),
+            high: Some(104.4),
+            low: Some(100.8),
+            volume: Some(12_450_000.0),
+            updated_at: fixture_time(),
+        }),
+        bars,
+        news,
+        starred: true,
+        period_return: Some(0.0725),
+        sector_return: Some(0.018),
+        sector_rank: Some(1),
+    }
+}
+
+fn fixture_company(
+    symbol: &str,
+    name: &str,
+    sector: Sector,
+    rank: u16,
+    market_cap: f64,
+) -> Company {
+    Company {
+        symbol: symbol.to_owned(),
+        name: name.to_owned(),
+        sector: Some(sector),
+        raw_sector: Some(sector.label().to_owned()),
+        exchange: "NASDAQ".to_owned(),
+        industry: "Terminal Software".to_owned(),
+        market_cap: Some(market_cap),
+        shares_outstanding: Some(4_000_000_000.0),
+        rank: Some(rank),
+        description: format!("{name} builds market analysis software used by terminal operators."),
+        in_universe: true,
+        retained: false,
+        updated_at: fixture_time(),
+    }
+}
+
+fn fixture_time() -> chrono::DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 7, 13, 15, 30, 0)
+        .single()
+        .expect("fixture timestamp is valid")
+}
+
+fn render_at(state: &mut UiState, width: u16, height: u16) -> Buffer {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("test terminal initializes");
+    terminal
+        .draw(|frame| render(frame, state))
+        .expect("UI renders to the test backend");
+    terminal.backend().buffer().clone()
+}
+
+fn press(state: &mut UiState, code: KeyCode, modifiers: KeyModifiers) -> Vec<AppCommand> {
+    handle_event(state, Event::Key(KeyEvent::new(code, modifiers)))
+}
+
+fn screen_text(buffer: &Buffer) -> String {
+    let mut text = String::new();
+    for cell in buffer.content() {
+        text.push_str(cell.symbol());
+    }
+    text
+}
+
+fn rect_has_visible_cell(buffer: &Buffer, rect: Rect) -> bool {
+    (rect.y..rect.bottom())
+        .any(|y| (rect.x..rect.right()).any(|x| !buffer[(x, y)].symbol().trim().is_empty()))
+}

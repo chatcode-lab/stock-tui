@@ -1,0 +1,28 @@
+name: Bug report
+description: Report a reproducible stock-tui problem
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: Include the expected and observed behavior.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: stock-tui version
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Terminal and operating system
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction
+      description: Remove API keys and other credentials from all output.
+    validations:
+      required: true
+
