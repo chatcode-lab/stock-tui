@@ -20,7 +20,7 @@ pre-1.0 releases.
 - Responsive compact/full layouts, centered equal-cell heatmaps, half-block
   overview compression, true-color heat scales with contrast-aware focus,
   monochrome `NO_COLOR` mode, and a thin Braille price trace with softened area
-  fill, solid block volume, and labeled axes.
+  fill, seamless block volume, and labeled axes.
 - Ticker detail with price, return, OHLC, volume, market cap, sector context,
   company description, related news, persistent selection, and browser opening
   with OSC 52 clipboard fallback.

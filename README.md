@@ -37,7 +37,8 @@ read-only: it displays market information and does not place orders.
 The heat scale is symmetric around zero and capped using the visible market's
 90th-percentile absolute move. This keeps one extreme ticker from flattening
 the rest of the palette. Missing or zero-return data appears neutral; data more
-than 72 hours old is rendered with muted text.
+than 72 hours old keeps a contrast-aware foreground and is underlined as a
+freshness hint.
 
 ## Why Rust
 
@@ -176,7 +177,7 @@ news row can be clicked with the left mouse button.
 
 | Input | Action |
 | --- | --- |
-| Mouse move | Select a sector, ticker, or news row; move the chart crosshair |
+| Mouse move | Select a sector, ticker, or news row; move the chart cursor |
 | Left click | Activate the control, sector, ticker, tab, or news item |
 | Wheel on overview/sector | Move to the previous or next date range |
 | Wheel on ticker chart | Move the selected chart sample |

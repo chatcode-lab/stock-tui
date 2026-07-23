@@ -138,9 +138,11 @@ and last point. A Braille canvas renders the thin price trace and grid over a
 per-cell RGB area fill, with price and range-aware date scales. The fill samples
 the same two horizontal Braille subcells as the trace and uses fractional edge
 coverage plus a short exterior fade to soften its cell-resolution boundary. A
-responsive 4-7-row lower-block histogram renders contiguous volume columns.
-Hover or keyboard selection adds one vertical guide and a marker at its trace
-intersection, then updates the price/time label.
+responsive 4-7-row histogram renders contiguous volume columns, using terminal
+background fill for complete cells and lower blocks only for fractional caps.
+This avoids font line-height seams between stacked full-block glyphs. Hover or
+keyboard selection adds one straight terminal-cell guide and a marker at its
+trace intersection, then updates the price/time label.
 
 ## Heatmap Semantics
 

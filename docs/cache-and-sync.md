@@ -152,7 +152,9 @@ Snapshots drive `1D` return when price and previous close are present. The UI
 falls back to cached bars when snapshot fields are unavailable. A tile is
 considered stale when its newest snapshot/bar timestamp is absent or more than
 72 hours old; weekends and holidays can therefore look stale after a long
-closure, which is an informational hint rather than a feed diagnosis.
+closure, which is an informational hint rather than a feed diagnosis. Stale
+ticker labels are underlined while retaining the same contrast-aware foreground
+as current labels.
 
 ## Lazy Detail Sync
 

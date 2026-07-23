@@ -1,7 +1,7 @@
 use chrono::{DateTime, Local, Utc};
 use ratatui::{
     Frame,
-    buffer::Buffer,
+    buffer::{Buffer, Cell},
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Style},
     symbols::Marker,
@@ -155,10 +155,6 @@ pub fn render_price_volume(
                 context.draw(&Line::new(0.0, *value, 1.0, *value, Color::Rgb(55, 64, 74)));
             }
             context.layer();
-            if let Some((x, _)) = hover_marker {
-                context.draw(&Line::new(x, bounds[0], x, bounds[1], CYAN));
-                context.layer();
-            }
             for pair in canvas_points.windows(2) {
                 context.draw(&Line::new(
                     pair[0].0, pair[0].1, pair[1].0, pair[1].1, accent,
@@ -168,7 +164,7 @@ pub fn render_price_volume(
     frame.render_widget(canvas, plot_area);
     render_area_gradient(frame.buffer_mut(), plot_area, &points, bounds, accent);
     if let Some(marker) = hover_marker {
-        render_hover_marker(frame.buffer_mut(), plot_area, marker, bounds);
+        render_hover_indicator(frame.buffer_mut(), plot_area, marker, bounds);
     }
     render_price_axis(frame, y_axis_area, bounds, &y_labels);
     render_time_axis(frame, x_axis_area, &sampled, state.date_range);
@@ -414,7 +410,7 @@ fn area_gradient_amount(price: f64, cell_top: f64, cell_bottom: f64, floor: f64)
     OUTER_EDGE_AMOUNT + (inside_amount - OUTER_EDGE_AMOUNT) * coverage.powf(0.7)
 }
 
-fn render_hover_marker(
+fn render_hover_indicator(
     buffer: &mut Buffer,
     area: Rect,
     (position, price): (f64, f64),
@@ -424,6 +420,9 @@ fn render_hover_marker(
         return;
     }
     let x = braille_cell_offset(position, area.width, 2);
+    for row in area.top()..area.bottom() {
+        buffer[(area.x + x, row)].set_symbol("│").set_fg(CYAN);
+    }
     let y_position = ((bounds[1] - price) / (bounds[1] - bounds[0])).clamp(0.0, 1.0);
     let y = braille_cell_offset(y_position, area.height, 4);
     buffer[(area.x + x, area.y + y)]
@@ -504,9 +503,7 @@ fn render_volume(
                 plot.x + u16::try_from(column).expect("volume column fits in plot width"),
                 plot.y + u16::try_from(row).expect("volume row fits in plot height"),
             )];
-            cell.set_symbol(volume_block(cell_eighths))
-                .set_fg(color)
-                .set_bg(PANEL);
+            paint_volume_cell(cell, cell_eighths, color);
         }
     }
 }
@@ -547,6 +544,17 @@ fn volume_columns(bars: &[Bar], width: usize) -> Vec<f64> {
 fn volume_block(eighths: usize) -> &'static str {
     const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
     BLOCKS[eighths.min(8)]
+}
+
+fn paint_volume_cell(cell: &mut Cell, eighths: usize, color: Color) {
+    let eighths = eighths.min(8);
+    cell.set_symbol(if eighths == 8 {
+        " "
+    } else {
+        volume_block(eighths)
+    })
+    .set_fg(color)
+    .set_bg(if eighths == 8 { color } else { PANEL });
 }
 
 fn format_compact_volume(value: f64) -> String {
@@ -693,11 +701,30 @@ mod tests {
         let area = Rect::new(4, 3, 11, 6);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 12));
 
-        render_hover_marker(&mut buffer, area, (0.5, 75.0), [50.0, 100.0]);
+        render_hover_indicator(&mut buffer, area, (0.5, 75.0), [50.0, 100.0]);
 
         let cell = &buffer[(9, 6)];
         assert_eq!(cell.symbol(), "◆");
         assert_eq!(cell.fg, CYAN);
+    }
+
+    #[test]
+    fn hover_indicator_uses_one_straight_terminal_column() {
+        let area = Rect::new(3, 2, 8, 5);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 16, 10));
+
+        render_hover_indicator(&mut buffer, area, (0.6, 15.0), [10.0, 20.0]);
+
+        let x = area.x + braille_cell_offset(0.6, area.width, 2);
+        for row in area.top()..area.bottom() {
+            let cell = &buffer[(x, row)];
+            assert!(matches!(cell.symbol(), "│" | "◆"));
+            assert_eq!(cell.fg, CYAN);
+        }
+        for row in area.top()..area.bottom() {
+            assert_ne!(buffer[(x - 1, row)].symbol(), "│");
+            assert_ne!(buffer[(x + 1, row)].symbol(), "│");
+        }
     }
 
     #[test]
@@ -745,6 +772,35 @@ mod tests {
         assert_eq!(volume_block(4), "▄");
         assert_eq!(volume_block(8), "█");
         assert_eq!(volume_block(20), "█");
+    }
+
+    #[test]
+    fn full_volume_cells_use_seamless_background_fill() {
+        let color = Color::Rgb(20, 180, 70);
+        let mut full = Cell::default();
+        let mut partial = Cell::default();
+        let mut empty = Cell::default();
+
+        paint_volume_cell(&mut full, 8, color);
+        paint_volume_cell(&mut partial, 3, color);
+        paint_volume_cell(&mut empty, 0, color);
+
+        assert_eq!(full.symbol(), " ");
+        assert_eq!(full.bg, color);
+        assert_eq!(partial.symbol(), "▃");
+        assert_eq!(partial.fg, color);
+        assert_eq!(partial.bg, PANEL);
+        assert_eq!(empty.symbol(), " ");
+        assert_eq!(empty.bg, PANEL);
+    }
+
+    #[test]
+    fn zero_and_nonfinite_volume_remain_empty() {
+        let mut bars: Vec<_> = (0..2).map(bar).collect();
+        bars[0].volume = 0.0;
+        bars[1].volume = f64::NAN;
+
+        assert_eq!(volume_columns(&bars, 4), vec![0.0; 4]);
     }
 
     #[test]

@@ -213,14 +213,15 @@ fn draw_tile(
     let background = scale.color(tile.period_return);
     let foreground = if focused {
         scale.focus_color(tile.period_return)
-    } else if tile.stale {
-        MUTED
     } else {
         scale.text_color(tile.period_return)
     };
     let mut style = Style::default().fg(foreground).bg(background);
     if focused || tile.starred {
         style = style.add_modifier(Modifier::BOLD);
+    }
+    if tile.stale {
+        style = style.add_modifier(Modifier::UNDERLINED);
     }
     buffer.set_style(area, style);
 

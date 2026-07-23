@@ -2,11 +2,11 @@ use chrono::{Duration, Local, TimeZone, Utc};
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
-use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
+use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect, style::Modifier};
 use stock_tui::{
     app::{AppCommand, handle_event},
     domain::{Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, TickerDetail},
-    palette::{CANVAS, PANEL, Theme},
+    palette::{CANVAS, HeatScale, MUTED, PANEL, Theme},
     ui::{
         layout::AppLayout,
         render,
@@ -416,6 +416,37 @@ fn bright_heat_tile_uses_dark_focus_contrast() {
         .find(|target| target.action == UiAction::OpenTicker("S81".to_owned()))
         .expect("focused utility tile remains rendered");
     assert_eq!(buffer[(focused.rect.x, focused.rect.y)].fg, CANVAS);
+}
+
+#[test]
+fn stale_bright_heat_tile_keeps_contrast_and_uses_an_underline_hint() {
+    let mut state = fixture_state();
+    state.theme = Theme::Default;
+    state.route = Route::Sector(Sector::Utilities);
+    let stale_tile = state
+        .tiles
+        .iter_mut()
+        .find(|tile| tile.company.symbol == "S81")
+        .expect("fixture contains the second utility tile");
+    stale_tile.period_return = Some(1.0);
+    stale_tile.stale = true;
+
+    let scale = HeatScale::from_values(
+        state.tiles.iter().map(|tile| tile.period_return),
+        0.005,
+        state.theme,
+    );
+    let buffer = render_at(&mut state, 80, 24);
+    let target = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("S81".to_owned()))
+        .expect("stale utility tile remains rendered");
+    let cell = &buffer[(target.rect.x, target.rect.y)];
+
+    assert_eq!(cell.fg, scale.text_color(Some(1.0)));
+    assert_ne!(cell.fg, MUTED);
+    assert!(cell.modifier.contains(Modifier::UNDERLINED));
 }
 
 #[test]
