@@ -215,7 +215,7 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             area,
             bottom - 2,
             "S",
-            "Sync",
+            "Status",
             UiAction::OpenSync,
             false,
         );
@@ -268,9 +268,22 @@ fn rail_button(
 }
 
 fn render_footer(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
-    let freshness = state.last_refresh.map_or_else(
-        || "cache pending".to_owned(),
-        |time| format!("updated {}", time.with_timezone(&Local).format("%H:%M:%S")),
+    let freshness = state.snapshot_checkpoint.map_or_else(
+        || {
+            if state.simulated_data {
+                "demo cache pending".to_owned()
+            } else {
+                "prices not synced".to_owned()
+            }
+        },
+        |time| {
+            let label = if state.simulated_data {
+                "demo cached"
+            } else {
+                "prices synced"
+            };
+            format!("{label} {}", time.with_timezone(&Local).format("%H:%M:%S"))
+        },
     );
     let right = format!("{freshness}  ");
     let left_width = area.width.saturating_sub(right.width() as u16);
@@ -703,7 +716,7 @@ fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
         Line::from("Star         f"),
         Line::from("Starred      F"),
         Line::from("Refresh      r"),
-        Line::from("Sync status  S"),
+        Line::from("Data status  S"),
         Line::from("Ranges       1..7 or [ ]"),
         Line::from("Detail tabs  Tab"),
         Line::from("Quit         q"),
@@ -725,10 +738,22 @@ fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
 }
 
 fn render_sync(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
-    let modal = centered(area, 62.min(area.width.saturating_sub(4)), 9);
+    let modal = centered(area, 62.min(area.width.saturating_sub(4)), 11);
     frame.render_widget(Clear, modal);
     let percent = (state.sync.fraction() * 100.0).round();
     let error = state.sync.last_error.as_deref().unwrap_or("None");
+    let cadence = state.auto_refresh_interval.map_or_else(
+        || "Disabled (demo/offline)".to_owned(),
+        |interval| format!("Every {}", compact_duration(interval)),
+    );
+    let snapshot = state.snapshot_checkpoint.map_or_else(
+        || "Not cached".to_owned(),
+        |time| {
+            time.with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        },
+    );
     let content = vec![
         Line::from(format!("Phase       {:?}", state.sync.phase)),
         Line::from(format!(
@@ -736,6 +761,8 @@ fn render_sync(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             state.sync.completed, state.sync.total
         )),
         Line::from(format!("Status      {}", state.sync.message)),
+        Line::from(format!("Auto refresh {cadence}")),
+        Line::from(format!("Price cache {snapshot}")),
         Line::styled(format!("Last error  {error}"), Style::default().fg(MUTED)),
     ];
     frame.render_widget(
@@ -743,12 +770,23 @@ fn render_sync(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             .style(Style::default().fg(TEXT).bg(PANEL))
             .block(
                 Block::default()
-                    .title(" DATA SYNC ")
+                    .title(" DATA STATUS ")
                     .borders(Borders::ALL)
                     .border_style(CYAN),
             ),
         modal,
     );
+}
+
+fn compact_duration(duration: std::time::Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds.is_multiple_of(3_600) {
+        format!("{}h", seconds / 3_600)
+    } else if seconds.is_multiple_of(60) {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

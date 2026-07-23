@@ -19,7 +19,8 @@ pre-1.0 releases.
   paste-aware search, and terminal restoration on exit or panic.
 - Responsive compact/full layouts, centered equal-cell heatmaps, half-block
   overview compression, true-color heat scales, monochrome `NO_COLOR` mode,
-  and smooth filled Braille price/volume charts with labeled axes.
+  and a thin Braille price trace with softened area fill, solid block volume,
+  and labeled axes.
 - Ticker detail with price, return, OHLC, volume, market cap, sector context,
   company description, related news, persistent selection, and browser opening
   with OSC 52 clipboard fallback.

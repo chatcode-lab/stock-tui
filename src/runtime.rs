@@ -31,9 +31,12 @@ pub async fn run(settings: Settings) -> Result<()> {
     let mut state = UiState {
         status: format!("{} cache · {} feed", settings.mode_label(), settings.feed),
         simulated_data: settings.demo,
+        auto_refresh_interval: (!settings.demo && !settings.offline)
+            .then_some(settings.refresh_interval),
         ..UiState::default()
     };
     reload_tiles(&storage, &mut state)?;
+    reload_snapshot_checkpoint(&storage, &mut state)?;
 
     let (idle_tx, mut event_rx) = mpsc::unbounded_channel();
     let mut event_guard = Some(idle_tx);
@@ -84,6 +87,8 @@ pub async fn run(settings: Settings) -> Result<()> {
                     Some(Ok(event)) => {
                         let commands = handle_event(&mut state, event);
                         for command in commands {
+                            let resets_auto_refresh =
+                                should_reset_auto_refresh(&command, sync_commands.is_some());
                             if execute_command(
                                 command,
                                 &storage,
@@ -91,6 +96,9 @@ pub async fn run(settings: Settings) -> Result<()> {
                                 sync_commands.as_ref(),
                             )? {
                                 quit = true;
+                            }
+                            if resets_auto_refresh {
+                                last_auto_refresh = Instant::now();
                             }
                         }
                         dirty = true;
@@ -215,6 +223,10 @@ fn execute_command(
     Ok(false)
 }
 
+fn should_reset_auto_refresh(command: &AppCommand, remote_sync_enabled: bool) -> bool {
+    remote_sync_enabled && matches!(command, AppCommand::Refresh)
+}
+
 fn recover_news_url(
     url: &str,
     browser_error: &impl std::fmt::Display,
@@ -249,7 +261,7 @@ fn apply_sync_event(event: SyncEvent, storage: &Storage, state: &mut UiState) ->
             if let Route::Ticker(symbol) = state.route.clone() {
                 load_detail(storage, state, &symbol)?;
             }
-            state.last_refresh = Some(Utc::now());
+            reload_snapshot_checkpoint(storage, state)?;
         }
         SyncEvent::TickerChanged(symbol) => {
             if matches!(&state.route, Route::Ticker(current) if current == &symbol) {
@@ -280,6 +292,16 @@ fn reload_tiles(storage: &Storage, state: &mut UiState) -> Result<()> {
             .filter(|tile| !existing.contains(&tile.company.symbol)),
     );
     state.tiles = tiles;
+    Ok(())
+}
+
+fn reload_snapshot_checkpoint(storage: &Storage, state: &mut UiState) -> Result<()> {
+    let scope = if state.simulated_data {
+        demo::CHECKPOINT_SCOPE
+    } else {
+        "snapshots"
+    };
+    state.snapshot_checkpoint = storage.sync_checkpoint(scope)?;
     Ok(())
 }
 
@@ -362,7 +384,15 @@ fn seed_demo(
 mod tests {
     use std::{cell::RefCell, io};
 
-    use super::{recover_news_url, terminal_clipboard_sequence};
+    use super::{recover_news_url, should_reset_auto_refresh, terminal_clipboard_sequence};
+    use crate::app::AppCommand;
+
+    #[test]
+    fn only_remote_manual_refresh_resets_the_automatic_cadence() {
+        assert!(should_reset_auto_refresh(&AppCommand::Refresh, true));
+        assert!(!should_reset_auto_refresh(&AppCommand::Refresh, false));
+        assert!(!should_reset_auto_refresh(&AppCommand::ReloadTiles, true));
+    }
 
     #[test]
     fn terminal_clipboard_uses_osc_52_with_a_base64_payload() {

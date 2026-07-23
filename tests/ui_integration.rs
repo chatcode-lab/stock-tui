@@ -1,4 +1,4 @@
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{Duration, Local, TimeZone, Utc};
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -534,7 +534,7 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         "1: 1D",
         "7: 5Y",
         "r Refresh",
-        "S Sync",
+        "S Status",
         "? Help",
     ] {
         assert!(screen.contains(expected), "missing rail hint {expected:?}");
@@ -556,6 +556,28 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
     assert!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE).is_empty());
     assert!(press(&mut state, KeyCode::Char('S'), KeyModifiers::SHIFT).is_empty());
     assert_eq!(state.overlay, Some(Overlay::Sync));
+    let status = screen_text(&render_at(&mut state, 80, 24));
+    for expected in ["DATA STATUS", "Auto refresh Disabled (demo/offline)"] {
+        assert!(
+            status.contains(expected),
+            "missing data status text {expected:?}"
+        );
+    }
+    let price_cache = format!(
+        "Price cache {}",
+        fixture_time()
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S")
+    );
+    assert!(
+        status.contains(&price_cache),
+        "missing data status text {price_cache:?}"
+    );
+
+    state.simulated_data = false;
+    state.auto_refresh_interval = Some(std::time::Duration::from_secs(300));
+    let live_status = screen_text(&render_at(&mut state, 80, 24));
+    assert!(live_status.contains("Auto refresh Every 5m"));
 }
 
 fn fixture_state() -> UiState {
@@ -595,7 +617,7 @@ fn fixture_state() -> UiState {
     UiState {
         tiles,
         status: "Fixture cache ready".to_owned(),
-        last_refresh: Some(fixture_time()),
+        snapshot_checkpoint: Some(fixture_time()),
         ..UiState::default()
     }
 }

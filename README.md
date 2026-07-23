@@ -23,8 +23,8 @@ read-only: it displays market information and does not place orders.
   its return over `1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, or `5Y`.
 - Reorders tickers by market capitalization, gain, volume, or symbol.
 - Provides responsive sector grids and a ticker detail screen with a
-  Braille-resolution price trace, smooth filled tint, price/time axes,
-  high-resolution volume, statistics, company context, and news.
+  Braille-resolution price trace, softly filled tint, price/time axes,
+  contiguous block volume, statistics, company context, and news.
 - Supports mouse hover, clicking, wheel input, keyboard navigation, and
   terminal resize events.
 - Searches the local issuer catalog by symbol or company name.
@@ -190,8 +190,8 @@ news row can be clicked with the left mouse button.
 | `[` / `]` | Previous / next date range |
 | `1` through `7` | Select `1D` through `5Y` directly |
 | `Tab` | Cycle Chart, Statistics, and News in compact ticker view |
-| `r` | Request a snapshot refresh |
-| `S` | Open synchronization status |
+| `r` | Request an immediate broad-market snapshot refresh |
+| `S` | Open read-only data status |
 | `?` | Open keyboard help |
 | `q` or `Ctrl-C` | Quit and restore the terminal |
 
@@ -235,7 +235,11 @@ refreshes candidate snapshots, updates top-100 sector membership where a
 current market cap can be estimated, and resumes a five-year daily backfill for
 the selected 900 companies with a seven-day overlap. It lazily requests the
 range-appropriate bars and 20 newest headlines when a ticker is opened.
-Snapshot refresh defaults to every five minutes.
+In live mode, the broad-market snapshot refresh runs immediately on startup
+and every five minutes by default; `r` starts one immediately and restarts that
+timer. Opening a ticker or changing its range separately triggers a lazy detail
+request. Demo and offline modes never schedule remote refreshes. `S` only opens
+the status panel; it does not start synchronization.
 
 The current adapter is limited to Alpaca US equities. Feed selection changes US
 venue coverage; it does not enable non-US markets. Additional countries,

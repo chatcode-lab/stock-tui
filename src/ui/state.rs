@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use ratatui::layout::{Position, Rect};
 
@@ -90,7 +92,8 @@ pub struct UiState {
     pub hit_targets: Vec<HitTarget>,
     pub sync: SyncProgress,
     pub status: String,
-    pub last_refresh: Option<DateTime<Utc>>,
+    pub snapshot_checkpoint: Option<DateTime<Utc>>,
+    pub auto_refresh_interval: Option<Duration>,
     pub theme: Theme,
     pub simulated_data: bool,
 }
@@ -120,7 +123,8 @@ impl Default for UiState {
             hit_targets: Vec::new(),
             sync: SyncProgress::default(),
             status: "Loading local cache".to_owned(),
-            last_refresh: None,
+            snapshot_checkpoint: None,
+            auto_refresh_interval: None,
             theme: Theme::detect(),
             simulated_data: false,
         }

@@ -110,8 +110,10 @@ An empty live database is populated in stages:
    active Alpaca assets can remain searchable without joining a heatmap sector.
 
 The UI remains interactive during history population. A tile can be neutral or
-marked stale until enough data for its selected range arrives. The Sync overlay
-shows phase, completed/total counts, status text, and the last provider error.
+marked stale until enough data for its selected range arrives. The Data Status
+overlay shows phase, completed/total counts, automatic-refresh cadence, the
+latest snapshot-cache checkpoint, status text, and the last provider error.
+Opening this overlay with `S` is read-only and does not start a request.
 
 ## Incremental Five-Year Sync
 
@@ -139,10 +141,12 @@ by a background pruning job. Repeated overlap upserts do not duplicate rows.
 The worker refreshes candidate snapshots once on startup and at the configured
 cadence, five minutes by default. Each successful refresh can update estimated
 market caps and writes that day's top-100 membership. `r` or the Refresh rail
-action asks for an immediate snapshot refresh. No streaming or per-trade
-connection is used. If the prior history job has finished, a successful refresh
-also starts another incremental history pass so newly selected members are
-backfilled without restarting the application.
+action asks for an immediate snapshot refresh and restarts the cadence timer,
+preventing a scheduled refresh immediately afterward. No streaming or
+per-trade connection is used. If the prior history job has finished, a
+successful refresh also starts another incremental history pass so newly
+selected members are backfilled without restarting the application. Demo and
+offline modes do not schedule or request remote refreshes.
 
 Snapshots drive `1D` return when price and previous close are present. The UI
 falls back to cached bars when snapshot fields are unavailable. A tile is

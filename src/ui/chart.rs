@@ -46,12 +46,6 @@ pub fn render_price_volume(
         .constraints([Constraint::Min(4), Constraint::Length(volume_height)])
         .split(area);
     let chart_area = sections[0];
-    let previous_close = state
-        .detail
-        .as_ref()
-        .and_then(|detail| detail.snapshot.as_ref())
-        .and_then(|snapshot| snapshot.previous_close)
-        .filter(|value| value.is_finite());
     let data_low = bars
         .iter()
         .map(|bar| bar.close)
@@ -72,10 +66,10 @@ pub fn render_price_volume(
         );
         return;
     }
-    let low = previous_close.map_or(data_low, |previous| data_low.min(previous));
-    let high = previous_close.map_or(data_high, |previous| data_high.max(previous));
-    let padding = ((high - low) * 0.08).max(high.abs() * 0.002).max(0.01);
-    let bounds = [low - padding, high + padding];
+    let padding = ((data_high - data_low) * 0.08)
+        .max(data_high.abs() * 0.002)
+        .max(0.01);
+    let bounds = [data_low - padding, data_high + padding];
     let y_labels = price_axis_labels(bounds, chart_area.height);
     let axis_width = axis_width(chart_area.width, &y_labels);
 
@@ -144,16 +138,12 @@ pub fn render_price_volume(
             .style(Style::default().bg(PANEL)),
         chart_area,
     );
-    let hover = state
-        .detail_hover
-        .and_then(|index| sampled.get(index))
-        .unwrap_or_else(|| sampled.last().expect("sampled data is non-empty"));
-    let (_, hovered_bar) = hover;
     let trace_sampled = trace_bars(bars, usable_width.saturating_mul(TRACE_SAMPLES_PER_COLUMN));
     let points = normalized_price_points(&trace_sampled);
     let canvas_points = points.clone();
     let crosshair = hover_index.map(|index| normalized_position(index, sampled.len()));
-    let hovered_close = hovered_bar.close;
+    let hover_marker = crosshair
+        .and_then(|position| interpolated_price(&points, position).map(|price| (position, price)));
     let grid_values = price_axis_values(bounds, y_labels.len());
     let canvas = Canvas::default()
         .marker(Marker::Braille)
@@ -164,25 +154,9 @@ pub fn render_price_volume(
             for value in &grid_values {
                 context.draw(&Line::new(0.0, *value, 1.0, *value, Color::Rgb(55, 64, 74)));
             }
-            if let Some(previous) = previous_close {
-                let dash_count = usize::from(plot_area.width)
-                    .saturating_mul(TRACE_SAMPLES_PER_COLUMN)
-                    .max(2);
-                for segment in (0..dash_count).step_by(8) {
-                    let end = (segment + 4).min(dash_count - 1);
-                    context.draw(&Line::new(
-                        normalized_position(segment, dash_count),
-                        previous,
-                        normalized_position(end, dash_count),
-                        previous,
-                        MUTED,
-                    ));
-                }
-            }
             context.layer();
-            if let Some(x) = crosshair {
+            if let Some((x, _)) = hover_marker {
                 context.draw(&Line::new(x, bounds[0], x, bounds[1], CYAN));
-                context.draw(&Line::new(0.0, hovered_close, 1.0, hovered_close, CYAN));
                 context.layer();
             }
             for pair in canvas_points.windows(2) {
@@ -193,6 +167,9 @@ pub fn render_price_volume(
         });
     frame.render_widget(canvas, plot_area);
     render_area_gradient(frame.buffer_mut(), plot_area, &points, bounds, accent);
+    if let Some(marker) = hover_marker {
+        render_hover_marker(frame.buffer_mut(), plot_area, marker, bounds);
+    }
     render_price_axis(frame, y_axis_area, bounds, &y_labels);
     render_time_axis(frame, x_axis_area, &sampled, state.date_range);
 
@@ -388,26 +365,79 @@ fn render_area_gradient(
         return;
     }
     for column in 0..area.width {
-        let position = if area.width <= 1 {
-            0.0
-        } else {
-            f64::from(column) / f64::from(area.width - 1)
-        };
-        let Some(price) = interpolated_price(points, position) else {
+        let Some(price) =
+            braille_column_price(points, usize::from(column), usize::from(area.width))
+        else {
             continue;
         };
-        let fill_span = (price - bounds[0]).max(f64::EPSILON);
         for row in 0..area.height {
+            let cell_top = bounds[1] - span * f64::from(row) / f64::from(area.height);
             let cell_bottom = bounds[1] - span * f64::from(row + 1) / f64::from(area.height);
-            if cell_bottom > price {
-                continue;
+            let amount = area_gradient_amount(price, cell_top, cell_bottom, bounds[0]);
+            if amount > 0.0 {
+                buffer[(area.x + column, area.y + row)].set_bg(blend_color(PANEL, accent, amount));
             }
-            let cell_center = bounds[1] - span * (f64::from(row) + 0.5) / f64::from(area.height);
-            let depth = ((price - cell_center) / fill_span).clamp(0.0, 1.0);
-            let amount = 0.06 + 0.30 * (1.0 - depth).powf(1.4);
-            buffer[(area.x + column, area.y + row)].set_bg(blend_color(PANEL, accent, amount));
         }
     }
+}
+
+fn braille_column_price(points: &[(f64, f64)], column: usize, width: usize) -> Option<f64> {
+    let dot_count = width.checked_mul(2)?;
+    if dot_count <= 1 {
+        return interpolated_price(points, 0.0);
+    }
+    let left_dot = column.saturating_mul(2).min(dot_count - 1);
+    let right_dot = (left_dot + 1).min(dot_count - 1);
+    let denominator = (dot_count - 1) as f64;
+    let left = interpolated_price(points, left_dot as f64 / denominator)?;
+    let right = interpolated_price(points, right_dot as f64 / denominator)?;
+    Some((left + right) * 0.5)
+}
+
+fn area_gradient_amount(price: f64, cell_top: f64, cell_bottom: f64, floor: f64) -> f64 {
+    const OUTER_EDGE_AMOUNT: f64 = 0.055;
+
+    let cell_height = cell_top - cell_bottom;
+    if !cell_height.is_finite() || cell_height <= 0.0 {
+        return 0.0;
+    }
+    if price <= cell_bottom {
+        let outside_distance = (cell_bottom - price) / cell_height;
+        return OUTER_EDGE_AMOUNT * (1.0 - outside_distance).clamp(0.0, 1.0).powi(2);
+    }
+
+    let cell_center = (cell_top + cell_bottom) * 0.5;
+    let fill_span = (price - floor).max(f64::EPSILON);
+    let depth = ((price - cell_center) / fill_span).clamp(0.0, 1.0);
+    let inside_amount = 0.05 + 0.30 * (1.0 - depth).powf(1.4);
+    let coverage = ((price - cell_bottom) / cell_height).clamp(0.0, 1.0);
+    OUTER_EDGE_AMOUNT + (inside_amount - OUTER_EDGE_AMOUNT) * coverage.powf(0.7)
+}
+
+fn render_hover_marker(
+    buffer: &mut Buffer,
+    area: Rect,
+    (position, price): (f64, f64),
+    bounds: [f64; 2],
+) {
+    if area.is_empty() || bounds[1] <= bounds[0] {
+        return;
+    }
+    let x = braille_cell_offset(position, area.width, 2);
+    let y_position = ((bounds[1] - price) / (bounds[1] - bounds[0])).clamp(0.0, 1.0);
+    let y = braille_cell_offset(y_position, area.height, 4);
+    buffer[(area.x + x, area.y + y)]
+        .set_symbol("◆")
+        .set_fg(CYAN);
+}
+
+fn braille_cell_offset(position: f64, cells: u16, dots_per_cell: usize) -> u16 {
+    let dot_count = usize::from(cells).saturating_mul(dots_per_cell);
+    if dot_count <= 1 {
+        return 0;
+    }
+    let dot = (position.clamp(0.0, 1.0) * (dot_count - 1) as f64).round() as usize;
+    u16::try_from(dot / dots_per_cell).unwrap_or(cells.saturating_sub(1))
 }
 
 fn render_volume(
@@ -446,46 +476,77 @@ fn render_volume(
         return;
     }
     let plot = Rect::new(left, inner.y, right - left, inner.height);
-    let sampled = trace_bars(
-        bars,
-        usize::from(plot.width).saturating_mul(TRACE_SAMPLES_PER_COLUMN),
-    );
-    let count = sampled.len();
-    let dot_columns = usize::from(plot.width)
-        .saturating_mul(TRACE_SAMPLES_PER_COLUMN)
-        .max(1);
-    let bar_width = volume_bar_dot_width(dot_columns, count);
-    let canvas = Canvas::default()
-        .marker(Marker::Braille)
-        .background_color(PANEL)
-        .x_bounds([0.0, 1.0])
-        .y_bounds([0.0, max_volume * 1.04])
-        .paint(move |context| {
-            for (index, (_, bar)) in sampled.iter().enumerate() {
-                let relative = (bar.volume / max_volume).clamp(0.0, 1.0);
-                let color = blend_color(PANEL, accent, 0.45 + relative * 0.4);
-                let center =
-                    normalized_position(index, count) * dot_columns.saturating_sub(1) as f64;
-                let first = center.round() as isize - (bar_width.saturating_sub(1) / 2) as isize;
-                for offset in 0..bar_width {
-                    let dot = (first + offset as isize)
-                        .clamp(0, dot_columns.saturating_sub(1) as isize)
-                        as usize;
-                    let x = normalized_position(dot, dot_columns);
-                    context.draw(&Line::new(x, 0.0, x, bar.volume.max(0.0), color));
-                }
-            }
-            if let Some(x) = crosshair {
-                context.layer();
-                context.draw(&Line::new(x, 0.0, x, max_volume * 1.04, CYAN));
-            }
-        });
-    frame.render_widget(canvas, plot);
+    let columns = volume_columns(bars, usize::from(plot.width));
+    let selected_column = crosshair.map(|position| {
+        (position.clamp(0.0, 1.0) * f64::from(plot.width.saturating_sub(1))).round() as usize
+    });
+    let full_height = usize::from(plot.height).saturating_mul(8);
+    let buffer = frame.buffer_mut();
+    for (column, volume) in columns.into_iter().enumerate() {
+        let relative = (volume / max_volume).clamp(0.0, 1.0);
+        let filled_eighths = if relative > 0.0 {
+            (relative * full_height as f64)
+                .round()
+                .max(1.0)
+                .min(full_height as f64) as usize
+        } else {
+            0
+        };
+        let color = if selected_column == Some(column) {
+            CYAN
+        } else {
+            blend_color(PANEL, accent, 0.72)
+        };
+        for row in 0..usize::from(plot.height) {
+            let from_bottom = usize::from(plot.height) - row - 1;
+            let cell_eighths = filled_eighths.saturating_sub(from_bottom * 8).min(8);
+            let cell = &mut buffer[(
+                plot.x + u16::try_from(column).expect("volume column fits in plot width"),
+                plot.y + u16::try_from(row).expect("volume row fits in plot height"),
+            )];
+            cell.set_symbol(volume_block(cell_eighths))
+                .set_fg(color)
+                .set_bg(PANEL);
+        }
+    }
 }
 
-fn volume_bar_dot_width(dot_columns: usize, samples: usize) -> usize {
-    let slot_width = dot_columns.max(1) / samples.max(1);
-    slot_width.saturating_mul(3).div_ceil(4).clamp(1, 8)
+fn volume_columns(bars: &[Bar], width: usize) -> Vec<f64> {
+    if bars.is_empty() || width == 0 {
+        return Vec::new();
+    }
+    if bars.len() <= width {
+        return (0..width)
+            .map(|column| {
+                let index = column.saturating_mul(bars.len()) / width;
+                let volume = bars[index.min(bars.len() - 1)].volume;
+                if volume.is_finite() {
+                    volume.max(0.0)
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+    }
+    (0..width)
+        .map(|column| {
+            let start = column.saturating_mul(bars.len()) / width;
+            let end = (column + 1)
+                .saturating_mul(bars.len())
+                .div_ceil(width)
+                .min(bars.len());
+            bars[start..end]
+                .iter()
+                .map(|bar| bar.volume)
+                .filter(|volume| volume.is_finite() && *volume > 0.0)
+                .fold(0.0_f64, f64::max)
+        })
+        .collect()
+}
+
+fn volume_block(eighths: usize) -> &'static str {
+    const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    BLOCKS[eighths.min(8)]
 }
 
 fn format_compact_volume(value: f64) -> String {
@@ -605,6 +666,49 @@ mod tests {
     }
 
     #[test]
+    fn area_gradient_softens_both_sides_of_the_trace_boundary() {
+        let boundary = area_gradient_amount(9.9, 10.0, 9.0, 0.0);
+        let just_outside = area_gradient_amount(9.9, 11.0, 10.0, 0.0);
+        let far_outside = area_gradient_amount(9.9, 12.0, 11.0, 0.0);
+        let deep_inside = area_gradient_amount(9.9, 5.0, 4.0, 0.0);
+        let entering_from_outside = area_gradient_amount(8.999, 10.0, 9.0, 0.0);
+        let entering_from_inside = area_gradient_amount(9.001, 10.0, 9.0, 0.0);
+
+        assert!(boundary > deep_inside);
+        assert!(just_outside > 0.0);
+        assert_eq!(far_outside, 0.0);
+        assert!((entering_from_outside - entering_from_inside).abs() < 0.01);
+    }
+
+    #[test]
+    fn area_fill_samples_both_braille_dots_in_each_terminal_column() {
+        let points = [(0.0, 0.0), (1.0, 90.0)];
+
+        assert_eq!(braille_column_price(&points, 0, 2), Some(15.0));
+        assert_eq!(braille_column_price(&points, 1, 2), Some(75.0));
+    }
+
+    #[test]
+    fn hover_marker_maps_to_the_trace_cell() {
+        let area = Rect::new(4, 3, 11, 6);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 12));
+
+        render_hover_marker(&mut buffer, area, (0.5, 75.0), [50.0, 100.0]);
+
+        let cell = &buffer[(9, 6)];
+        assert_eq!(cell.symbol(), "◆");
+        assert_eq!(cell.fg, CYAN);
+    }
+
+    #[test]
+    fn marker_mapping_matches_braille_subcell_rasterization() {
+        assert_eq!(braille_cell_offset(0.05, 11, 2), 0);
+        assert_eq!(braille_cell_offset(0.10, 6, 4), 0);
+        assert_eq!(braille_cell_offset(0.50, 11, 2), 5);
+        assert_eq!(braille_cell_offset(1.00, 11, 2), 10);
+    }
+
+    #[test]
     fn volume_panel_grows_without_consuming_the_price_chart() {
         assert_eq!(volume_section_height(8), 3);
         assert_eq!(volume_section_height(20), 4);
@@ -613,10 +717,34 @@ mod tests {
     }
 
     #[test]
-    fn sparse_volume_bars_use_the_available_dot_resolution() {
-        assert_eq!(volume_bar_dot_width(200, 100), 2);
-        assert_eq!(volume_bar_dot_width(200, 20), 8);
-        assert_eq!(volume_bar_dot_width(200, 400), 1);
+    fn sparse_volume_bars_fill_every_terminal_column() {
+        let mut bars: Vec<_> = (0..2).map(bar).collect();
+        bars[0].volume = 10.0;
+        bars[1].volume = 20.0;
+
+        assert_eq!(
+            volume_columns(&bars, 6),
+            vec![10.0, 10.0, 10.0, 20.0, 20.0, 20.0]
+        );
+    }
+
+    #[test]
+    fn dense_volume_bars_preserve_each_columns_peak() {
+        let mut bars: Vec<_> = (0..8).map(bar).collect();
+        for (index, bar) in bars.iter_mut().enumerate() {
+            bar.volume = (index + 1) as f64;
+        }
+
+        assert_eq!(volume_columns(&bars, 2), vec![4.0, 8.0]);
+    }
+
+    #[test]
+    fn volume_blocks_use_eighth_cell_precision() {
+        assert_eq!(volume_block(0), " ");
+        assert_eq!(volume_block(1), "▁");
+        assert_eq!(volume_block(4), "▄");
+        assert_eq!(volume_block(8), "█");
+        assert_eq!(volume_block(20), "█");
     }
 
     #[test]

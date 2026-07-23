@@ -134,10 +134,13 @@ detail uses ten columns when possible and otherwise selects between three and
 ten columns from the available width.
 
 Charts sample cached bars to terminal resolution while preserving the first
-and last point. A Braille canvas renders thin price, guide, previous-close, and
-crosshair lines over a per-cell RGB area gradient, with price and range-aware
-date scales. A responsive 4-7-row Braille histogram renders volume. Hover or
-keyboard selection adds a crosshair and updates the price/time label.
+and last point. A Braille canvas renders the thin price trace and grid over a
+per-cell RGB area fill, with price and range-aware date scales. The fill samples
+the same two horizontal Braille subcells as the trace and uses fractional edge
+coverage plus a short exterior fade to soften its cell-resolution boundary. A
+responsive 4-7-row lower-block histogram renders contiguous volume columns.
+Hover or keyboard selection adds one vertical guide and a marker at its trace
+intersection, then updates the price/time label.
 
 ## Heatmap Semantics
 
