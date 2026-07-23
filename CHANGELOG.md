@@ -22,7 +22,7 @@ pre-1.0 releases.
 - Responsive compact/full layouts, centered equal-cell heatmaps, half-block
   overview compression, true-color heat scales with contrast-aware focus,
   monochrome `NO_COLOR` mode, and a thin Braille price trace with softened area
-  fill, seamless block volume, and labeled axes.
+  fill, seamless cell-filled volume, and labeled axes.
 - Ticker detail with price, return, OHLC, volume, market cap, sector context,
   company description, related news, persistent selection, and browser opening
   with OSC 52 clipboard fallback.
@@ -46,5 +46,14 @@ pre-1.0 releases.
   reset, and redacted effective-configuration output.
 - Public architecture, provider/licensing, cache/sync, configuration,
   contribution, security, conduct, and financial-disclaimer documentation.
+
+### Changed
+
+- Aligned the three overview benchmark cells with the sector columns and
+  constrained them to the market content pane.
+- Made the chart cursor and volume histogram independent of terminal font
+  glyph alignment by painting their geometry with cell backgrounds.
+- Replaced repeated full-history timeframe discovery during range changes with
+  indexed per-symbol availability probes.
 
 [Unreleased]: https://github.com/chatcode-lab/stock-tui/commits/main

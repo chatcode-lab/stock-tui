@@ -21,6 +21,8 @@ use crate::{
 const SCHEMA_VERSION: i64 = 1;
 const STALE_AFTER_HOURS: i64 = 72;
 const MAX_MEMBERS_PER_SECTOR: usize = 100;
+const TIMEFRAME_EXISTS_SQL: &str =
+    "SELECT EXISTS(SELECT 1 FROM bars WHERE symbol = ?1 AND timeframe = ?2 LIMIT 1)";
 
 const COMPANY_COLUMNS: &str = "
     symbol, name, sector, raw_sector, exchange, industry, market_cap,
@@ -831,7 +833,7 @@ impl Storage {
         }
         let favorite_symbols = load_favorite_set(&connection)?;
         let snapshots = load_snapshots(&connection)?;
-        let available_timeframes = load_available_timeframes(&connection)?;
+        let mut timeframe_statement = connection.prepare_cached(TIMEFRAME_EXISTS_SQL)?;
         let mut metric_statement = connection.prepare_cached(
             "SELECT
                 (SELECT close FROM bars
@@ -854,7 +856,7 @@ impl Storage {
         let cutoff = range.cutoff(now);
         let mut tiles = Vec::with_capacity(companies.len());
         for company in companies {
-            let timeframe = choose_timeframe(range, available_timeframes.get(&company.symbol));
+            let timeframe = choose_timeframe(&mut timeframe_statement, range, &company.symbol)?;
             let metric = load_period_metric(
                 &mut metric_statement,
                 &company.symbol,
@@ -946,8 +948,9 @@ impl Storage {
             return Ok(None);
         };
         let connection = self.connection()?;
-        let available = load_available_timeframes(&connection)?;
-        let timeframe = choose_timeframe(range, available.get(&company.symbol));
+        let mut timeframe_statement = connection.prepare_cached(TIMEFRAME_EXISTS_SQL)?;
+        let timeframe = choose_timeframe(&mut timeframe_statement, range, &company.symbol)?;
+        drop(timeframe_statement);
         let mut metric_statement = connection.prepare_cached(
             "SELECT
                 (SELECT close FROM bars
@@ -1222,36 +1225,30 @@ fn load_snapshots(connection: &Connection) -> Result<HashMap<String, Snapshot>> 
         .context("could not load snapshots")
 }
 
-fn load_available_timeframes(connection: &Connection) -> Result<HashMap<String, HashSet<String>>> {
-    let mut statement = connection.prepare("SELECT DISTINCT symbol, timeframe FROM bars")?;
-    let rows = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-    let mut available: HashMap<String, HashSet<String>> = HashMap::new();
-    for row in rows {
-        let (symbol, timeframe) = row?;
-        available.entry(symbol).or_default().insert(timeframe);
-    }
-    Ok(available)
-}
-
-fn choose_timeframe(range: DateRange, available: Option<&HashSet<String>>) -> &'static str {
-    let candidates: &[&str] = match range {
+fn timeframe_candidates(range: DateRange) -> &'static [&'static str] {
+    match range {
         DateRange::Day => &["5Min", "15Min", "1Hour", "1Day"],
         DateRange::Week => &["1Hour", "1Day", "15Min", "5Min", "1Week"],
         DateRange::Month => &["1Hour", "1Day", "1Week"],
         DateRange::ThreeMonths | DateRange::SixMonths => &["1Day", "1Hour", "1Week"],
         DateRange::Year | DateRange::TwoYears => &["1Day", "1Week", "1Hour"],
         DateRange::FiveYears | DateRange::TenYears | DateRange::All => &["1Week", "1Day"],
-    };
-    available
-        .and_then(|available| {
-            candidates
-                .iter()
-                .copied()
-                .find(|candidate| available.contains(*candidate))
-        })
-        .unwrap_or_else(|| range.preferred_timeframe())
+    }
+}
+
+fn choose_timeframe(
+    statement: &mut rusqlite::CachedStatement<'_>,
+    range: DateRange,
+    symbol: &str,
+) -> Result<&'static str> {
+    for candidate in timeframe_candidates(range) {
+        let exists =
+            statement.query_row(params![symbol, candidate], |row| row.get::<_, bool>(0))?;
+        if exists {
+            return Ok(candidate);
+        }
+    }
+    Ok(range.preferred_timeframe())
 }
 
 fn load_period_metric(
@@ -1887,6 +1884,56 @@ mod tests {
         assert!(!storage.toggle_favorite("CAT")?);
         storage.reset_demo_data()?;
         assert_eq!(storage.counts()?, StorageCounts::default());
+        Ok(())
+    }
+
+    #[test]
+    fn timeframe_selection_uses_indexed_symbol_probes_and_preserves_fallbacks() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        storage.upsert_companies(&[company(
+            "AAA",
+            "Alpha",
+            Sector::Technology,
+            100.0,
+            Some(1),
+            now,
+        )])?;
+        let daily = bar("AAA", now - chrono::Duration::days(1), 100.0, 1_000.0);
+        let mut weekly = bar("AAA", now - chrono::Duration::days(7), 90.0, 5_000.0);
+        weekly.timeframe = "1Week".to_owned();
+        storage.upsert_bars(&[daily, weekly])?;
+
+        let connection = storage.connection()?;
+        let mut statement = connection.prepare_cached(TIMEFRAME_EXISTS_SQL)?;
+        assert_eq!(
+            choose_timeframe(&mut statement, DateRange::Day, "AAA")?,
+            "1Day"
+        );
+        assert_eq!(
+            choose_timeframe(&mut statement, DateRange::FiveYears, "AAA")?,
+            "1Week"
+        );
+        assert_eq!(
+            choose_timeframe(&mut statement, DateRange::Month, "MISSING")?,
+            "1Hour"
+        );
+        drop(statement);
+
+        let mut plan = connection.prepare(
+            "EXPLAIN QUERY PLAN
+             SELECT 1 FROM bars WHERE symbol = ?1 AND timeframe = ?2 LIMIT 1",
+        )?;
+        let details = plan
+            .query_map(params!["AAA", "1Day"], |row| row.get::<_, String>(3))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert!(
+            details.iter().any(|detail| {
+                detail.contains("SEARCH bars") && detail.contains("COVERING INDEX")
+            }),
+            "timeframe existence probe must use the bars primary-key index: {details:?}"
+        );
         Ok(())
     }
 }

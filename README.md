@@ -27,7 +27,7 @@ read-only: it displays market information and does not place orders.
 - Reorders tickers by market capitalization, gain, volume, or symbol.
 - Provides responsive sector grids and a ticker detail screen with a
   Braille-resolution price trace, softly filled tint, price/time axes,
-  contiguous block volume, statistics, company context, and news.
+  gap-free cell-filled volume, statistics, company context, and news.
 - Supports mouse hover, clicking, wheel input, keyboard navigation, and
   terminal resize events.
 - Searches the local issuer catalog by symbol or company name.

@@ -137,18 +137,20 @@ outer padding. A sector panel with ten body rows draws its full 10x10 tile
 matrix. A shorter panel draws two ticker colors per terminal cell with the
 upper-half block character, retaining all 100 signals in five rows. Sector
 detail uses ten columns when possible and otherwise selects between three and
-ten columns from the available width.
+ten columns from the available width. The three benchmark-proxy footer cells
+reuse the overview's centered three-column geometry and stop at the content
+pane rather than extending beneath the action rail.
 
 Charts sample cached bars to terminal resolution while preserving the first
 and last point. A Braille canvas renders the thin price trace and grid over a
 per-cell RGB area fill, with price and range-aware date scales. The fill samples
 the same two horizontal Braille subcells as the trace and uses fractional edge
 coverage plus a short exterior fade to soften its cell-resolution boundary. A
-responsive 4-7-row histogram renders contiguous volume columns, using terminal
-background fill for complete cells and lower blocks only for fractional caps.
-This avoids font line-height seams between stacked full-block glyphs. Hover or
-keyboard selection adds one straight terminal-cell guide and a marker at its
-trace intersection, then updates the price/time label.
+responsive 4-7-row histogram renders contiguous volume columns entirely with
+terminal-cell backgrounds; a fractional cap changes the top cell's intensity
+instead of its glyph. Hover or keyboard selection tints one straight cell
+column and brightens its trace intersection. This avoids font shaping,
+interglyph gaps, and line-height seams in browser-hosted terminals.
 
 ## Heatmap Semantics
 
@@ -156,6 +158,9 @@ For `1D`, the preferred return is snapshot price divided by previous close.
 For longer ranges, storage chooses the best cached timeframe and compares the
 latest close to the nearest close at the period cutoff. The fallback order is
 range-specific, so the UI remains useful while finer history is still loading.
+Timeframe selection probes the indexed `(symbol, timeframe)` key in fallback
+order instead of enumerating distinct timeframes across the full bars history
+on every range change.
 
 The color extent is the 90th percentile of absolute returns across loaded
 tiles, with a 0.5% floor for `1D` and a 1% floor for longer ranges. Values

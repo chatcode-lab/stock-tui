@@ -41,7 +41,7 @@ pub fn render(frame: &mut Frame<'_>, state: &mut UiState) {
         _ => heatmap::render(frame, state, layout.content),
     }
     render_rail(frame, state, layout.rail);
-    render_footer(frame, state, layout.footer);
+    render_footer(frame, state, layout.footer, layout.content);
     if let Some(overlay) = state.overlay.clone() {
         render_overlay(frame, state, area, overlay);
     }
@@ -305,9 +305,16 @@ fn rail_button(
     y + 1
 }
 
-fn render_footer(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+fn render_footer(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, content: Rect) {
     if matches!(state.route, Route::Overview) {
-        render_benchmark_footer(frame, state, area);
+        frame
+            .buffer_mut()
+            .set_style(area, Style::default().bg(PANEL_ALT));
+        render_benchmark_footer(
+            frame,
+            state,
+            Rect::new(content.x, area.y, content.width, area.height),
+        );
         return;
     }
     let freshness = state.snapshot_checkpoint.map_or_else(

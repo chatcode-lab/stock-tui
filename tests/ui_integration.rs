@@ -538,6 +538,41 @@ fn overview_hover_selects_only_the_enclosing_sector() {
 
 #[test]
 fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
+    for (width, height) in VIEWPORTS {
+        let mut state = fixture_state();
+        render_at(&mut state, width, height);
+        let layout = AppLayout::calculate(Rect::new(0, 0, width, height));
+        let benchmark_targets: Vec<_> = state
+            .hit_targets
+            .iter()
+            .filter(|target| {
+                matches!(
+                    &target.action,
+                    UiAction::OpenTicker(symbol)
+                        if MarketBenchmark::for_symbol(symbol).is_some()
+                )
+            })
+            .collect();
+        assert_eq!(benchmark_targets.len(), 3);
+        for (index, benchmark) in benchmark_targets.iter().enumerate() {
+            let sector = state
+                .hit_targets
+                .iter()
+                .find(|target| target.action == UiAction::OpenSector(Sector::ALL[index + 6]))
+                .expect("corresponding bottom-row sector target");
+            assert_eq!(
+                (benchmark.rect.x, benchmark.rect.width),
+                (sector.rect.x, sector.rect.width),
+                "benchmark column {index} does not align at {width}x{height}"
+            );
+            assert!(benchmark.rect.right() <= layout.content.right());
+        }
+        assert!(
+            layout.content.right() < layout.footer.right(),
+            "test viewport must reserve footer width for the action rail"
+        );
+    }
+
     let mut state = fixture_state();
     let buffer = render_at(&mut state, 120, 40);
     let screen = screen_text(&buffer);
@@ -555,7 +590,8 @@ fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
         );
     }
 
-    let footer = AppLayout::calculate(Rect::new(0, 0, 120, 40)).footer;
+    let layout = AppLayout::calculate(Rect::new(0, 0, 120, 40));
+    let footer = layout.footer;
     let benchmark_targets: Vec<_> = state
         .hit_targets
         .iter()
@@ -575,6 +611,11 @@ fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
             .all(|target| target.rect.y == footer.y
                 && target.rect.height == 1
                 && target.rect.width == benchmark_targets[0].rect.width)
+    );
+    assert!(
+        benchmark_targets
+            .iter()
+            .all(|target| target.rect.right() <= layout.content.right())
     );
 
     let qqq = benchmark_targets

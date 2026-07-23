@@ -19,6 +19,7 @@ use crate::{
 };
 
 const TRACE_SAMPLES_PER_COLUMN: usize = 2;
+const HOVER_GUIDE_BLEND: f64 = 0.34;
 
 pub fn render_price_volume(
     frame: &mut Frame<'_>,
@@ -432,14 +433,15 @@ fn render_hover_indicator(
         return;
     }
     let x = braille_cell_offset(position, area.width, 2);
+    let guide_color = blend_color(PANEL, CYAN, HOVER_GUIDE_BLEND);
     for row in area.top()..area.bottom() {
-        buffer[(area.x + x, row)].set_symbol("│").set_fg(CYAN);
+        buffer[(area.x + x, row)].set_bg(guide_color);
     }
     let y_position = ((bounds[1] - price) / (bounds[1] - bounds[0])).clamp(0.0, 1.0);
     let y = braille_cell_offset(y_position, area.height, 4);
     buffer[(area.x + x, area.y + y)]
-        .set_symbol("◆")
-        .set_fg(CYAN);
+        .set_symbol(" ")
+        .set_bg(CYAN);
 }
 
 fn braille_cell_offset(position: f64, cells: u16, dots_per_cell: usize) -> u16 {
@@ -553,20 +555,19 @@ fn volume_columns(bars: &[Bar], width: usize) -> Vec<f64> {
         .collect()
 }
 
-fn volume_block(eighths: usize) -> &'static str {
-    const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-    BLOCKS[eighths.min(8)]
-}
-
 fn paint_volume_cell(cell: &mut Cell, eighths: usize, color: Color) {
     let eighths = eighths.min(8);
-    cell.set_symbol(if eighths == 8 {
-        " "
-    } else {
-        volume_block(eighths)
-    })
-    .set_fg(color)
-    .set_bg(if eighths == 8 { color } else { PANEL });
+    let background = match eighths {
+        0 => PANEL,
+        8 => color,
+        fraction => blend_color(PANEL, color, partial_volume_blend(fraction)),
+    };
+    cell.set_symbol(" ").set_fg(background).set_bg(background);
+}
+
+fn partial_volume_blend(eighths: usize) -> f64 {
+    let coverage = eighths.min(8) as f64 / 8.0;
+    0.24 + coverage * 0.76
 }
 
 fn format_compact_volume(value: f64) -> String {
@@ -726,26 +727,40 @@ mod tests {
         render_hover_indicator(&mut buffer, area, (0.5, 75.0), [50.0, 100.0]);
 
         let cell = &buffer[(9, 6)];
-        assert_eq!(cell.symbol(), "◆");
-        assert_eq!(cell.fg, CYAN);
+        assert_eq!(cell.symbol(), " ");
+        assert_eq!(cell.bg, CYAN);
     }
 
     #[test]
-    fn hover_indicator_uses_one_straight_terminal_column() {
+    fn hover_indicator_uses_one_straight_background_column() {
         let area = Rect::new(3, 2, 8, 5);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 16, 10));
+        for row in area.top()..area.bottom() {
+            for column in area.left()..area.right() {
+                buffer[(column, row)]
+                    .set_symbol(if row % 2 == 0 { "⠤" } else { "⠂" })
+                    .set_bg(PANEL);
+            }
+        }
 
         render_hover_indicator(&mut buffer, area, (0.6, 15.0), [10.0, 20.0]);
 
         let x = area.x + braille_cell_offset(0.6, area.width, 2);
+        let marker_y = area.y + braille_cell_offset(0.5, area.height, 4);
+        let guide_color = blend_color(PANEL, CYAN, HOVER_GUIDE_BLEND);
         for row in area.top()..area.bottom() {
             let cell = &buffer[(x, row)];
-            assert!(matches!(cell.symbol(), "│" | "◆"));
-            assert_eq!(cell.fg, CYAN);
+            if row == marker_y {
+                assert_eq!(cell.symbol(), " ");
+                assert_eq!(cell.bg, CYAN);
+            } else {
+                assert_eq!(cell.symbol(), if row % 2 == 0 { "⠤" } else { "⠂" });
+                assert_eq!(cell.bg, guide_color);
+            }
         }
         for row in area.top()..area.bottom() {
-            assert_ne!(buffer[(x - 1, row)].symbol(), "│");
-            assert_ne!(buffer[(x + 1, row)].symbol(), "│");
+            assert_eq!(buffer[(x - 1, row)].bg, PANEL);
+            assert_eq!(buffer[(x + 1, row)].bg, PANEL);
         }
     }
 
@@ -788,16 +803,15 @@ mod tests {
     }
 
     #[test]
-    fn volume_blocks_use_eighth_cell_precision() {
-        assert_eq!(volume_block(0), " ");
-        assert_eq!(volume_block(1), "▁");
-        assert_eq!(volume_block(4), "▄");
-        assert_eq!(volume_block(8), "█");
-        assert_eq!(volume_block(20), "█");
+    fn partial_volume_intensity_uses_eighth_cell_precision() {
+        assert!(partial_volume_blend(1) < partial_volume_blend(4));
+        assert!(partial_volume_blend(4) < partial_volume_blend(7));
+        assert_eq!(partial_volume_blend(8), 1.0);
+        assert_eq!(partial_volume_blend(20), 1.0);
     }
 
     #[test]
-    fn full_volume_cells_use_seamless_background_fill() {
+    fn volume_cells_use_seamless_background_fill_only() {
         let color = Color::Rgb(20, 180, 70);
         let mut full = Cell::default();
         let mut partial = Cell::default();
@@ -809,9 +823,11 @@ mod tests {
 
         assert_eq!(full.symbol(), " ");
         assert_eq!(full.bg, color);
-        assert_eq!(partial.symbol(), "▃");
-        assert_eq!(partial.fg, color);
-        assert_eq!(partial.bg, PANEL);
+        assert_eq!(partial.symbol(), " ");
+        assert_eq!(
+            partial.bg,
+            blend_color(PANEL, color, partial_volume_blend(3))
+        );
         assert_eq!(empty.symbol(), " ");
         assert_eq!(empty.bg, PANEL);
     }
