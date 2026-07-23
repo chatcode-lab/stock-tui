@@ -129,6 +129,16 @@ impl HeatScale {
             Color::Rgb(246, 248, 250)
         }
     }
+
+    #[must_use]
+    pub fn focus_color(self, value: Option<f64>) -> Color {
+        let background = self.color(value);
+        if contrast_ratio(background, CANVAS) > contrast_ratio(background, CYAN) {
+            CANVAS
+        } else {
+            CYAN
+        }
+    }
 }
 
 #[must_use]
@@ -153,6 +163,32 @@ fn mix(left: (u8, u8, u8), right: (u8, u8, u8), amount: f64) -> (u8, u8, u8) {
     )
 }
 
+fn contrast_ratio(left: Color, right: Color) -> f64 {
+    let left = relative_luminance(left);
+    let right = relative_luminance(right);
+    let (lighter, darker) = if left > right {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+fn relative_luminance(color: Color) -> f64 {
+    let Color::Rgb(red, green, blue) = color else {
+        return 0.0;
+    };
+    let linear = |channel: u8| {
+        let channel = f64::from(channel) / 255.0;
+        if channel <= 0.040_45 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +201,19 @@ mod tests {
         assert_eq!(scale.normalized(Some(0.2)), 1.0);
         assert_eq!(scale.normalized(None), 0.0);
         assert_ne!(scale.color(Some(-0.1)), scale.color(Some(0.1)));
+    }
+
+    #[test]
+    fn focused_heat_color_inverts_on_bright_extremes() {
+        let scale =
+            HeatScale::from_values([Some(-0.1), Some(0.1)].into_iter(), 0.005, Theme::Default);
+
+        assert_eq!(scale.focus_color(Some(-0.1)), CANVAS);
+        assert_eq!(scale.focus_color(Some(0.1)), CANVAS);
+        assert_eq!(scale.focus_color(None), CYAN);
+        assert!(
+            contrast_ratio(scale.color(Some(0.1)), scale.focus_color(Some(0.1)))
+                > contrast_ratio(scale.color(Some(0.1)), CYAN)
+        );
     }
 }

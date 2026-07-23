@@ -6,7 +6,7 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
 use stock_tui::{
     app::{AppCommand, handle_event},
     domain::{Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, TickerDetail},
-    palette::PANEL,
+    palette::{CANVAS, PANEL, Theme},
     ui::{
         layout::AppLayout,
         render,
@@ -381,6 +381,41 @@ fn rendered_mouse_target_hovers_and_opens_ticker() {
     assert_eq!(state.route, Route::Sector(Sector::Technology));
     assert_eq!(state.selected_ticker, 1);
     assert_eq!(state.focused_symbol(), Some("BETA"));
+}
+
+#[test]
+fn bright_heat_tile_uses_dark_focus_contrast() {
+    let mut state = fixture_state();
+    state.theme = Theme::Default;
+    state.route = Route::Sector(Sector::Utilities);
+    render_at(&mut state, 80, 24);
+
+    let target = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("S81".to_owned()))
+        .cloned()
+        .expect("bright utility tile has a mouse target");
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: target.rect.x + target.rect.width / 2,
+                row: target.rect.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+
+    let buffer = render_at(&mut state, 80, 24);
+    let focused = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("S81".to_owned()))
+        .expect("focused utility tile remains rendered");
+    assert_eq!(buffer[(focused.rect.x, focused.rect.y)].fg, CANVAS);
 }
 
 #[test]

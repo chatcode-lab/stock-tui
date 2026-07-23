@@ -212,7 +212,7 @@ fn draw_tile(
     }
     let background = scale.color(tile.period_return);
     let foreground = if focused {
-        CYAN
+        scale.focus_color(tile.period_return)
     } else if tile.stale {
         MUTED
     } else {
