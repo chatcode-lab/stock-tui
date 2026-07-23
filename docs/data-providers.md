@@ -16,7 +16,8 @@ and terms change; verify them for your account and use case.
 | Current price, previous close, OHLC, volume | Alpaca stock snapshots | Yes | Coverage depends on the selected feed and subscription. |
 | Historical OHLCV, trades, VWAP | Alpaca multi-symbol bars | Yes | Requests use `adjustment=all`; five-year bulk cache uses daily bars. |
 | News headline, date, source, summary, URL, symbols | Alpaca Historical News API (currently Benzinga content) | Yes | Loaded lazily for an opened ticker. |
-| Demo prices, volume, issuer descriptions, news | Built-in deterministic generator | Yes | Entirely simulated; no provider data is used. |
+| Demo issuer identities | Embedded SEC-derived catalog | Yes | Real ticker/name associations; not a claim that the security remains active. |
+| Demo prices, rankings, volume, descriptions, news | Built-in deterministic generator | Yes | Entirely simulated and visibly labeled; no provider market data is used. |
 
 ## Alpaca
 
@@ -106,8 +107,9 @@ attribution remain governed by the user's Alpaca and content-provider terms.
 News may be duplicated, revised, misclassified, unavailable, or unrelated to a
 ticker despite the symbol association. It is not research or a recommendation.
 
-Demo headlines use invalid example URLs and explicitly identify themselves as
-simulated.
+Demo headlines use invalid example URLs and explicitly identify their headline,
+source, and summary as simulated. The TUI also keeps a `SIMULATED` badge visible
+while demo data is active.
 
 ## SEC-Derived Issuer Catalog
 

@@ -47,7 +47,7 @@ the relevant cached view. The renderer never performs HTTP requests.
 | `app` | Converts keyboard, paste, and mouse events into UI transitions and runtime commands. |
 | `ui` | Calculates responsive layout, registers mouse hit targets, and renders heatmaps, overlays, and charts. |
 | `runtime` | Wires terminal input, render ticks, storage, commands, refresh cadence, and worker events together. |
-| `terminal` | Enters raw alternate-screen mode and restores the terminal on exit or panic. |
+| `terminal` | Enters raw alternate-screen mode, requests text-based SGR mouse reports, and restores the terminal on exit or panic. |
 
 ## Startup Paths
 
@@ -61,11 +61,12 @@ Demo mode is selected by `--demo` or by the absence of both Alpaca credential
 variables. The runtime opens the selected SQLite file and seeds it on a
 blocking worker if it does not already contain a complete demo data set.
 
-The generator creates exactly 100 companies in each of the nine sectors. It
-also creates snapshots, two clearly marked simulated headlines per company,
-and `5Min`, `1Hour`, `1Day`, and `1Week` bars sufficient for every range. The
-market values are deterministic for the same clock value; they are not factual
-quotes.
+The generator selects the first 100 ranked identities in each of the nine
+sectors from the embedded SEC catalog. It then creates simulated rankings,
+snapshots, two clearly marked simulated headlines per company, and `5Min`,
+`1Hour`, `1Day`, and `1Week` bars sufficient for every range. Issuer identity
+and exchange associations come from the catalog; every displayed market value
+is deterministic demo data rather than a factual quote.
 
 ### Live Mode
 
@@ -103,7 +104,7 @@ The UI has four routes:
 - `Ticker`: a tinted detail view for one cached company.
 - `Favorites`: the persisted starred-company subset.
 
-Search, ordering, About, and sync status are overlays rather than routes. This
+Search, ordering, keyboard help, and sync status are overlays rather than routes. This
 keeps the underlying market context intact while an overlay is open.
 
 Each frame clears and rebuilds a list of rectangular hit targets. Mouse input
@@ -121,15 +122,19 @@ Full mode begins at 120x36. It uses a 15-column rail and a split detail view.
 Compact mode uses a 12-column rail and replaces the detail split with Chart,
 Statistics, and News tabs.
 
-The overview always has three columns and three rows. A sector panel with ten
-body rows draws its full 10x10 tile matrix. A shorter panel draws two ticker
-colors per terminal cell with the upper-half block character, retaining all
-100 signals in five rows. Sector detail uses ten columns when possible and
-otherwise selects between three and ten columns from the available width.
+The overview always has three columns and three rows. Panels and ticker cells
+use uniform dimensions; indivisible terminal rows and columns become centered
+outer padding. A sector panel with ten body rows draws its full 10x10 tile
+matrix. A shorter panel draws two ticker colors per terminal cell with the
+upper-half block character, retaining all 100 signals in five rows. Sector
+detail uses ten columns when possible and otherwise selects between three and
+ten columns from the available width.
 
 Charts sample cached bars to terminal width while preserving the first and
-last point. Ratatui's Braille canvas renders price; a sparkline renders volume.
-Hover or keyboard selection adds a crosshair and updates the price/time label.
+last point. A half-block canvas renders a banded filled area, price trace,
+guides, previous close, price scale, and range-aware date scale; a sparkline
+renders volume. Hover or keyboard selection adds a crosshair and updates the
+price/time label.
 
 ## Heatmap Semantics
 

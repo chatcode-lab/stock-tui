@@ -28,6 +28,7 @@ pub async fn run(settings: Settings) -> Result<()> {
 
     let mut state = UiState {
         status: format!("{} cache · {} feed", settings.mode_label(), settings.feed),
+        simulated_data: settings.demo,
         ..UiState::default()
     };
     reload_tiles(&storage, &mut state)?;
@@ -271,17 +272,33 @@ fn seed_demo(
     events: mpsc::UnboundedSender<SyncEvent>,
 ) -> Result<()> {
     let counts = storage.counts()?;
+    let current_demo = storage.sync_checkpoint(demo::CHECKPOINT_SCOPE)?.is_some();
+    let legacy_demo = !current_demo && storage.sync_checkpoint("demo")?.is_some();
+    let migrate_legacy_cache =
+        !reset && legacy_demo && counts.companies == 900 && counts.snapshots == 900;
+    let preserved_favorites = if migrate_legacy_cache {
+        storage.favorite_symbols()?
+    } else {
+        Vec::new()
+    };
     if reset {
         storage.reset_demo_data()?;
-    } else if counts.companies >= 900 && counts.snapshots >= 900 && counts.bars > 0 {
+    } else if current_demo && counts.companies >= 900 && counts.snapshots >= 900 && counts.bars > 0
+    {
         let _ = events.send(SyncEvent::DataChanged);
         return Ok(());
+    } else if migrate_legacy_cache {
+        storage.reset_demo_data()?;
     }
     let _ = events.send(SyncEvent::Progress(SyncProgress {
         phase: SyncPhase::History,
         completed: 0,
         total: 900,
-        message: "Building deterministic offline market".to_owned(),
+        message: if migrate_legacy_cache {
+            "Upgrading simulated demo identities".to_owned()
+        } else {
+            "Building deterministic simulated market".to_owned()
+        },
         last_error: None,
         updated_at: Utc::now(),
     }));
@@ -291,12 +308,24 @@ fn seed_demo(
     storage.upsert_snapshots(&dataset.snapshots)?;
     storage.upsert_bars(&dataset.bars)?;
     storage.upsert_news(&dataset.news)?;
-    storage.set_sync_checkpoint("demo", now)?;
+    if migrate_legacy_cache {
+        let current_symbols = dataset
+            .companies
+            .iter()
+            .map(|company| company.symbol.as_str())
+            .collect::<HashSet<_>>();
+        for symbol in preserved_favorites {
+            if current_symbols.contains(symbol.as_str()) {
+                storage.set_favorite(&symbol, true)?;
+            }
+        }
+    }
+    storage.set_sync_checkpoint(demo::CHECKPOINT_SCOPE, now)?;
     let _ = events.send(SyncEvent::Progress(SyncProgress {
         phase: SyncPhase::Complete,
         completed: 900,
         total: 900,
-        message: "Offline market ready".to_owned(),
+        message: "SIMULATED offline market ready".to_owned(),
         last_error: None,
         updated_at: Utc::now(),
     }));

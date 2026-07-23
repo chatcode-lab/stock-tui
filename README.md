@@ -22,16 +22,16 @@ read-only: it displays market information and does not place orders.
 - Colors each ticker from bright red through neutral gray to bright green from
   its return over `1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, or `5Y`.
 - Reorders tickers by market capitalization, gain, volume, or symbol.
-- Provides responsive sector grids and a ticker detail screen with a Braille
-  price plot, volume sparkline, statistics, company context, and news.
+- Provides responsive sector grids and a ticker detail screen with a filled
+  price plot, price/time axes, volume, statistics, company context, and news.
 - Supports mouse hover, clicking, wheel input, keyboard navigation, and
   terminal resize events.
 - Searches the local issuer catalog by symbol or company name.
 - Persists starred tickers and emphasizes them in every heatmap.
 - Opens immediately from a local SQLite cache while network synchronization
   proceeds in the background.
-- Runs without credentials using a deterministic, fully simulated 900-company
-  demo market.
+- Runs without credentials using 900 real SEC-catalog issuer identities with
+  deterministic, clearly labeled simulated market values.
 
 The heat scale is symmetric around zero and capped using the visible market's
 90th-percentile absolute move. This keeps one extreme ticker from flattening
@@ -41,7 +41,7 @@ than 72 hours old is rendered with muted text.
 ## Why Rust
 
 Go would also be a reasonable implementation language, but Rust is a stronger
-fit for this client: Ratatui provides precise cell rendering and Braille canvas
+fit for this client: Ratatui provides precise cell and canvas rendering
 support, Crossterm supplies portable mouse and keyboard events, Tokio handles
 background provider work, and `rusqlite` can bundle SQLite into one native
 binary. The result has no language runtime to install and keeps redraw and
@@ -64,9 +64,11 @@ Run the offline demo:
 cargo run --release -- --demo
 ```
 
-The first demo run generates simulated prices, multiple chart timeframes,
-volume, and news for 900 companies, then stores them in SQLite. Later runs
-reuse that database. Regenerate it with:
+The first demo run selects 100 real SEC-catalog identities per sector and
+generates simulated prices, rankings, multiple chart timeframes, volume, and
+news, then stores them in SQLite. The persistent `SIMULATED` badge distinguishes
+the demo from live Alpaca data. Later runs reuse the versioned demo database.
+Regenerate it with:
 
 ```bash
 cargo run --release -- --demo --reset-demo
@@ -76,9 +78,9 @@ cargo run --release -- --demo --reset-demo
 any live cache, before regenerating it. Use a dedicated `--db` path when that
 data matters. No Alpaca account or network connection is used in demo mode. If
 neither Alpaca credential variable is set, demo mode is selected automatically
-unless `--offline` was explicitly requested. A new/dedicated database
-guarantees simulated content; a complete existing database can otherwise be
-reused without checking its original mode.
+unless `--offline` was explicitly requested. Current versioned demo caches are
+reused, and the old fabricated-identity demo is upgraded automatically. Use a
+dedicated database when switching between demo and live modes.
 
 ### Use Alpaca Data
 
@@ -181,13 +183,19 @@ news row can be clicked with the left mouse button.
 | `1` through `7` | Select `1D` through `5Y` directly |
 | `Tab` | Cycle Chart, Statistics, and News in compact ticker view |
 | `r` | Request a snapshot refresh |
-| `?` | Open the About overlay |
+| `S` | Open synchronization status |
+| `?` | Open keyboard help |
 | `q` or `Ctrl-C` | Quit and restore the terminal |
 
 In search, type or paste a query, use Up/Down to select a result, `Enter` to
 open it, `Ctrl-U` to clear the query, and `Esc` to close. Search is local and
 returns at most 20 catalog matches. Clicking a headline asks the operating
 system to open its provider URL in the default browser.
+
+On ANSI terminals, `stock-tui` explicitly requests all-motion tracking with
+SGR mouse encoding (`1003` + `1006`). Its click, hover, drag, and wheel reports
+therefore travel as text input and do not depend on legacy X10/onBinary mouse
+transport.
 
 ## Responsive Layout
 
@@ -200,8 +208,11 @@ system to open its provider URL in the default browser.
 - The overview always preserves the 3x3 sector model. Short terminals compress
   each 10x10 sector into paired half-block rows so all 100 color signals remain
   visible.
+- Sector panels and ticker tiles use one fixed cell size at a given viewport.
+  Any indivisible rows or columns become balanced outer padding instead of
+  stretching selected tiles.
 
-Terminals differ in their handling of mouse motion, Braille glyphs, and RGB
+Terminals differ in their handling of mouse motion, half-block glyphs, and RGB
 color. `NO_COLOR=1 stock-tui` selects the monochrome palette when color is not
 usable.
 

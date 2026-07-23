@@ -15,17 +15,18 @@ pre-1.0 releases.
   100 color-coded companies per sector.
 - Seven ranges (`1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, `5Y`) and market-cap,
   gain, volume, and alphabetical ordering.
-- Mouse hover/click/wheel input, keyboard navigation, paste-aware search, and
-  terminal restoration on exit or panic.
-- Responsive compact/full layouts, half-block overview compression, true-color
-  heat scales, monochrome `NO_COLOR` mode, and Braille price charts with volume
-  sparklines.
+- SGR-only mouse hover/click/drag/wheel input, keyboard navigation,
+  paste-aware search, and terminal restoration on exit or panic.
+- Responsive compact/full layouts, centered equal-cell heatmaps, half-block
+  overview compression, true-color heat scales, monochrome `NO_COLOR` mode,
+  and filled price charts with labeled axes and volume sparklines.
 - Ticker detail with price, return, OHLC, volume, market cap, sector context,
   company description, related news, and browser opening.
 - Persistent favorites, dedicated Starred view, and local ticker/company-name
   search.
-- Deterministic offline demo data for 900 companies, all chart ranges, and
-  clearly labeled simulated news.
+- Deterministic offline demo market values for 900 real SEC-catalog identities,
+  all chart ranges, persistent simulation labeling, and clearly labeled
+  simulated news.
 - Alpaca adapter for active US equity assets, batched snapshots, paginated
   adjusted bars, and historical news, with secret redaction, request limiting,
   bounded retry/backoff, and feed fallback.

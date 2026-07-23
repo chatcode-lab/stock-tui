@@ -2,9 +2,13 @@
 
 use chrono::{DateTime, Datelike, Days, Duration, NaiveDate, NaiveTime, Utc, Weekday};
 
-use crate::domain::{Bar, Company, NewsItem, Sector, Snapshot};
+use crate::{
+    domain::{Bar, Company, NewsItem, Sector, Snapshot},
+    universe,
+};
 
 pub const COMPANIES_PER_SECTOR: usize = 100;
+pub const CHECKPOINT_SCOPE: &str = "demo:sec-identities-v2";
 
 const FIVE_MINUTE_BARS: usize = 78;
 const HOURLY_SESSIONS: usize = 24;
@@ -39,19 +43,51 @@ pub fn generate(as_of: DateTime<Utc>) -> DemoDataset {
         news: Vec::with_capacity(company_count * 2),
     };
 
-    for (sector_index, sector) in Sector::ALL.into_iter().enumerate() {
-        for rank in 1_u16..=u16::try_from(COMPANIES_PER_SECTOR).unwrap_or(100) {
-            let (company, model) = make_company(sector, sector_index, rank, as_of);
-            dataset.snapshots.push(make_snapshot(&model, as_of));
-            append_bars(&mut dataset.bars, &model, anchor);
-            dataset
-                .news
-                .extend(make_news(&company, sector_index, rank, as_of));
-            dataset.companies.push(company);
-        }
+    for identity in demo_identities(as_of) {
+        let sector = identity
+            .sector
+            .expect("validated demo identity must have a sector");
+        let sector_index = Sector::ALL
+            .iter()
+            .position(|candidate| *candidate == sector)
+            .expect("validated demo sector");
+        let rank = identity
+            .rank
+            .expect("validated demo identity must have a rank");
+        let (company, model) = make_company(&identity, sector_index, rank, as_of);
+        dataset.snapshots.push(make_snapshot(&model, as_of));
+        append_bars(&mut dataset.bars, &model, anchor);
+        dataset
+            .news
+            .extend(make_news(&company, sector_index, rank, as_of));
+        dataset.companies.push(company);
     }
 
     dataset
+}
+
+fn demo_identities(as_of: DateTime<Utc>) -> Vec<Company> {
+    let catalog =
+        universe::embedded_companies(as_of).expect("the build-time SEC catalog must remain valid");
+    let mut selected = Vec::with_capacity(Sector::ALL.len() * COMPANIES_PER_SECTOR);
+    for sector in Sector::ALL {
+        let mut companies = catalog
+            .iter()
+            .filter(|company| company.sector == Some(sector))
+            .collect::<Vec<_>>();
+        companies.sort_by(|left, right| {
+            left.rank
+                .cmp(&right.rank)
+                .then_with(|| left.symbol.cmp(&right.symbol))
+        });
+        selected.extend(companies.into_iter().take(COMPANIES_PER_SECTOR).cloned());
+    }
+    assert_eq!(
+        selected.len(),
+        Sector::ALL.len() * COMPANIES_PER_SECTOR,
+        "the validated SEC catalog must provide 100 demo identities per sector"
+    );
+    selected
 }
 
 #[derive(Debug, Clone)]
@@ -93,46 +129,39 @@ impl PriceModel {
 }
 
 fn make_company(
-    sector: Sector,
+    identity: &Company,
     sector_index: usize,
     rank: u16,
     as_of: DateTime<Utc>,
 ) -> (Company, PriceModel) {
-    let featured = featured_companies(sector);
-    let rank_index = usize::from(rank - 1);
-    let (symbol, name) = featured.get(rank_index).map_or_else(
-        || generated_identity(sector, rank),
-        |(symbol, name)| ((*symbol).to_owned(), (*name).to_owned()),
-    );
+    let sector = identity
+        .sector
+        .expect("validated demo identity must have a sector");
+    let symbol = identity.symbol.clone();
+    let name = identity.name.clone();
     let seed = hash64(&symbol) ^ (u64::from(rank) << 32);
     let sector_base = sector_market_cap(sector);
     let market_cap = sector_base / f64::from(rank).powf(0.94);
     let current_price = 14.0 + unit(seed, 1) * 486.0;
-    let return_bucket =
-        (u32::from(rank) * 37 + u32::try_from(sector_index).unwrap_or_default() * 23) % 101;
-    let day_return = (f64::from(return_bucket) - 50.0) / 650.0;
+    let day_return = simulated_day_return(seed, sector_index, as_of);
     let previous_close = current_price / (1.0 + day_return);
     let annual_drift = -0.10 + unit(seed, 2) * 0.42;
     let turnover = 0.0025 + unit(seed, 3) * 0.015;
     let daily_volume = market_cap / current_price * turnover;
     let daily_trades = 12_000 + mixed(seed, 4) % 1_800_000;
-    let industry = industries(sector)[rank_index % industries(sector).len()].to_owned();
+    let industry = identity.industry.clone();
     let company = Company {
         symbol: symbol.clone(),
         name: name.clone(),
         sector: Some(sector),
-        raw_sector: Some(sector.label().to_owned()),
-        exchange: if (rank + u16::try_from(sector_index).unwrap_or_default()).is_multiple_of(2) {
-            "NASDAQ".to_owned()
-        } else {
-            "NYSE".to_owned()
-        },
+        raw_sector: Some(format!("{} · SIMULATED DEMO", sector.label())),
+        exchange: identity.exchange.clone(),
         industry: industry.clone(),
         market_cap: Some(market_cap),
         shares_outstanding: Some(market_cap / current_price),
         rank: Some(rank),
         description: format!(
-            "{name} represents the {industry} industry in the offline {sector} demo universe. All displayed values are simulated."
+            "{name} is an SEC-catalog identity in the offline demo. Prices, market cap, volume, ranking, chart history, statistics, and news are all simulated."
         ),
         in_universe: true,
         retained: false,
@@ -149,6 +178,15 @@ fn make_company(
         daily_trades,
     };
     (company, model)
+}
+
+fn simulated_day_return(company_seed: u64, sector_index: usize, as_of: DateTime<Utc>) -> f64 {
+    let date_seed = u64::from(as_of.date_naive().num_days_from_ce().unsigned_abs());
+    let sector_seed = hash64(Sector::ALL[sector_index].label()) ^ date_seed.rotate_left(17);
+    let sector_move = (unit(sector_seed, 0x53ec_70a1) - 0.5) * 0.028;
+    let centered = unit(company_seed ^ date_seed.rotate_left(31), 0xc04d_a11e) * 2.0 - 1.0;
+    let idiosyncratic = centered.signum() * centered.abs().powf(1.65) * 0.105;
+    (sector_move + idiosyncratic).clamp(-0.12, 0.12)
 }
 
 fn make_snapshot(model: &PriceModel, as_of: DateTime<Utc>) -> Snapshot {
@@ -288,8 +326,11 @@ fn make_news(
     [
         NewsItem {
             id: format!("demo-{}-outlook", company.symbol),
-            headline: format!("{} outlines priorities for the next operating cycle", company.name),
-            source: sources[source_index].to_owned(),
+            headline: format!(
+                "[SIMULATED] {} outlines priorities for the next operating cycle",
+                company.name
+            ),
+            source: format!("SIMULATED · {}", sources[source_index]),
             published_at: as_of - Duration::hours(first_age),
             url: format!("{base_url}/outlook"),
             summary: "Simulated offline headline for demonstrating the news reader; this is not a live report."
@@ -299,10 +340,13 @@ fn make_news(
         NewsItem {
             id: format!("demo-{}-sector", company.symbol),
             headline: format!(
-                "{} investors weigh growth, demand, and margin trends",
+                "[SIMULATED] {} investors weigh growth, demand, and margin trends",
                 company.sector.map_or("Market", Sector::label)
             ),
-            source: sources[(source_index + 1) % sources.len()].to_owned(),
+            source: format!(
+                "SIMULATED · {}",
+                sources[(source_index + 1) % sources.len()]
+            ),
             published_at: as_of - Duration::hours(second_age),
             url: format!("{base_url}/sector-trends"),
             summary: "Deterministic demo content provides a concise related-news row while the app is offline."
@@ -379,43 +423,6 @@ fn unit(seed: u64, salt: u64) -> f64 {
     f64::from(upper) / f64::from(u32::MAX)
 }
 
-fn generated_identity(sector: Sector, rank: u16) -> (String, String) {
-    const ADJECTIVES: [&str; 10] = [
-        "Apex",
-        "Beacon",
-        "Cedar",
-        "Crest",
-        "Frontier",
-        "Harbor",
-        "Keystone",
-        "Northstar",
-        "Pioneer",
-        "Summit",
-    ];
-    let generated_index = usize::from(rank).saturating_sub(featured_companies(sector).len() + 1);
-    let businesses = generated_businesses(sector);
-    let adjective = ADJECTIVES[(generated_index / businesses.len()) % ADJECTIVES.len()];
-    let business = businesses[generated_index % businesses.len()];
-    (
-        format!("{}{:03}", sector_symbol_prefix(sector), rank),
-        format!("{adjective} {business}"),
-    )
-}
-
-const fn sector_symbol_prefix(sector: Sector) -> &'static str {
-    match sector {
-        Sector::Consumer => "CS",
-        Sector::Services => "SV",
-        Sector::Healthcare => "HC",
-        Sector::Energy => "EN",
-        Sector::Technology => "TC",
-        Sector::Financial => "FN",
-        Sector::Industrial => "IN",
-        Sector::Materials => "MT",
-        Sector::Utilities => "UT",
-    }
-}
-
 const fn sector_market_cap(sector: Sector) -> f64 {
     match sector {
         Sector::Consumer => 900_000_000_000.0,
@@ -427,392 +434,6 @@ const fn sector_market_cap(sector: Sector) -> f64 {
         Sector::Industrial => 410_000_000_000.0,
         Sector::Materials => 260_000_000_000.0,
         Sector::Utilities => 190_000_000_000.0,
-    }
-}
-
-const fn industries(sector: Sector) -> &'static [&'static str; 8] {
-    match sector {
-        Sector::Consumer => &[
-            "Retail",
-            "Consumer Products",
-            "Food and Beverage",
-            "Apparel",
-            "Restaurants",
-            "Home Improvement",
-            "Leisure",
-            "Household Products",
-        ],
-        Sector::Services => &[
-            "Interactive Media",
-            "Telecommunications",
-            "Entertainment",
-            "Travel Services",
-            "Business Services",
-            "Transportation",
-            "Hospitality",
-            "Digital Commerce",
-        ],
-        Sector::Healthcare => &[
-            "Pharmaceuticals",
-            "Managed Care",
-            "Medical Devices",
-            "Biotechnology",
-            "Diagnostics",
-            "Life Sciences",
-            "Health Services",
-            "Medical Technology",
-        ],
-        Sector::Energy => &[
-            "Integrated Energy",
-            "Exploration and Production",
-            "Oilfield Services",
-            "Refining",
-            "Midstream",
-            "Natural Gas",
-            "Energy Equipment",
-            "Renewable Energy",
-        ],
-        Sector::Technology => &[
-            "Software",
-            "Semiconductors",
-            "Cloud Computing",
-            "Hardware",
-            "Cybersecurity",
-            "Data Infrastructure",
-            "IT Services",
-            "Electronic Design",
-        ],
-        Sector::Financial => &[
-            "Banking",
-            "Capital Markets",
-            "Insurance",
-            "Payments",
-            "Asset Management",
-            "Consumer Finance",
-            "Financial Data",
-            "Brokerage",
-        ],
-        Sector::Industrial => &[
-            "Aerospace and Defense",
-            "Machinery",
-            "Rail Transportation",
-            "Logistics",
-            "Electrical Equipment",
-            "Engineering",
-            "Waste Services",
-            "Industrial Automation",
-        ],
-        Sector::Materials => &[
-            "Chemicals",
-            "Metals and Mining",
-            "Steel",
-            "Construction Materials",
-            "Packaging",
-            "Agricultural Inputs",
-            "Specialty Materials",
-            "Paper Products",
-        ],
-        Sector::Utilities => &[
-            "Electric Utilities",
-            "Multi-Utilities",
-            "Independent Power",
-            "Water Utilities",
-            "Natural Gas Utilities",
-            "Renewable Utilities",
-            "Grid Infrastructure",
-            "Regulated Power",
-        ],
-    }
-}
-
-const fn generated_businesses(sector: Sector) -> &'static [&'static str; 8] {
-    match sector {
-        Sector::Consumer => &[
-            "Brands", "Foods", "Home", "Apparel", "Beverage", "Retail", "Leisure", "Markets",
-        ],
-        Sector::Services => &[
-            "Media",
-            "Networks",
-            "Travel",
-            "Logistics",
-            "Entertainment",
-            "Communications",
-            "Hospitality",
-            "Commerce",
-        ],
-        Sector::Healthcare => &[
-            "Therapeutics",
-            "Medical",
-            "Health Systems",
-            "Diagnostics",
-            "Biopharma",
-            "Surgical",
-            "Care",
-            "Life Sciences",
-        ],
-        Sector::Energy => &[
-            "Energy",
-            "Resources",
-            "Midstream",
-            "Power",
-            "Drilling",
-            "Petroleum",
-            "Gas",
-            "Renewables",
-        ],
-        Sector::Technology => &[
-            "Software",
-            "Systems",
-            "Semiconductor",
-            "Cloud",
-            "Cybersecurity",
-            "Data",
-            "Computing",
-            "Automation",
-        ],
-        Sector::Financial => &[
-            "Capital",
-            "Bancorp",
-            "Insurance",
-            "Payments",
-            "Markets",
-            "Advisors",
-            "Credit",
-            "Financial",
-        ],
-        Sector::Industrial => &[
-            "Industries",
-            "Aerospace",
-            "Machinery",
-            "Transport",
-            "Automation",
-            "Engineering",
-            "Logistics",
-            "Manufacturing",
-        ],
-        Sector::Materials => &[
-            "Materials",
-            "Mining",
-            "Chemicals",
-            "Steel",
-            "Aggregates",
-            "Packaging",
-            "Minerals",
-            "Specialties",
-        ],
-        Sector::Utilities => &[
-            "Electric",
-            "Water",
-            "Grid",
-            "Utilities",
-            "Energy Services",
-            "Infrastructure",
-            "Power",
-            "Gas",
-        ],
-    }
-}
-
-const fn featured_companies(sector: Sector) -> &'static [(&'static str, &'static str)] {
-    match sector {
-        Sector::Consumer => &[
-            ("WMT", "Walmart"),
-            ("AMZN", "Amazon.com"),
-            ("COST", "Costco Wholesale"),
-            ("HD", "Home Depot"),
-            ("PG", "Procter & Gamble"),
-            ("KO", "Coca-Cola"),
-            ("PEP", "PepsiCo"),
-            ("MCD", "McDonald's"),
-            ("NKE", "Nike"),
-            ("LOW", "Lowe's"),
-            ("SBUX", "Starbucks"),
-            ("TJX", "TJX Companies"),
-            ("TGT", "Target"),
-            ("MDLZ", "Mondelez International"),
-            ("CL", "Colgate-Palmolive"),
-            ("PM", "Philip Morris International"),
-            ("MO", "Altria Group"),
-            ("EL", "Estee Lauder"),
-            ("KMB", "Kimberly-Clark"),
-            ("ORLY", "O'Reilly Automotive"),
-        ],
-        Sector::Services => &[
-            ("GOOGL", "Alphabet"),
-            ("META", "Meta Platforms"),
-            ("NFLX", "Netflix"),
-            ("DIS", "Walt Disney"),
-            ("TMUS", "T-Mobile US"),
-            ("VZ", "Verizon Communications"),
-            ("T", "AT&T"),
-            ("CMCSA", "Comcast"),
-            ("UBER", "Uber Technologies"),
-            ("BKNG", "Booking Holdings"),
-            ("ABNB", "Airbnb"),
-            ("SPOT", "Spotify Technology"),
-            ("DASH", "DoorDash"),
-            ("CHTR", "Charter Communications"),
-            ("EA", "Electronic Arts"),
-            ("RBLX", "Roblox"),
-            ("LYV", "Live Nation Entertainment"),
-            ("WBD", "Warner Bros. Discovery"),
-            ("TTWO", "Take-Two Interactive"),
-            ("ROST", "Ross Stores"),
-        ],
-        Sector::Healthcare => &[
-            ("LLY", "Eli Lilly"),
-            ("UNH", "UnitedHealth Group"),
-            ("JNJ", "Johnson & Johnson"),
-            ("ABBV", "AbbVie"),
-            ("MRK", "Merck"),
-            ("TMO", "Thermo Fisher Scientific"),
-            ("ABT", "Abbott Laboratories"),
-            ("AMGN", "Amgen"),
-            ("PFE", "Pfizer"),
-            ("ISRG", "Intuitive Surgical"),
-            ("GILD", "Gilead Sciences"),
-            ("DHR", "Danaher"),
-            ("BMY", "Bristol-Myers Squibb"),
-            ("SYK", "Stryker"),
-            ("CVS", "CVS Health"),
-            ("MDT", "Medtronic"),
-            ("ELV", "Elevance Health"),
-            ("REGN", "Regeneron Pharmaceuticals"),
-            ("VRTX", "Vertex Pharmaceuticals"),
-            ("ZTS", "Zoetis"),
-        ],
-        Sector::Energy => &[
-            ("XOM", "Exxon Mobil"),
-            ("CVX", "Chevron"),
-            ("COP", "ConocoPhillips"),
-            ("SLB", "SLB"),
-            ("EOG", "EOG Resources"),
-            ("MPC", "Marathon Petroleum"),
-            ("PSX", "Phillips 66"),
-            ("VLO", "Valero Energy"),
-            ("OXY", "Occidental Petroleum"),
-            ("KMI", "Kinder Morgan"),
-            ("WMB", "Williams Companies"),
-            ("LNG", "Cheniere Energy"),
-            ("HAL", "Halliburton"),
-            ("BKR", "Baker Hughes"),
-            ("FANG", "Diamondback Energy"),
-            ("DVN", "Devon Energy"),
-            ("HES", "Hess"),
-            ("CTRA", "Coterra Energy"),
-            ("EQT", "EQT"),
-            ("TRGP", "Targa Resources"),
-        ],
-        Sector::Technology => &[
-            ("MSFT", "Microsoft"),
-            ("AAPL", "Apple"),
-            ("NVDA", "NVIDIA"),
-            ("AVGO", "Broadcom"),
-            ("ORCL", "Oracle"),
-            ("CRM", "Salesforce"),
-            ("AMD", "Advanced Micro Devices"),
-            ("ADBE", "Adobe"),
-            ("CSCO", "Cisco Systems"),
-            ("IBM", "IBM"),
-            ("QCOM", "Qualcomm"),
-            ("TXN", "Texas Instruments"),
-            ("INTU", "Intuit"),
-            ("NOW", "ServiceNow"),
-            ("AMAT", "Applied Materials"),
-            ("MU", "Micron Technology"),
-            ("PANW", "Palo Alto Networks"),
-            ("ADI", "Analog Devices"),
-            ("KLAC", "KLA"),
-            ("SNPS", "Synopsys"),
-        ],
-        Sector::Financial => &[
-            ("BRK.B", "Berkshire Hathaway"),
-            ("JPM", "JPMorgan Chase"),
-            ("BAC", "Bank of America"),
-            ("WFC", "Wells Fargo"),
-            ("GS", "Goldman Sachs"),
-            ("MS", "Morgan Stanley"),
-            ("C", "Citigroup"),
-            ("SCHW", "Charles Schwab"),
-            ("BLK", "BlackRock"),
-            ("AXP", "American Express"),
-            ("SPGI", "S&P Global"),
-            ("CME", "CME Group"),
-            ("ICE", "Intercontinental Exchange"),
-            ("CB", "Chubb"),
-            ("PGR", "Progressive"),
-            ("MMC", "Marsh McLennan"),
-            ("COF", "Capital One Financial"),
-            ("USB", "U.S. Bancorp"),
-            ("PNC", "PNC Financial Services"),
-            ("BK", "Bank of New York Mellon"),
-        ],
-        Sector::Industrial => &[
-            ("GE", "GE Aerospace"),
-            ("CAT", "Caterpillar"),
-            ("RTX", "RTX"),
-            ("HON", "Honeywell International"),
-            ("UNP", "Union Pacific"),
-            ("BA", "Boeing"),
-            ("DE", "Deere & Company"),
-            ("LMT", "Lockheed Martin"),
-            ("UPS", "United Parcel Service"),
-            ("ETN", "Eaton"),
-            ("ADP", "Automatic Data Processing"),
-            ("PH", "Parker-Hannifin"),
-            ("GD", "General Dynamics"),
-            ("NOC", "Northrop Grumman"),
-            ("WM", "Waste Management"),
-            ("ITW", "Illinois Tool Works"),
-            ("CSX", "CSX"),
-            ("EMR", "Emerson Electric"),
-            ("FDX", "FedEx"),
-            ("MMM", "3M"),
-        ],
-        Sector::Materials => &[
-            ("LIN", "Linde"),
-            ("SHW", "Sherwin-Williams"),
-            ("FCX", "Freeport-McMoRan"),
-            ("NEM", "Newmont"),
-            ("APD", "Air Products and Chemicals"),
-            ("ECL", "Ecolab"),
-            ("NUE", "Nucor"),
-            ("DOW", "Dow"),
-            ("CTVA", "Corteva"),
-            ("DD", "DuPont"),
-            ("PPG", "PPG Industries"),
-            ("VMC", "Vulcan Materials"),
-            ("MLM", "Martin Marietta Materials"),
-            ("STLD", "Steel Dynamics"),
-            ("ALB", "Albemarle"),
-            ("CF", "CF Industries"),
-            ("MOS", "Mosaic"),
-            ("IFF", "International Flavors & Fragrances"),
-            ("IP", "International Paper"),
-            ("BALL", "Ball"),
-        ],
-        Sector::Utilities => &[
-            ("NEE", "NextEra Energy"),
-            ("SO", "Southern Company"),
-            ("DUK", "Duke Energy"),
-            ("CEG", "Constellation Energy"),
-            ("AEP", "American Electric Power"),
-            ("SRE", "Sempra"),
-            ("D", "Dominion Energy"),
-            ("DTE", "DTE Energy"),
-            ("EXC", "Exelon"),
-            ("XEL", "Xcel Energy"),
-            ("ED", "Consolidated Edison"),
-            ("PEG", "Public Service Enterprise Group"),
-            ("WEC", "WEC Energy Group"),
-            ("PCG", "PG&E"),
-            ("EIX", "Edison International"),
-            ("AWK", "American Water Works"),
-            ("ES", "Eversource Energy"),
-            ("FE", "FirstEnergy"),
-            ("PPL", "PPL"),
-            ("AEE", "Ameren"),
-        ],
     }
 }
 
@@ -832,14 +453,19 @@ mod tests {
 
     #[test]
     fn universe_has_one_hundred_unique_companies_per_sector() {
+        let identities = demo_identities(fixed_now());
         let mut companies = Vec::new();
         let mut snapshots = Vec::new();
-        for (sector_index, sector) in Sector::ALL.into_iter().enumerate() {
-            for rank in 1_u16..=100 {
-                let (company, model) = make_company(sector, sector_index, rank, fixed_now());
-                snapshots.push(make_snapshot(&model, fixed_now()));
-                companies.push(company);
-            }
+        for identity in &identities {
+            let sector = identity.sector.expect("catalog sector");
+            let sector_index = Sector::ALL
+                .iter()
+                .position(|candidate| *candidate == sector)
+                .expect("known sector");
+            let rank = identity.rank.expect("catalog rank");
+            let (company, model) = make_company(identity, sector_index, rank, fixed_now());
+            snapshots.push(make_snapshot(&model, fixed_now()));
+            companies.push(company);
         }
 
         assert_eq!(companies.len(), 900);
@@ -860,7 +486,25 @@ mod tests {
         }
         assert!(companies.iter().any(|company| company.symbol == "AAPL"));
         assert!(companies.iter().any(|company| company.symbol == "JPM"));
-        assert!(companies.iter().any(|company| company.symbol == "XOM"));
+        assert!(companies.iter().any(|company| company.symbol == "CVX"));
+        assert!(companies.iter().all(|company| {
+            company.description.contains("all simulated")
+                && company
+                    .raw_sector
+                    .as_deref()
+                    .is_some_and(|label| label.contains("SIMULATED DEMO"))
+        }));
+
+        let catalog_symbols = universe::embedded_companies(fixed_now())
+            .expect("catalog")
+            .into_iter()
+            .map(|company| company.symbol)
+            .collect::<HashSet<_>>();
+        assert!(
+            companies
+                .iter()
+                .all(|company| catalog_symbols.contains(&company.symbol))
+        );
 
         let returns = snapshots
             .iter()
@@ -868,6 +512,16 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(returns.iter().any(|value| *value < -0.07));
         assert!(returns.iter().any(|value| *value > 0.07));
+        for sector_returns in returns.chunks_exact(COMPANIES_PER_SECTOR) {
+            let sign_alternations = sector_returns
+                .windows(2)
+                .filter(|pair| pair[0].is_sign_positive() != pair[1].is_sign_positive())
+                .count();
+            assert!(
+                sign_alternations < 70,
+                "demo returns should not form a rank-alternating sign pattern"
+            );
+        }
         assert!(snapshots.iter().all(|snapshot| {
             snapshot
                 .volume
@@ -877,7 +531,11 @@ mod tests {
 
     #[test]
     fn one_symbol_has_history_for_every_range() {
-        let (_, model) = make_company(Sector::Technology, 4, 2, fixed_now());
+        let identity = demo_identities(fixed_now())
+            .into_iter()
+            .find(|company| company.sector == Some(Sector::Technology) && company.rank == Some(2))
+            .expect("technology identity");
+        let (_, model) = make_company(&identity, 4, 2, fixed_now());
         let anchor = last_completed_market_close(fixed_now());
         let mut bars = Vec::new();
         append_bars(&mut bars, &model, anchor);
@@ -912,8 +570,12 @@ mod tests {
 
     #[test]
     fn scalar_generation_is_repeatable_and_news_is_clearly_simulated() {
-        let (first_company, first_model) = make_company(Sector::Healthcare, 2, 17, fixed_now());
-        let (second_company, second_model) = make_company(Sector::Healthcare, 2, 17, fixed_now());
+        let identity = demo_identities(fixed_now())
+            .into_iter()
+            .find(|company| company.sector == Some(Sector::Healthcare) && company.rank == Some(17))
+            .expect("healthcare identity");
+        let (first_company, first_model) = make_company(&identity, 2, 17, fixed_now());
+        let (second_company, second_model) = make_company(&identity, 2, 17, fixed_now());
         assert_eq!(first_company.symbol, second_company.symbol);
         assert_eq!(first_company.name, second_company.name);
         assert_eq!(
@@ -929,6 +591,11 @@ mod tests {
         assert!(
             news.iter()
                 .all(|item| item.summary.contains("demo") || item.summary.contains("Simulated"))
+        );
+        assert!(
+            news.iter()
+                .all(|item| item.headline.starts_with("[SIMULATED]")
+                    && item.source.starts_with("SIMULATED"))
         );
         assert!(news.iter().all(|item| {
             item.symbols.len() == 1 && item.symbols.first() == Some(&first_company.symbol)

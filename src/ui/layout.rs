@@ -56,25 +56,30 @@ impl AppLayout {
 }
 
 #[must_use]
-pub fn split_exact(area: Rect, columns: u16, rows: u16) -> Vec<Rect> {
+pub fn uniform_grid(area: Rect, columns: u16, rows: u16) -> Vec<Rect> {
     if columns == 0 || rows == 0 {
         return Vec::new();
     }
-    let column_width = area.width / columns;
-    let extra_columns = area.width % columns;
-    let row_height = area.height / rows;
-    let extra_rows = area.height % rows;
+    let cell_width = area.width / columns;
+    let cell_height = area.height / rows;
+    if cell_width == 0 || cell_height == 0 {
+        return Vec::new();
+    }
+
+    let used_width = cell_width * columns;
+    let used_height = cell_height * rows;
+    let origin_x = area.x + (area.width - used_width) / 2;
+    let origin_y = area.y + (area.height - used_height) / 2;
     let mut result = Vec::with_capacity(usize::from(columns * rows));
-    let mut y = area.y;
     for row in 0..rows {
-        let height = row_height + u16::from(row < extra_rows);
-        let mut x = area.x;
         for column in 0..columns {
-            let width = column_width + u16::from(column < extra_columns);
-            result.push(Rect::new(x, y, width, height));
-            x = x.saturating_add(width);
+            result.push(Rect::new(
+                origin_x + column * cell_width,
+                origin_y + row * cell_height,
+                cell_width,
+                cell_height,
+            ));
         }
-        y = y.saturating_add(height);
     }
     result
 }
@@ -84,13 +89,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_exact_covers_odd_sized_area() {
+    fn uniform_grid_centers_equal_cells_and_leaves_remainder_as_padding() {
         let area = Rect::new(2, 3, 101, 41);
-        let cells = split_exact(area, 3, 3);
+        let cells = uniform_grid(area, 3, 3);
+
         assert_eq!(cells.len(), 9);
-        assert_eq!(cells[0].x, 2);
-        assert_eq!(cells[8].right(), area.right());
-        assert_eq!(cells[8].bottom(), area.bottom());
+        assert!(cells.iter().all(|cell| cell.width == 33));
+        assert!(cells.iter().all(|cell| cell.height == 13));
+        assert_eq!(cells[0], Rect::new(3, 4, 33, 13));
+        assert_eq!(cells[8].right(), 102);
+        assert_eq!(cells[8].bottom(), 43);
+        assert_eq!(cells[0].x - area.x, area.right() - cells[8].right());
+        assert_eq!(cells[0].y - area.y, area.bottom() - cells[8].bottom());
     }
 
     #[test]

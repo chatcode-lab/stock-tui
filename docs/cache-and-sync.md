@@ -210,13 +210,14 @@ collection for old retained companies.
 `--offline` suppresses the provider worker and renders only the selected
 database. It does not update freshness timestamps or fetch a search miss.
 
-Demo mode writes simulated records into the selected database. It reuses any
-apparently complete selected cache; the current completeness check does not
-record or verify its original provider mode. Use a new/dedicated `--db` path to
-guarantee simulated content. `--reset-demo` clears every table in the selected
-database, including favorites and live-provider data, before regeneration.
-Because live and demo data share a schema, use separate paths when switching
-modes or preserving a valuable live cache.
+Demo mode writes simulated records into the selected database and records a
+versioned demo checkpoint. It reuses a complete cache only when that checkpoint
+matches the current generator. The v1-to-v2 migration replaces the old
+fabricated ticker identities with real SEC-catalog identities and restores
+favorites whose symbols remain in the new universe. `--reset-demo` clears every
+table in the selected database, including favorites and live-provider data,
+before regeneration. Because live and demo data share a schema, use separate
+paths when switching modes or preserving a valuable live cache.
 
 ## Operational Guidance
 

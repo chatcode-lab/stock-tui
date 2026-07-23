@@ -7,6 +7,7 @@ use stock_tui::{
     app::{AppCommand, handle_event},
     domain::{Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, TickerDetail},
     ui::{
+        layout::AppLayout,
         render,
         state::{DetailTab, Overlay, Route, UiAction, UiState},
     },
@@ -146,6 +147,59 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
 }
 
 #[test]
+fn detail_chart_fills_the_plot_and_exposes_aligned_axes_and_hover() {
+    let mut state = detail_state();
+    let buffer = render_at(&mut state, 160, 48);
+    let plot = state
+        .chart_rect
+        .expect("detail chart exposes its plot area");
+
+    let filled_cells = plot
+        .rows()
+        .flat_map(|row| row.columns())
+        .filter(|position| matches!(buffer[*position].symbol(), "█" | "▀" | "▄"))
+        .count();
+    assert!(
+        filled_cells > usize::from(plot.width),
+        "area chart should contain more than a one-cell outline"
+    );
+
+    let mut y_axis = String::new();
+    for y in plot.y..plot.bottom() {
+        for x in plot.x.saturating_sub(10)..plot.x {
+            y_axis.push_str(buffer[(x, y)].symbol());
+        }
+    }
+    assert!(
+        y_axis.contains('$'),
+        "price axis should show currency labels"
+    );
+
+    let x_axis: String = (plot.x..plot.right())
+        .map(|x| buffer[(x, plot.bottom())].symbol())
+        .collect();
+    assert!(
+        x_axis.contains(':'),
+        "one-day time axis should show intraday labels"
+    );
+
+    let hover_commands = handle_event(
+        &mut state,
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: plot.right() - 1,
+            row: plot.y + plot.height / 2,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+    assert!(hover_commands.is_empty());
+    assert_eq!(
+        state.detail_hover,
+        Some(state.chart_sample_indices.len() - 1)
+    );
+}
+
+#[test]
 fn search_accepts_input_renders_results_and_opens_selection() {
     let mut state = fixture_state();
     state.search_results = state
@@ -233,6 +287,70 @@ fn rendered_mouse_target_hovers_and_opens_ticker() {
 }
 
 #[test]
+fn sector_heatmap_uses_equal_centered_tiles_without_corner_artifacts() {
+    let mut state = fixture_state();
+    let template = state
+        .tiles
+        .iter()
+        .find(|tile| tile.company.symbol == "ACME")
+        .cloned()
+        .expect("fixture contains a technology tile");
+    for rank in 3..=100 {
+        let mut tile = template.clone();
+        tile.company.symbol = format!("T{rank:03}");
+        tile.company.name = format!("Technology Fixture {rank}");
+        tile.company.rank = Some(rank);
+        tile.starred = false;
+        state.tiles.push(tile);
+    }
+    state.route = Route::Sector(Sector::Technology);
+
+    let width = 200;
+    let height = 60;
+    let buffer = render_at(&mut state, width, height);
+    let content = AppLayout::calculate(Rect::new(0, 0, width, height)).content;
+    let tiles: Vec<_> = state
+        .hit_targets
+        .iter()
+        .filter(|target| matches!(target.action, UiAction::OpenTicker(_)))
+        .collect();
+
+    assert_eq!(tiles.len(), 100);
+    let cell_size = (tiles[0].rect.width, tiles[0].rect.height);
+    assert!(tiles.iter().all(|target| {
+        (target.rect.width, target.rect.height) == cell_size
+            && target.rect.width > 0
+            && target.rect.height > 0
+    }));
+
+    let left = tiles.iter().map(|target| target.rect.x).min().unwrap();
+    let right = tiles
+        .iter()
+        .map(|target| target.rect.right())
+        .max()
+        .unwrap();
+    let top = tiles.iter().map(|target| target.rect.y).min().unwrap();
+    let bottom = tiles
+        .iter()
+        .map(|target| target.rect.bottom())
+        .max()
+        .unwrap();
+    assert!(left.abs_diff(content.x) <= content.right().abs_diff(right) + 1);
+    assert!(content.right().abs_diff(right) <= left.abs_diff(content.x) + 1);
+    assert!(top.abs_diff(content.y) <= content.bottom().abs_diff(bottom) + 1);
+    assert!(content.bottom().abs_diff(bottom) <= top.abs_diff(content.y) + 1);
+
+    for target in tiles {
+        let left_cell = &buffer[(target.rect.x, target.rect.y)];
+        let top_right = &buffer[(target.rect.right() - 1, target.rect.y)];
+        assert_eq!(
+            top_right.bg, left_cell.bg,
+            "tile top-right corner uses a different background"
+        );
+    }
+}
+
+#[test]
 fn keyboard_changes_ranges_opens_favorites_toggles_star_and_goes_back() {
     let mut state = fixture_state();
     state.route = Route::Sector(Sector::Technology);
@@ -264,6 +382,44 @@ fn keyboard_changes_ranges_opens_favorites_toggles_star_and_goes_back() {
     assert!(state.detail.is_none());
     assert!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE).is_empty());
     assert_eq!(state.route, Route::Overview);
+}
+
+#[test]
+fn rail_and_help_expose_keyboard_controls_and_demo_state() {
+    let mut state = fixture_state();
+    state.simulated_data = true;
+
+    let screen = screen_text(&render_at(&mut state, 80, 24));
+    for expected in [
+        "SIMULATED",
+        "/ Search",
+        "s Sort",
+        "F Starred",
+        "1: 1D",
+        "7: 5Y",
+        "r Refresh",
+        "S Sync",
+        "? Help",
+    ] {
+        assert!(screen.contains(expected), "missing rail hint {expected:?}");
+    }
+
+    assert!(press(&mut state, KeyCode::Char('?'), KeyModifiers::NONE).is_empty());
+    let help = screen_text(&render_at(&mut state, 80, 24));
+    for expected in [
+        "HELP",
+        "Navigate",
+        "arrows or h j k l",
+        "Starred      F",
+        "Ranges       1..7 or [ ]",
+        "Quit         q",
+    ] {
+        assert!(help.contains(expected), "missing help text {expected:?}");
+    }
+
+    assert!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE).is_empty());
+    assert!(press(&mut state, KeyCode::Char('S'), KeyModifiers::SHIFT).is_empty());
+    assert_eq!(state.overlay, Some(Overlay::Sync));
 }
 
 fn fixture_state() -> UiState {

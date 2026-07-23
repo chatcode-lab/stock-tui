@@ -90,6 +90,7 @@ pub struct UiState {
     pub status: String,
     pub last_refresh: Option<DateTime<Utc>>,
     pub theme: Theme,
+    pub simulated_data: bool,
 }
 
 impl Default for UiState {
@@ -117,6 +118,7 @@ impl Default for UiState {
             status: "Loading local cache".to_owned(),
             last_refresh: None,
             theme: Theme::detect(),
+            simulated_data: false,
         }
     }
 }

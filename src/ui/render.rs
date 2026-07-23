@@ -53,10 +53,21 @@ fn render_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
         Route::Ticker(symbol) => format!("{symbol} / DETAIL"),
         Route::Favorites => "STARRED TICKERS".to_owned(),
     };
-    let left = Line::from(vec![
-        Span::styled(" STOCK TUI ", Style::default().fg(CANVAS).bg(CYAN).bold()),
-        Span::styled(format!("  {route}"), Style::default().fg(TEXT).bold()),
-    ]);
+    let mut left_spans = vec![Span::styled(
+        " STOCK TUI ",
+        Style::default().fg(CANVAS).bg(CYAN).bold(),
+    )];
+    if state.simulated_data {
+        left_spans.push(Span::styled(
+            " SIMULATED ",
+            Style::default().fg(CANVAS).bg(AMBER).bold(),
+        ));
+    }
+    left_spans.push(Span::styled(
+        format!("  {route}"),
+        Style::default().fg(TEXT).bold(),
+    ));
+    let left = Line::from(left_spans);
     let right = format!("{}  ·  {} ", state.date_range, state.sort.label());
     let split = area.width.saturating_sub(right.width() as u16);
     frame.render_widget(
@@ -106,14 +117,14 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         .set_style(area, Style::default().bg(PANEL));
     let mut y = area.y;
     if !matches!(state.route, Route::Overview) || state.overlay.is_some() {
-        y = rail_button(frame, state, area, y, "←", "Back", UiAction::Back, false);
+        y = rail_button(frame, state, area, y, "Esc", "Back", UiAction::Back, false);
     }
     y = rail_button(
         frame,
         state,
         area,
         y,
-        "⌕",
+        "/",
         "Search",
         UiAction::OpenSearch,
         false,
@@ -123,8 +134,8 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         state,
         area,
         y,
-        "⇅",
-        state.sort.label(),
+        "s",
+        "Sort",
         UiAction::OpenSort,
         false,
     );
@@ -133,7 +144,7 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         state,
         area,
         y,
-        "★",
+        "F",
         "Starred",
         UiAction::OpenFavorites,
         matches!(state.route, Route::Favorites),
@@ -149,8 +160,8 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             state,
             area,
             y,
-            if starred { "★" } else { "☆" },
-            "Ticker",
+            "f",
+            if starred { "Unstar" } else { "Star" },
             UiAction::ToggleFavorite(symbol),
             starred,
         );
@@ -168,17 +179,18 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         );
         y += 1;
     }
-    for range in DateRange::ALL {
+    for (index, range) in DateRange::ALL.into_iter().enumerate() {
         if y >= area.bottom().saturating_sub(3) {
             break;
         }
+        let label = format!("{}: {}", index + 1, range.label());
         y = rail_button(
             frame,
             state,
             area,
             y,
             "",
-            range.label(),
+            &label,
             UiAction::SelectRange(range),
             state.date_range == range,
         );
@@ -190,7 +202,7 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             state,
             area,
             bottom - 3,
-            "↻",
+            "r",
             "Refresh",
             UiAction::Refresh,
             false,
@@ -200,7 +212,7 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             state,
             area,
             bottom - 2,
-            "●",
+            "S",
             "Sync",
             UiAction::OpenSync,
             false,
@@ -211,7 +223,7 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             area,
             bottom - 1,
             "?",
-            "About",
+            "Help",
             UiAction::OpenHelp,
             false,
         );
@@ -652,20 +664,24 @@ fn render_sort(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 }
 
 fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
-    let modal = centered(area, 58.min(area.width.saturating_sub(4)), 10);
+    let modal = centered(area, 58.min(area.width.saturating_sub(4)), 17);
     frame.render_widget(Clear, modal);
     let content = vec![
-        Line::styled("stock-tui", Style::default().fg(CYAN).bold()),
-        Line::from("Mouse-first market heatmaps in your terminal"),
+        Line::styled("Keyboard", Style::default().fg(CYAN).bold()),
+        Line::from("Navigate     arrows or h j k l"),
+        Line::from("Open         Enter"),
+        Line::from("Back         Esc or Backspace"),
+        Line::from("Search       /"),
+        Line::from("Sort         s"),
+        Line::from("Star         f"),
+        Line::from("Starred      F"),
+        Line::from("Refresh      r"),
+        Line::from("Sync status  S"),
+        Line::from("Ranges       1..7 or [ ]"),
+        Line::from("Detail tabs  Tab"),
+        Line::from("Quit         q"),
         Line::from(""),
         Line::styled("Market prices and news: Alpaca", Style::default().fg(MUTED)),
-        Line::styled(
-            "Issuer metadata: U.S. SEC EDGAR",
-            Style::default().fg(MUTED),
-        ),
-        Line::styled("Local cache: SQLite", Style::default().fg(MUTED)),
-        Line::from(""),
-        Line::styled("Not investment advice", Style::default().fg(AMBER)),
     ];
     frame.render_widget(
         Paragraph::new(content)
@@ -673,7 +689,7 @@ fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
             .style(Style::default().fg(TEXT).bg(PANEL))
             .block(
                 Block::default()
-                    .title(" ABOUT ")
+                    .title(" HELP ")
                     .borders(Borders::ALL)
                     .border_style(CYAN),
             ),

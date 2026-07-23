@@ -46,6 +46,7 @@ fn handle_key(state: &mut UiState, key: KeyEvent) -> Vec<AppCommand> {
         KeyCode::Char('/') => apply_action(state, UiAction::OpenSearch),
         KeyCode::Char('s') => apply_action(state, UiAction::OpenSort),
         KeyCode::Char('F') => apply_action(state, UiAction::OpenFavorites),
+        KeyCode::Char('S') => apply_action(state, UiAction::OpenSync),
         KeyCode::Char('?') => apply_action(state, UiAction::OpenHelp),
         KeyCode::Char('r') => vec![AppCommand::Refresh],
         KeyCode::Char('f') => state
@@ -199,7 +200,7 @@ fn update_chart_hover(state: &mut UiState, position: Position) {
     if state.chart_sample_indices.is_empty() {
         return;
     }
-    let relative = usize::from(position.x.saturating_sub(area.x + 1));
+    let relative = usize::from(position.x.saturating_sub(area.x));
     state.detail_hover = Some(relative.min(state.chart_sample_indices.len() - 1));
 }
 

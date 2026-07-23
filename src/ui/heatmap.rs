@@ -10,9 +10,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     domain::{MarketTile, Sector},
-    palette::{AMBER, BORDER, CANVAS, CYAN, HeatScale, MUTED, PANEL, TEXT},
+    palette::{AMBER, CANVAS, CYAN, HeatScale, MUTED, PANEL, TEXT},
     ui::{
-        layout::split_exact,
+        layout::uniform_grid,
         state::{HitTarget, Route, UiAction, UiState},
     },
 };
@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 }
 
 fn render_overview(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, scale: HeatScale) {
-    let panels = split_exact(area, 3, 3);
+    let panels = uniform_grid(area, 3, 3);
     let mut targets = Vec::new();
     let grouped: HashMap<Sector, Vec<&MarketTile>> = Sector::ALL
         .into_iter()
@@ -72,7 +72,7 @@ fn render_overview(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, scale
         }
         let body = Rect::new(panel.x, panel.y + 1, panel.width, panel.height - 1);
         if body.height >= 10 {
-            let cells = split_exact(body, 10, 10);
+            let cells = uniform_grid(body, 10, 10);
             for (index, tile) in tiles.iter().enumerate().take(cells.len()) {
                 let cell = cells[index];
                 draw_tile(frame.buffer_mut(), cell, tile, scale, false, false);
@@ -113,7 +113,7 @@ fn render_sector(
     };
     state.sector_columns = columns;
     let rows = tiles.len().div_ceil(columns).max(1);
-    let cells = split_exact(area, columns as u16, rows as u16);
+    let cells = uniform_grid(area, columns as u16, rows as u16);
     for (index, tile) in tiles.iter().enumerate() {
         let cell = cells[index];
         let focused = index == state.selected_ticker;
@@ -169,7 +169,7 @@ fn render_sector_header(
 }
 
 fn render_paired_rows(buffer: &mut Buffer, area: Rect, tiles: &[&MarketTile], scale: HeatScale) {
-    let columns = split_exact(Rect::new(area.x, area.y, area.width, 1), 10, 1);
+    let columns = uniform_grid(Rect::new(area.x, area.y, area.width, 1), 10, 1);
     for compact_row in 0..area.height.min(5) {
         for (column, column_rect) in columns.iter().enumerate() {
             let top_index = usize::from(compact_row) * 20 + column;
@@ -244,16 +244,6 @@ fn draw_tile(
     }
     if tile.starred {
         buffer[(area.x, area.y)].set_fg(AMBER);
-    }
-    if focused {
-        for y in area.y..area.bottom() {
-            buffer[(area.x, y)].set_fg(CYAN);
-            if area.width > 1 {
-                buffer[(area.right() - 1, y)].set_fg(CYAN);
-            }
-        }
-    } else if area.width > 1 {
-        buffer[(area.right() - 1, area.y)].set_bg(BORDER);
     }
 }
 
