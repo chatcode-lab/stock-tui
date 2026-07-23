@@ -14,13 +14,15 @@ use ratatui::{
 
 use crate::{
     domain::{Bar, DateRange},
-    palette::{BORDER, CYAN, MUTED, PANEL, TEXT},
+    palette::{BORDER, CANVAS, CYAN, MUTED, PANEL, TEXT},
     ui::state::UiState,
 };
 
 const TRACE_SAMPLES_PER_COLUMN: usize = 2;
 const BRAILLE_LEFT_COLUMN: u8 = 0x55;
 const BRAILLE_RIGHT_COLUMN: u8 = 0xaa;
+const GRID_DOT: char = '·';
+const GRID_COLOR: Color = Color::Rgb(55, 64, 74);
 
 pub fn render_price_volume(
     frame: &mut Frame<'_>,
@@ -147,15 +149,13 @@ pub fn render_price_volume(
         .x_bounds([0.0, 1.0])
         .y_bounds(bounds)
         .paint(move |context| {
-            for value in &grid_values {
-                context.draw(&Line::new(0.0, *value, 1.0, *value, Color::Rgb(55, 64, 74)));
-            }
             for pair in canvas_points.windows(2) {
                 context.draw(&Line::new(
                     pair[0].0, pair[0].1, pair[1].0, pair[1].1, accent,
                 ));
             }
         });
+    render_reference_grid(frame.buffer_mut(), plot_area, bounds, &grid_values);
     frame.render_widget(canvas, plot_area);
     render_area_gradient(frame.buffer_mut(), plot_area, &points, bounds, accent);
     render_price_axis(frame.buffer_mut(), plot_area, bounds, &y_labels);
@@ -207,6 +207,21 @@ fn render_price_axis(buffer: &mut Buffer, area: Rect, bounds: [f64; 2], labels: 
             usize::from(area.width),
             Style::default().fg(MUTED).bg(PANEL),
         );
+    }
+}
+
+fn render_reference_grid(buffer: &mut Buffer, area: Rect, bounds: [f64; 2], values: &[f64]) {
+    if area.is_empty() || bounds[1] <= bounds[0] {
+        return;
+    }
+    // Full-width Braille runs can accumulate fallback-font advance errors in browser terminals.
+    let span = bounds[1] - bounds[0];
+    for value in values {
+        let position = ((bounds[1] - value) / span).clamp(0.0, 1.0);
+        let row = area.y + braille_cell_offset(position, area.height, 4);
+        for column in area.left()..area.right() {
+            buffer[(column, row)].set_char(GRID_DOT).set_fg(GRID_COLOR);
+        }
     }
 }
 
@@ -425,13 +440,16 @@ fn render_hover_indicator(
         buffer[(area.x + x, row)]
             .set_char(symbol)
             .set_fg(CYAN)
-            .set_style(Style::default().remove_modifier(Modifier::BOLD));
+            .set_style(Style::default().remove_modifier(Modifier::all()));
     }
     let y_position = ((bounds[1] - price) / (bounds[1] - bounds[0])).clamp(0.0, 1.0);
     let y = braille_cell_offset(y_position, area.height, 4);
-    buffer[(area.x + x, area.y + y)]
-        .set_char(symbol)
-        .set_fg(TEXT);
+    buffer[(area.x + x, area.y + y)].set_char(symbol).set_style(
+        Style::default()
+            .fg(CANVAS)
+            .bg(CYAN)
+            .remove_modifier(Modifier::all()),
+    );
 }
 
 fn braille_cell_offset(position: f64, cells: u16, dots_per_cell: usize) -> u16 {
@@ -721,48 +739,42 @@ mod tests {
     }
 
     #[test]
-    fn grid_and_trace_bits_share_braille_cells_without_layer_replacement() {
-        fn render_lines(grid: bool, trace: bool) -> Buffer {
-            let area = Rect::new(0, 0, 4, 3);
-            let mut buffer = Buffer::empty(area);
-            let canvas = Canvas::default()
-                .marker(Marker::Braille)
-                .x_bounds([0.0, 1.0])
-                .y_bounds([0.0, 1.0])
-                .paint(move |context| {
-                    if grid {
-                        context.draw(&Line::new(0.0, 0.5, 1.0, 0.5, MUTED));
-                    }
-                    if trace {
-                        context.draw(&Line::new(0.5, 0.0, 0.5, 1.0, CYAN));
-                    }
-                });
-            Widget::render(canvas, area, &mut buffer);
-            buffer
-        }
+    fn text_grid_stays_out_of_braille_trace_masks() {
+        let area = Rect::new(0, 0, 8, 4);
+        let mut buffer = Buffer::empty(area);
+        render_reference_grid(&mut buffer, area, [0.0, 1.0], &[0.5]);
+        let grid_row = braille_cell_offset(0.5, area.height, 4);
+        assert!(
+            (area.left()..area.right())
+                .all(|column| buffer[(column, grid_row)].symbol() == GRID_DOT.to_string())
+        );
 
-        let pattern = |cell: &Cell| {
-            let symbol = cell.symbol().chars().next().expect("cell has a symbol");
-            BRAILLE
-                .iter()
-                .position(|candidate| *candidate == symbol)
-                .map_or(0, |index| index as u8)
-        };
-        let grid = render_lines(true, false);
-        let trace = render_lines(false, true);
-        let combined = render_lines(true, true);
-        let mut crossings = 0;
-        for row in combined.area.rows() {
-            for position in row.columns() {
-                let grid_pattern = pattern(&grid[position]);
-                let trace_pattern = pattern(&trace[position]);
-                if grid_pattern != 0 && trace_pattern != 0 {
-                    crossings += 1;
-                    assert_eq!(pattern(&combined[position]), grid_pattern | trace_pattern);
-                }
-            }
-        }
-        assert!(crossings > 0);
+        let canvas = Canvas::default()
+            .marker(Marker::Braille)
+            .x_bounds([0.0, 1.0])
+            .y_bounds([0.0, 1.0])
+            .paint(|context| {
+                context.draw(&Line::new(0.5, 0.0, 0.5, 1.0, CYAN));
+            });
+        Widget::render(canvas, area, &mut buffer);
+
+        let symbols: Vec<_> = (area.left()..area.right())
+            .map(|column| buffer[(column, grid_row)].symbol().to_owned())
+            .collect();
+        assert!(symbols.iter().any(|symbol| symbol == "·"));
+        assert!(symbols.iter().any(|symbol| {
+            symbol
+                .chars()
+                .next()
+                .is_some_and(|character| ('\u{2801}'..='\u{28ff}').contains(&character))
+        }));
+        assert!(symbols.iter().all(|symbol| {
+            symbol == "·"
+                || symbol
+                    .chars()
+                    .next()
+                    .is_some_and(|character| ('\u{2801}'..='\u{28ff}').contains(&character))
+        }));
     }
 
     #[test]
@@ -809,8 +821,9 @@ mod tests {
             cell.symbol(),
             BRAILLE[usize::from(BRAILLE_RIGHT_COLUMN)].to_string()
         );
-        assert_eq!(cell.fg, TEXT);
-        assert!(!cell.modifier.contains(Modifier::BOLD));
+        assert_eq!(cell.fg, CANVAS);
+        assert_eq!(cell.bg, CYAN);
+        assert!(cell.modifier.is_empty());
     }
 
     #[test]
@@ -840,11 +853,13 @@ mod tests {
             let cell = &buffer[(x, row)];
             assert_eq!(cell.symbol(), symbol);
             if row == marker_y {
-                assert_eq!(cell.fg, TEXT);
+                assert_eq!(cell.fg, CANVAS);
+                assert_eq!(cell.bg, CYAN);
             } else {
                 assert_eq!(cell.fg, CYAN);
+                assert_eq!(cell.bg, PANEL);
             }
-            assert!(!cell.modifier.contains(Modifier::BOLD));
+            assert!(cell.modifier.is_empty());
         }
         for row in area.top()..area.bottom() {
             assert_eq!(buffer[(x - 1, row)].bg, PANEL);

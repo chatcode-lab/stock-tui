@@ -7,7 +7,7 @@ use stock_tui::{
     app::{AppCommand, handle_event},
     benchmarks::MarketBenchmark,
     domain::{Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, TickerDetail},
-    palette::{CANVAS, HeatScale, MUTED, PANEL, TEXT, Theme},
+    palette::{CANVAS, CYAN, HeatScale, MUTED, PANEL, Theme},
     ui::{
         layout::AppLayout,
         render,
@@ -262,9 +262,16 @@ fn detail_chart_fills_the_plot_and_exposes_aligned_axes_and_hover() {
                 .is_some_and(|symbol| ('\u{2801}'..='\u{28ff}').contains(&symbol))
         })
         .count();
+    assert!(braille_cells > 0, "price trace should use Braille cells");
+
+    let guide_cells = plot
+        .rows()
+        .flat_map(|row| row.columns())
+        .filter(|position| buffer[*position].symbol() == "·")
+        .count();
     assert!(
-        braille_cells >= usize::from(plot.width),
-        "price trace and guides should use high-resolution Braille cells"
+        guide_cells >= usize::from(plot.width),
+        "reference guides should use terminal-stable middle dots"
     );
 
     let mut in_plot_axis = Vec::new();
@@ -326,10 +333,13 @@ fn detail_chart_fills_the_plot_and_exposes_aligned_axes_and_hover() {
     );
     assert_eq!(
         (hovered_plot.y..hovered_plot.bottom())
-            .filter(|y| hovered[(cursor_x, *y)].fg == TEXT)
+            .filter(|y| {
+                let cell = &hovered[(cursor_x, *y)];
+                cell.fg == CANVAS && cell.bg == CYAN
+            })
             .count(),
         1,
-        "exactly one cursor cell should mark the selected price"
+        "exactly one high-contrast cursor cell should mark the selected price"
     );
 }
 

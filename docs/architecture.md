@@ -148,15 +148,17 @@ reuse the overview's centered three-column geometry and stop at the content
 pane rather than extending beneath the action rail.
 
 Charts sample cached bars to terminal resolution while preserving the first
-and last point. A Braille canvas renders the thin price trace and grid over a
-per-cell RGB area fill, with price and range-aware date scales. The fill samples
-the same two horizontal Braille subcells as the trace and uses fractional edge
-coverage plus a short exterior fade to soften its cell-resolution boundary.
-Grid and trace dots share one Braille pattern so intersections cannot replace
-half a cell. Price labels are painted over the plot after the chart, using an
-opaque panel background for legibility. Hover or keyboard selection then
-replaces one fixed left or right Braille subcolumn and changes only the marker
-cell's color at the selected price.
+and last point. A Braille canvas renders the thin price trace over a per-cell
+RGB area fill, with price and range-aware date scales. The fill samples the same
+two horizontal Braille subcells as the trace and uses fractional edge coverage
+plus a short exterior fade to soften its cell-resolution boundary. Horizontal
+reference guides use the terminal font's middle-dot glyph instead of full-width
+Braille runs, preventing fallback-font advance errors from accumulating across
+browser-hosted terminal rows. The trace replaces guide dots at intersections.
+Price labels are painted over the plot after the chart, using an opaque panel
+background for legibility. Hover or keyboard selection then replaces one fixed
+left or right Braille subcolumn; its price intersection uses one cyan cell with
+a dark version of the same cursor glyph.
 
 A responsive 4-7-row volume histogram uses uniform-color lower-block caps for
 eighth-cell height precision. Fully occupied cells use background color instead

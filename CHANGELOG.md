@@ -51,8 +51,8 @@ pre-1.0 releases.
 
 - Aligned the three overview benchmark cells with the sector columns and
   constrained them to the market content pane.
-- Unified price-grid and trace dots in each Braille cell, moved price labels
-  into the plot, and made the cursor one fixed Braille subcolumn.
+- Moved price labels into the plot, replaced full-width Braille guides with
+  terminal-stable middle dots, and added a high-contrast cursor intersection.
 - Kept solid volume cells seam-free while restoring uniform-color fractional
   block caps for eighth-cell height precision.
 - Replaced repeated full-history timeframe discovery during range changes with
