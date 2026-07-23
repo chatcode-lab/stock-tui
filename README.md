@@ -27,7 +27,7 @@ read-only: it displays market information and does not place orders.
 - Reorders tickers by market capitalization, gain, volume, or symbol.
 - Provides responsive sector grids and a ticker detail screen with a
   Braille-resolution price trace, softly filled tint, price/time axes,
-  gap-free cell-filled volume, statistics, company context, and news.
+  fine-grained volume histogram, statistics, company context, and news.
 - Supports mouse hover, clicking, wheel input, keyboard navigation, and
   terminal resize events.
 - Searches the local issuer catalog by symbol or company name.
@@ -195,7 +195,8 @@ news row can be clicked with the left mouse button.
 | `[` / `]` | Previous / next date range |
 | `1` through `9` | Select `1D` through `10Y` directly |
 | `0` | Select all available history |
-| `Alt`/`Meta` + `c s h e t f i m u` | Open Consumer, Services, Healthcare, Energy, Technology, Financial, Industrial, Materials, or Utilities |
+| `g`, then `c s h e t f i m u` | Open Consumer, Services, Healthcare, Energy, Technology, Financial, Industrial, Materials, or Utilities |
+| `Alt`/`Meta` + sector letter | Optional direct form of the same sector shortcut |
 | `Tab` | Cycle Chart, Statistics, and News in compact ticker view |
 | `r` | Request an immediate broad-market snapshot refresh |
 | `S` | Open read-only data status |
@@ -204,6 +205,11 @@ news row can be clicked with the left mouse button.
 
 On ticker detail, Left/Right (or `h`/`l`) moves the chart cursor while
 Up/Down (or `k`/`j`) selects the related-news row; `Enter` opens it.
+
+The `g` sector prefix applies only to the immediately following key. `Esc` or
+`Backspace` cancels it; any other non-sector key cancels the prefix and keeps
+its normal action. Mouse input and opening an overlay also cancel a pending
+prefix.
 
 In search, type or paste a query, use Up/Down to select a result, `Enter` to
 open it, `Ctrl-U` to clear the query, and `Esc` to close. Search is local and

@@ -122,6 +122,7 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     if !matches!(state.route, Route::Overview) || state.overlay.is_some() {
         y = rail_button(frame, state, area, y, "Esc", "Back", UiAction::Back, false);
     }
+    let sector_shortcut_pending = state.sector_shortcut_pending;
     y = rail_button(
         frame,
         state,
@@ -151,6 +152,16 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         "Starred",
         UiAction::OpenFavorites,
         matches!(state.route, Route::Favorites),
+    );
+    y = rail_button(
+        frame,
+        state,
+        area,
+        y,
+        "g",
+        "Sectors",
+        UiAction::BeginSectorShortcut,
+        sector_shortcut_pending,
     );
     if let Some(symbol) = state.focused_symbol().map(str::to_owned) {
         let starred = state
@@ -867,7 +878,7 @@ fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
         Line::from("Refresh      r"),
         Line::from("Data status  S"),
         Line::from("Ranges       1..9, 0 or [ ]"),
-        Line::from("Sectors      Alt/Meta + c s h e t f i m u"),
+        Line::from("Sectors      g then c s h e t f i m u"),
         Line::from("Detail tabs  Tab"),
         Line::from("Detail       Left/Right chart, Up/Down news"),
         Line::from("Quit         q"),

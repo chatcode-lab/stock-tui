@@ -27,8 +27,13 @@ pub fn handle_event(state: &mut UiState, event: Event) -> Vec<AppCommand> {
         }
         Event::Mouse(mouse) => handle_mouse(state, mouse),
         Event::Paste(text) if state.overlay == Some(Overlay::Search) => {
+            state.sector_shortcut_pending = false;
             state.search_query.push_str(text.trim());
             vec![AppCommand::Search(state.search_query.clone())]
+        }
+        Event::Paste(_) => {
+            state.sector_shortcut_pending = false;
+            Vec::new()
         }
         _ => Vec::new(),
     }
@@ -36,15 +41,36 @@ pub fn handle_event(state: &mut UiState, event: Event) -> Vec<AppCommand> {
 
 fn handle_key(state: &mut UiState, key: KeyEvent) -> Vec<AppCommand> {
     if let Some(overlay) = state.overlay.clone() {
+        state.sector_shortcut_pending = false;
         return handle_overlay_key(state, overlay, key);
     }
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        state.sector_shortcut_pending = false;
         return vec![AppCommand::Quit];
+    }
+    if state.sector_shortcut_pending {
+        if matches!(key.code, KeyCode::Esc | KeyCode::Backspace) {
+            state.sector_shortcut_pending = false;
+            return Vec::new();
+        }
+        if key.code == KeyCode::Char('g') && key.modifiers.is_empty() {
+            return Vec::new();
+        }
+        state.sector_shortcut_pending = false;
+        if key.modifiers.is_empty()
+            && let KeyCode::Char(character) = key.code
+            && let Some(sector) = sector_for_character(character)
+        {
+            return apply_action(state, UiAction::OpenSector(sector));
+        }
     }
     if let Some(sector) = sector_shortcut(key) {
         return apply_action(state, UiAction::OpenSector(sector));
     }
     match key.code {
+        KeyCode::Char('g') if key.modifiers.is_empty() => {
+            apply_action(state, UiAction::BeginSectorShortcut)
+        }
         KeyCode::Char('q') if key.modifiers.is_empty() => vec![AppCommand::Quit],
         KeyCode::Esc | KeyCode::Backspace => apply_action(state, UiAction::Back),
         KeyCode::Char('/') => apply_action(state, UiAction::OpenSearch),
@@ -161,6 +187,7 @@ fn handle_overlay_key(state: &mut UiState, overlay: Overlay, key: KeyEvent) -> V
 }
 
 fn handle_mouse(state: &mut UiState, mouse: MouseEvent) -> Vec<AppCommand> {
+    state.sector_shortcut_pending = false;
     let position = Position::new(mouse.column, mouse.row);
     match mouse.kind {
         MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
@@ -297,6 +324,9 @@ fn activate_selection(state: &mut UiState) -> Vec<AppCommand> {
 }
 
 fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
+    if !matches!(&action, UiAction::BeginSectorShortcut) {
+        state.sector_shortcut_pending = false;
+    }
     match action {
         UiAction::Back => {
             if state.overlay.take().is_some() {
@@ -357,6 +387,10 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
         }
         UiAction::OpenSort => {
             state.overlay = Some(Overlay::Sort);
+            Vec::new()
+        }
+        UiAction::BeginSectorShortcut => {
+            state.sector_shortcut_pending = true;
             Vec::new()
         }
         UiAction::CloseOverlay => {
@@ -444,6 +478,10 @@ fn sector_shortcut(key: KeyEvent) -> Option<Sector> {
     let KeyCode::Char(character) = key.code else {
         return None;
     };
+    sector_for_character(character)
+}
+
+fn sector_for_character(character: char) -> Option<Sector> {
     match character.to_ascii_lowercase() {
         'c' => Some(Sector::Consumer),
         's' => Some(Sector::Services),
@@ -571,5 +609,155 @@ mod tests {
             .is_empty()
         );
         assert_eq!(state.overlay, Some(Overlay::Sort));
+    }
+
+    #[test]
+    fn terminal_safe_sector_chord_opens_every_sector() {
+        let shortcuts = [
+            ('c', Sector::Consumer),
+            ('s', Sector::Services),
+            ('h', Sector::Healthcare),
+            ('e', Sector::Energy),
+            ('t', Sector::Technology),
+            ('f', Sector::Financial),
+            ('i', Sector::Industrial),
+            ('m', Sector::Materials),
+            ('u', Sector::Utilities),
+        ];
+        for (key, sector) in shortcuts {
+            let mut state = UiState {
+                selected_benchmark: Some(1),
+                ..UiState::default()
+            };
+
+            assert!(
+                handle_event(
+                    &mut state,
+                    Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE))
+                )
+                .is_empty()
+            );
+            assert!(state.sector_shortcut_pending);
+            assert!(
+                handle_event(
+                    &mut state,
+                    Event::Key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE))
+                )
+                .is_empty()
+            );
+            assert_eq!(state.route, Route::Sector(sector));
+            assert!(!state.sector_shortcut_pending);
+            assert_eq!(state.selected_benchmark, None);
+        }
+    }
+
+    #[test]
+    fn sector_chord_cancels_cleanly_and_search_owns_its_text() {
+        let mut state = UiState {
+            route: Route::Sector(Sector::Technology),
+            ..UiState::default()
+        };
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert_eq!(state.route, Route::Sector(Sector::Technology));
+        assert!(!state.sector_shortcut_pending);
+
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert!(!state.sector_shortcut_pending);
+        assert_eq!(state.route, Route::Sector(Sector::Technology));
+
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE))
+            ),
+            vec![AppCommand::Refresh]
+        );
+        assert!(!state.sector_shortcut_pending);
+
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE))
+            ),
+            vec![AppCommand::Search(String::new())]
+        );
+        assert_eq!(state.overlay, Some(Overlay::Search));
+        assert!(!state.sector_shortcut_pending);
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE))
+            ),
+            vec![AppCommand::Search("g".to_owned())]
+        );
+        assert_eq!(state.search_query, "g");
+
+        state.sector_shortcut_pending = true;
+        state.overlay = Some(Overlay::Help);
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert_eq!(state.route, Route::Sector(Sector::Technology));
+        assert!(!state.sector_shortcut_pending);
+
+        state.overlay = None;
+        state.sector_shortcut_pending = true;
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    column: 0,
+                    row: 0,
+                    modifiers: KeyModifiers::NONE,
+                })
+            )
+            .is_empty()
+        );
+        assert!(!state.sector_shortcut_pending);
     }
 }

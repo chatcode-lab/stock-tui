@@ -2,9 +2,9 @@ use chrono::{DateTime, Local, Utc};
 use ratatui::{
     Frame,
     buffer::{Buffer, Cell},
-    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
-    style::{Color, Style},
-    symbols::Marker,
+    layout::{Constraint, Direction, Layout, Margin, Rect},
+    style::{Color, Modifier, Style},
+    symbols::{Marker, braille::BRAILLE},
     text::Line as TextLine,
     widgets::{
         Block, Borders, Paragraph,
@@ -19,7 +19,8 @@ use crate::{
 };
 
 const TRACE_SAMPLES_PER_COLUMN: usize = 2;
-const HOVER_GUIDE_BLEND: f64 = 0.34;
+const BRAILLE_LEFT_COLUMN: u8 = 0x55;
+const BRAILLE_RIGHT_COLUMN: u8 = 0xaa;
 
 pub fn render_price_volume(
     frame: &mut Frame<'_>,
@@ -72,10 +73,9 @@ pub fn render_price_volume(
         .max(0.01);
     let bounds = [data_low - padding, data_high + padding];
     let y_labels = price_axis_labels(bounds, chart_area.height);
-    let axis_width = axis_width(chart_area.width, &y_labels);
 
     let inner = chart_area.inner(Margin::new(1, 1));
-    if inner.width <= axis_width || inner.height < 2 {
+    if inner.width < 2 || inner.height < 2 {
         frame.render_widget(
             Block::default()
                 .title(TextLine::styled(
@@ -93,12 +93,7 @@ pub fn render_price_volume(
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(axis_width), Constraint::Min(1)])
-        .split(rows[0]);
-    let y_axis_area = columns[0];
-    let plot_area = columns[1];
+    let plot_area = rows[0];
     let x_axis_area = Rect::new(plot_area.x, rows[1].y, plot_area.width, rows[1].height);
     state.chart_rect = Some(plot_area);
 
@@ -155,7 +150,6 @@ pub fn render_price_volume(
             for value in &grid_values {
                 context.draw(&Line::new(0.0, *value, 1.0, *value, Color::Rgb(55, 64, 74)));
             }
-            context.layer();
             for pair in canvas_points.windows(2) {
                 context.draw(&Line::new(
                     pair[0].0, pair[0].1, pair[1].0, pair[1].1, accent,
@@ -164,10 +158,10 @@ pub fn render_price_volume(
         });
     frame.render_widget(canvas, plot_area);
     render_area_gradient(frame.buffer_mut(), plot_area, &points, bounds, accent);
+    render_price_axis(frame.buffer_mut(), plot_area, bounds, &y_labels);
     if let Some(marker) = hover_marker {
         render_hover_indicator(frame.buffer_mut(), plot_area, marker, bounds);
     }
-    render_price_axis(frame, y_axis_area, bounds, &y_labels);
     render_time_axis(frame, x_axis_area, &sampled, state.date_range);
 
     render_volume(frame, sections[1], plot_area, bars, accent, crosshair);
@@ -196,34 +190,22 @@ fn price_axis_labels(bounds: [f64; 2], height: u16) -> Vec<String> {
         .collect()
 }
 
-fn axis_width(chart_width: u16, labels: &[String]) -> u16 {
-    if chart_width < 24 {
-        return 0;
-    }
-    labels
-        .iter()
-        .map(String::len)
-        .max()
-        .unwrap_or(0)
-        .saturating_add(1)
-        .min(11) as u16
-}
-
-fn render_price_axis(frame: &mut Frame<'_>, area: Rect, bounds: [f64; 2], labels: &[String]) {
-    if area.width == 0 || area.height == 0 || labels.is_empty() {
+fn render_price_axis(buffer: &mut Buffer, area: Rect, bounds: [f64; 2], labels: &[String]) {
+    if area.width < 24 || area.height == 0 || labels.is_empty() {
         return;
     }
     let values = price_axis_values(bounds, labels.len());
     let span = (bounds[1] - bounds[0]).max(f64::EPSILON);
     for (label, value) in labels.iter().zip(values) {
-        let offset =
-            ((bounds[1] - value) / span * f64::from(area.height.saturating_sub(1))).round() as u16;
-        let row = Rect::new(area.x, area.y + offset, area.width, 1);
-        frame.render_widget(
-            Paragraph::new(label.as_str())
-                .alignment(Alignment::Right)
-                .style(Style::default().fg(MUTED).bg(PANEL)),
+        let position = ((bounds[1] - value) / span).clamp(0.0, 1.0);
+        let row = area.y + braille_cell_offset(position, area.height, 4);
+        let label = format!("{label} ");
+        buffer.set_stringn(
+            area.x,
             row,
+            label,
+            usize::from(area.width),
+            Style::default().fg(MUTED).bg(PANEL),
         );
     }
 }
@@ -432,25 +414,40 @@ fn render_hover_indicator(
     if area.is_empty() || bounds[1] <= bounds[0] {
         return;
     }
-    let x = braille_cell_offset(position, area.width, 2);
-    let guide_color = blend_color(PANEL, CYAN, HOVER_GUIDE_BLEND);
+    let (x, subcolumn) = braille_subcell_offset(position, area.width, 2);
+    let pattern = if subcolumn == 0 {
+        BRAILLE_LEFT_COLUMN
+    } else {
+        BRAILLE_RIGHT_COLUMN
+    };
+    let symbol = BRAILLE[usize::from(pattern)];
     for row in area.top()..area.bottom() {
-        buffer[(area.x + x, row)].set_bg(guide_color);
+        buffer[(area.x + x, row)]
+            .set_char(symbol)
+            .set_fg(CYAN)
+            .set_style(Style::default().remove_modifier(Modifier::BOLD));
     }
     let y_position = ((bounds[1] - price) / (bounds[1] - bounds[0])).clamp(0.0, 1.0);
     let y = braille_cell_offset(y_position, area.height, 4);
     buffer[(area.x + x, area.y + y)]
-        .set_symbol(" ")
-        .set_bg(CYAN);
+        .set_char(symbol)
+        .set_fg(TEXT);
 }
 
 fn braille_cell_offset(position: f64, cells: u16, dots_per_cell: usize) -> u16 {
+    braille_subcell_offset(position, cells, dots_per_cell).0
+}
+
+fn braille_subcell_offset(position: f64, cells: u16, dots_per_cell: usize) -> (u16, usize) {
     let dot_count = usize::from(cells).saturating_mul(dots_per_cell);
     if dot_count <= 1 {
-        return 0;
+        return (0, 0);
     }
     let dot = (position.clamp(0.0, 1.0) * (dot_count - 1) as f64).round() as usize;
-    u16::try_from(dot / dots_per_cell).unwrap_or(cells.saturating_sub(1))
+    (
+        u16::try_from(dot / dots_per_cell).unwrap_or(cells.saturating_sub(1)),
+        dot % dots_per_cell,
+    )
 }
 
 fn render_volume(
@@ -493,18 +490,10 @@ fn render_volume(
     let selected_column = crosshair.map(|position| {
         (position.clamp(0.0, 1.0) * f64::from(plot.width.saturating_sub(1))).round() as usize
     });
-    let full_height = usize::from(plot.height).saturating_mul(8);
     let buffer = frame.buffer_mut();
     for (column, volume) in columns.into_iter().enumerate() {
         let relative = (volume / max_volume).clamp(0.0, 1.0);
-        let filled_eighths = if relative > 0.0 {
-            (relative * full_height as f64)
-                .round()
-                .max(1.0)
-                .min(full_height as f64) as usize
-        } else {
-            0
-        };
+        let filled_eighths = volume_height_eighths(relative, usize::from(plot.height));
         let color = if selected_column == Some(column) {
             CYAN
         } else {
@@ -520,6 +509,16 @@ fn render_volume(
             paint_volume_cell(cell, cell_eighths, color);
         }
     }
+}
+
+fn volume_height_eighths(relative: f64, rows: usize) -> usize {
+    let full_height = rows.saturating_mul(8);
+    if relative <= 0.0 || !relative.is_finite() || full_height == 0 {
+        return 0;
+    }
+    (relative.clamp(0.0, 1.0) * full_height as f64)
+        .round()
+        .max(1.0) as usize
 }
 
 fn volume_columns(bars: &[Bar], width: usize) -> Vec<f64> {
@@ -555,19 +554,20 @@ fn volume_columns(bars: &[Bar], width: usize) -> Vec<f64> {
         .collect()
 }
 
-fn paint_volume_cell(cell: &mut Cell, eighths: usize, color: Color) {
-    let eighths = eighths.min(8);
-    let background = match eighths {
-        0 => PANEL,
-        8 => color,
-        fraction => blend_color(PANEL, color, partial_volume_blend(fraction)),
-    };
-    cell.set_symbol(" ").set_fg(background).set_bg(background);
+fn volume_block(eighths: usize) -> &'static str {
+    const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+    BLOCKS[eighths.min(8)]
 }
 
-fn partial_volume_blend(eighths: usize) -> f64 {
-    let coverage = eighths.min(8) as f64 / 8.0;
-    0.24 + coverage * 0.76
+fn paint_volume_cell(cell: &mut Cell, eighths: usize, color: Color) {
+    let eighths = eighths.min(8);
+    cell.set_symbol(if eighths == 8 {
+        " "
+    } else {
+        volume_block(eighths)
+    })
+    .set_fg(color)
+    .set_bg(if eighths == 8 { color } else { PANEL });
 }
 
 fn format_compact_volume(value: f64) -> String {
@@ -627,6 +627,7 @@ fn sample_bars(bars: &[Bar], width: usize) -> Vec<(usize, &Bar)> {
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
+    use ratatui::widgets::Widget;
 
     fn bar(index: i64) -> Bar {
         Bar {
@@ -720,6 +721,83 @@ mod tests {
     }
 
     #[test]
+    fn grid_and_trace_bits_share_braille_cells_without_layer_replacement() {
+        fn render_lines(grid: bool, trace: bool) -> Buffer {
+            let area = Rect::new(0, 0, 4, 3);
+            let mut buffer = Buffer::empty(area);
+            let canvas = Canvas::default()
+                .marker(Marker::Braille)
+                .x_bounds([0.0, 1.0])
+                .y_bounds([0.0, 1.0])
+                .paint(move |context| {
+                    if grid {
+                        context.draw(&Line::new(0.0, 0.5, 1.0, 0.5, MUTED));
+                    }
+                    if trace {
+                        context.draw(&Line::new(0.5, 0.0, 0.5, 1.0, CYAN));
+                    }
+                });
+            Widget::render(canvas, area, &mut buffer);
+            buffer
+        }
+
+        let pattern = |cell: &Cell| {
+            let symbol = cell.symbol().chars().next().expect("cell has a symbol");
+            BRAILLE
+                .iter()
+                .position(|candidate| *candidate == symbol)
+                .map_or(0, |index| index as u8)
+        };
+        let grid = render_lines(true, false);
+        let trace = render_lines(false, true);
+        let combined = render_lines(true, true);
+        let mut crossings = 0;
+        for row in combined.area.rows() {
+            for position in row.columns() {
+                let grid_pattern = pattern(&grid[position]);
+                let trace_pattern = pattern(&trace[position]);
+                if grid_pattern != 0 && trace_pattern != 0 {
+                    crossings += 1;
+                    assert_eq!(pattern(&combined[position]), grid_pattern | trace_pattern);
+                }
+            }
+        }
+        assert!(crossings > 0);
+    }
+
+    #[test]
+    fn price_axis_labels_overlay_braille_aligned_plot_rows() {
+        let area = Rect::new(3, 2, 30, 8);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 40, 12));
+        for row in area.rows() {
+            for position in row.columns() {
+                buffer[position]
+                    .set_char(BRAILLE[0x03])
+                    .set_fg(CYAN)
+                    .set_bg(Color::Rgb(20, 40, 30));
+            }
+        }
+        let bounds = [10.0, 20.0];
+        let labels = price_axis_labels(bounds, area.height);
+
+        render_price_axis(&mut buffer, area, bounds, &labels);
+
+        for (label, value) in labels.iter().zip(price_axis_values(bounds, labels.len())) {
+            let position = (bounds[1] - value) / (bounds[1] - bounds[0]);
+            let row = area.y + braille_cell_offset(position, area.height, 4);
+            let rendered: String = (area.x..area.x + label.len() as u16)
+                .map(|x| buffer[(x, row)].symbol())
+                .collect();
+            assert_eq!(rendered, *label);
+            assert_eq!(buffer[(area.x, row)].bg, PANEL);
+            assert_eq!(
+                buffer[(area.right() - 1, row)].symbol(),
+                BRAILLE[0x03].to_string()
+            );
+        }
+    }
+
+    #[test]
     fn hover_marker_maps_to_the_trace_cell() {
         let area = Rect::new(4, 3, 11, 6);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 20, 12));
@@ -727,12 +805,16 @@ mod tests {
         render_hover_indicator(&mut buffer, area, (0.5, 75.0), [50.0, 100.0]);
 
         let cell = &buffer[(9, 6)];
-        assert_eq!(cell.symbol(), " ");
-        assert_eq!(cell.bg, CYAN);
+        assert_eq!(
+            cell.symbol(),
+            BRAILLE[usize::from(BRAILLE_RIGHT_COLUMN)].to_string()
+        );
+        assert_eq!(cell.fg, TEXT);
+        assert!(!cell.modifier.contains(Modifier::BOLD));
     }
 
     #[test]
-    fn hover_indicator_uses_one_straight_background_column() {
+    fn hover_indicator_replaces_every_row_with_one_fixed_braille_subcolumn() {
         let area = Rect::new(3, 2, 8, 5);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 16, 10));
         for row in area.top()..area.bottom() {
@@ -745,18 +827,24 @@ mod tests {
 
         render_hover_indicator(&mut buffer, area, (0.6, 15.0), [10.0, 20.0]);
 
-        let x = area.x + braille_cell_offset(0.6, area.width, 2);
+        let (offset, subcolumn) = braille_subcell_offset(0.6, area.width, 2);
+        let x = area.x + offset;
+        let pattern = if subcolumn == 0 {
+            BRAILLE_LEFT_COLUMN
+        } else {
+            BRAILLE_RIGHT_COLUMN
+        };
+        let symbol = BRAILLE[usize::from(pattern)].to_string();
         let marker_y = area.y + braille_cell_offset(0.5, area.height, 4);
-        let guide_color = blend_color(PANEL, CYAN, HOVER_GUIDE_BLEND);
         for row in area.top()..area.bottom() {
             let cell = &buffer[(x, row)];
+            assert_eq!(cell.symbol(), symbol);
             if row == marker_y {
-                assert_eq!(cell.symbol(), " ");
-                assert_eq!(cell.bg, CYAN);
+                assert_eq!(cell.fg, TEXT);
             } else {
-                assert_eq!(cell.symbol(), if row % 2 == 0 { "⠤" } else { "⠂" });
-                assert_eq!(cell.bg, guide_color);
+                assert_eq!(cell.fg, CYAN);
             }
+            assert!(!cell.modifier.contains(Modifier::BOLD));
         }
         for row in area.top()..area.bottom() {
             assert_eq!(buffer[(x - 1, row)].bg, PANEL);
@@ -770,6 +858,8 @@ mod tests {
         assert_eq!(braille_cell_offset(0.10, 6, 4), 0);
         assert_eq!(braille_cell_offset(0.50, 11, 2), 5);
         assert_eq!(braille_cell_offset(1.00, 11, 2), 10);
+        assert_eq!(braille_subcell_offset(0.00, 8, 2).1, 0);
+        assert_eq!(braille_subcell_offset(1.00, 8, 2).1, 1);
     }
 
     #[test]
@@ -803,15 +893,27 @@ mod tests {
     }
 
     #[test]
-    fn partial_volume_intensity_uses_eighth_cell_precision() {
-        assert!(partial_volume_blend(1) < partial_volume_blend(4));
-        assert!(partial_volume_blend(4) < partial_volume_blend(7));
-        assert_eq!(partial_volume_blend(8), 1.0);
-        assert_eq!(partial_volume_blend(20), 1.0);
+    fn volume_height_preserves_linear_eighth_cell_variation() {
+        assert_eq!(volume_height_eighths(0.0, 5), 0);
+        assert_eq!(volume_height_eighths(f64::NAN, 5), 0);
+        assert_eq!(volume_height_eighths(f64::EPSILON, 5), 1);
+        assert_eq!(volume_height_eighths(0.25, 5), 10);
+        assert_eq!(volume_height_eighths(0.50, 5), 20);
+        assert_eq!(volume_height_eighths(0.75, 5), 30);
+        assert_eq!(volume_height_eighths(1.0, 5), 40);
     }
 
     #[test]
-    fn volume_cells_use_seamless_background_fill_only() {
+    fn volume_blocks_use_eighth_cell_precision() {
+        assert_eq!(volume_block(0), " ");
+        assert_eq!(volume_block(1), "▁");
+        assert_eq!(volume_block(4), "▄");
+        assert_eq!(volume_block(7), "▇");
+        assert_eq!(volume_block(8), "█");
+    }
+
+    #[test]
+    fn volume_cells_use_background_for_full_rows_and_uniform_caps() {
         let color = Color::Rgb(20, 180, 70);
         let mut full = Cell::default();
         let mut partial = Cell::default();
@@ -823,11 +925,9 @@ mod tests {
 
         assert_eq!(full.symbol(), " ");
         assert_eq!(full.bg, color);
-        assert_eq!(partial.symbol(), " ");
-        assert_eq!(
-            partial.bg,
-            blend_color(PANEL, color, partial_volume_blend(3))
-        );
+        assert_eq!(partial.symbol(), "▃");
+        assert_eq!(partial.fg, color);
+        assert_eq!(partial.bg, PANEL);
         assert_eq!(empty.symbol(), " ");
         assert_eq!(empty.bg, PANEL);
     }

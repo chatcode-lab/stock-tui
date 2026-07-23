@@ -7,7 +7,7 @@ use stock_tui::{
     app::{AppCommand, handle_event},
     benchmarks::MarketBenchmark,
     domain::{Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, TickerDetail},
-    palette::{CANVAS, HeatScale, MUTED, PANEL, Theme},
+    palette::{CANVAS, HeatScale, MUTED, PANEL, TEXT, Theme},
     ui::{
         layout::AppLayout,
         render,
@@ -267,15 +267,23 @@ fn detail_chart_fills_the_plot_and_exposes_aligned_axes_and_hover() {
         "price trace and guides should use high-resolution Braille cells"
     );
 
-    let mut y_axis = String::new();
+    let mut in_plot_axis = Vec::new();
     for y in plot.y..plot.bottom() {
-        for x in plot.x.saturating_sub(10)..plot.x {
-            y_axis.push_str(buffer[(x, y)].symbol());
+        for x in plot.x..plot.right() {
+            if buffer[(x, y)].symbol() == "$" {
+                in_plot_axis.push((x, y));
+            }
         }
     }
     assert!(
-        y_axis.contains('$'),
-        "price axis should show currency labels"
+        !in_plot_axis.is_empty(),
+        "price labels should overlay the plot"
+    );
+    assert!(
+        in_plot_axis
+            .iter()
+            .all(|(x, _)| *x < plot.x.saturating_add(10)),
+        "price labels should stay near the plot's left edge"
     );
 
     let x_axis: String = (plot.x..plot.right())
@@ -299,6 +307,29 @@ fn detail_chart_fills_the_plot_and_exposes_aligned_axes_and_hover() {
     assert_eq!(
         state.detail_hover,
         Some(state.chart_sample_indices.len() - 1)
+    );
+
+    let hovered = render_at(&mut state, 160, 48);
+    let hovered_plot = state.chart_rect.expect("hovered chart keeps its plot area");
+    let cursor_x = hovered_plot.right() - 1;
+    let cursor_symbol = hovered[(cursor_x, hovered_plot.y)].symbol().to_owned();
+    assert!(
+        cursor_symbol
+            .chars()
+            .next()
+            .is_some_and(|symbol| ('\u{2801}'..='\u{28ff}').contains(&symbol))
+    );
+    assert!(
+        (hovered_plot.y..hovered_plot.bottom())
+            .all(|y| hovered[(cursor_x, y)].symbol() == cursor_symbol),
+        "hover cursor should use one fixed Braille subcolumn through grid and label rows"
+    );
+    assert_eq!(
+        (hovered_plot.y..hovered_plot.bottom())
+            .filter(|y| hovered[(cursor_x, *y)].fg == TEXT)
+            .count(),
+        1,
+        "exactly one cursor cell should mark the selected price"
     );
 }
 
@@ -817,6 +848,7 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         "/ Search",
         "s Sort",
         "F Starred",
+        "g Sectors",
         "1: 1D",
         "8: 5Y",
         "0: ALL",
@@ -827,7 +859,28 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         assert!(screen.contains(expected), "missing rail hint {expected:?}");
     }
 
+    let sector_hint = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::BeginSectorShortcut)
+        .expect("sector shortcut rail target")
+        .clone();
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: sector_hint.rect.x,
+                row: sector_hint.rect.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    assert!(state.sector_shortcut_pending);
+
     assert!(press(&mut state, KeyCode::Char('?'), KeyModifiers::NONE).is_empty());
+    assert!(!state.sector_shortcut_pending);
     let help = screen_text(&render_at(&mut state, 80, 24));
     for expected in [
         "HELP",
@@ -835,7 +888,7 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         "arrows or h j k l",
         "Starred      F",
         "Ranges       1..9, 0 or [ ]",
-        "Sectors      Alt/Meta + c s h e t f i m u",
+        "Sectors      g then c s h e t f i m u",
         "Detail       Left/Right chart, Up/Down news",
         "Quit         q",
     ] {

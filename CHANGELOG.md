@@ -22,7 +22,7 @@ pre-1.0 releases.
 - Responsive compact/full layouts, centered equal-cell heatmaps, half-block
   overview compression, true-color heat scales with contrast-aware focus,
   monochrome `NO_COLOR` mode, and a thin Braille price trace with softened area
-  fill, seamless cell-filled volume, and labeled axes.
+  fill, fine-grained volume, and labeled axes.
 - Ticker detail with price, return, OHLC, volume, market cap, sector context,
   company description, related news, persistent selection, and browser opening
   with OSC 52 clipboard fallback.
@@ -51,8 +51,10 @@ pre-1.0 releases.
 
 - Aligned the three overview benchmark cells with the sector columns and
   constrained them to the market content pane.
-- Made the chart cursor and volume histogram independent of terminal font
-  glyph alignment by painting their geometry with cell backgrounds.
+- Unified price-grid and trace dots in each Braille cell, moved price labels
+  into the plot, and made the cursor one fixed Braille subcolumn.
+- Kept solid volume cells seam-free while restoring uniform-color fractional
+  block caps for eighth-cell height precision.
 - Replaced repeated full-history timeframe discovery during range changes with
   indexed per-symbol availability probes.
 

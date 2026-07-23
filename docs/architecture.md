@@ -121,6 +121,12 @@ panels; sector and news-row hover moves the persistent selection used by the
 keyboard. Returning from ticker detail restores the originating sector or
 Favorites selection.
 
+Sector shortcuts use a terminal-safe two-key chord: `g` arms the chord and the
+next `c/s/h/e/t/f/i/m/u` selects the corresponding sector. Escape, Backspace,
+mouse input, overlays, or one non-sector key cancel the pending prefix; a
+non-sector key is then handled normally. Alt/Meta variants remain optional
+compatibility shortcuts for terminals that transmit those modifiers.
+
 ## Responsive Rendering
 
 The minimum coherent viewport is 60x20. Smaller viewports render only a resize
@@ -145,12 +151,16 @@ Charts sample cached bars to terminal resolution while preserving the first
 and last point. A Braille canvas renders the thin price trace and grid over a
 per-cell RGB area fill, with price and range-aware date scales. The fill samples
 the same two horizontal Braille subcells as the trace and uses fractional edge
-coverage plus a short exterior fade to soften its cell-resolution boundary. A
-responsive 4-7-row histogram renders contiguous volume columns entirely with
-terminal-cell backgrounds; a fractional cap changes the top cell's intensity
-instead of its glyph. Hover or keyboard selection tints one straight cell
-column and brightens its trace intersection. This avoids font shaping,
-interglyph gaps, and line-height seams in browser-hosted terminals.
+coverage plus a short exterior fade to soften its cell-resolution boundary.
+Grid and trace dots share one Braille pattern so intersections cannot replace
+half a cell. Price labels are painted over the plot after the chart, using an
+opaque panel background for legibility. Hover or keyboard selection then
+replaces one fixed left or right Braille subcolumn and changes only the marker
+cell's color at the selected price.
+
+A responsive 4-7-row volume histogram uses uniform-color lower-block caps for
+eighth-cell height precision. Fully occupied cells use background color instead
+of a full-block glyph, avoiding line-height seams through the solid portions.
 
 ## Heatmap Semantics
 
