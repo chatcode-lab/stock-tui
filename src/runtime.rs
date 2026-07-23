@@ -13,6 +13,7 @@ use tokio::{sync::mpsc, time::Instant};
 
 use crate::{
     app::{AppCommand, handle_event},
+    benchmarks,
     config::Settings,
     demo,
     domain::{Company, Sector, SyncPhase, SyncProgress},
@@ -156,13 +157,15 @@ fn bootstrap_universe(storage: &Storage) -> Result<()> {
                 candidate.shares_outstanding = cached.shares_outstanding;
             }
             candidate.in_universe = cached.in_universe;
+            candidate.retained = cached.retained;
         }
     }
+    candidates.extend(benchmarks::companies(now));
     storage.upsert_companies(&candidates)?;
     for sector in Sector::ALL {
         let sector_candidates = candidates
             .iter()
-            .filter(|company| company.sector == Some(sector))
+            .filter(|company| company.sector == Some(sector) && company.retained)
             .cloned()
             .collect::<Vec<_>>();
         storage.replace_memberships(now.date_naive(), sector, &sector_candidates)?;
@@ -292,6 +295,7 @@ fn reload_tiles(storage: &Storage, state: &mut UiState) -> Result<()> {
             .filter(|tile| !existing.contains(&tile.company.symbol)),
     );
     state.tiles = tiles;
+    state.benchmarks = storage.benchmark_tiles(state.date_range, now)?;
     Ok(())
 }
 
@@ -313,16 +317,33 @@ fn load_detail(storage: &Storage, state: &mut UiState, symbol: &str) -> Result<(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DemoCacheState {
+    Empty,
+    Current,
+    Legacy,
+}
+
+fn classify_demo_cache(checkpoints: &HashSet<String>) -> DemoCacheState {
+    if checkpoints.contains(demo::CHECKPOINT_SCOPE) {
+        DemoCacheState::Current
+    } else if checkpoints.is_empty() {
+        DemoCacheState::Empty
+    } else {
+        DemoCacheState::Legacy
+    }
+}
+
 fn seed_demo(
     storage: Storage,
     reset: bool,
     events: mpsc::UnboundedSender<SyncEvent>,
 ) -> Result<()> {
     let counts = storage.counts()?;
-    let current_demo = storage.sync_checkpoint(demo::CHECKPOINT_SCOPE)?.is_some();
-    let legacy_demo = !current_demo && storage.sync_checkpoint("demo")?.is_some();
-    let migrate_legacy_cache =
-        !reset && legacy_demo && counts.companies == 900 && counts.snapshots == 900;
+    let demo_checkpoints = storage.sync_checkpoint_scopes("demo")?;
+    let cache_state = classify_demo_cache(&demo_checkpoints);
+    let current_demo = cache_state == DemoCacheState::Current;
+    let migrate_legacy_cache = !reset && cache_state == DemoCacheState::Legacy;
     let preserved_favorites = if migrate_legacy_cache {
         storage.favorite_symbols()?
     } else {
@@ -330,7 +351,10 @@ fn seed_demo(
     };
     if reset {
         storage.reset_demo_data()?;
-    } else if current_demo && counts.companies >= 900 && counts.snapshots >= 900 && counts.bars > 0
+    } else if current_demo
+        && counts.companies >= demo::TOTAL_COMPANIES
+        && counts.snapshots >= demo::TOTAL_COMPANIES
+        && counts.bars > 0
     {
         let _ = events.send(SyncEvent::DataChanged);
         return Ok(());
@@ -340,7 +364,7 @@ fn seed_demo(
     let _ = events.send(SyncEvent::Progress(SyncProgress {
         phase: SyncPhase::History,
         completed: 0,
-        total: 900,
+        total: demo::TOTAL_COMPANIES,
         message: if migrate_legacy_cache {
             "Upgrading simulated demo identities".to_owned()
         } else {
@@ -370,8 +394,8 @@ fn seed_demo(
     storage.set_sync_checkpoint(demo::CHECKPOINT_SCOPE, now)?;
     let _ = events.send(SyncEvent::Progress(SyncProgress {
         phase: SyncPhase::Complete,
-        completed: 900,
-        total: 900,
+        completed: demo::TOTAL_COMPANIES,
+        total: demo::TOTAL_COMPANIES,
         message: "SIMULATED offline market ready".to_owned(),
         last_error: None,
         updated_at: Utc::now(),
@@ -382,10 +406,16 @@ fn seed_demo(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, io};
+    use std::{cell::RefCell, collections::HashSet, io};
 
-    use super::{recover_news_url, should_reset_auto_refresh, terminal_clipboard_sequence};
-    use crate::app::AppCommand;
+    use chrono::Utc;
+    use tempfile::tempdir;
+
+    use super::{
+        DemoCacheState, bootstrap_universe, classify_demo_cache, recover_news_url,
+        should_reset_auto_refresh, terminal_clipboard_sequence,
+    };
+    use crate::{app::AppCommand, benchmarks::MarketBenchmark, demo, storage::Storage};
 
     #[test]
     fn only_remote_manual_refresh_resets_the_automatic_cadence() {
@@ -424,5 +454,60 @@ mod tests {
             status,
             "Could not open news URL: no browser; clipboard: terminal rejected OSC 52"
         );
+    }
+
+    #[test]
+    fn every_obsolete_demo_checkpoint_requires_migration() {
+        assert_eq!(classify_demo_cache(&HashSet::new()), DemoCacheState::Empty);
+        for scope in ["demo", "demo:sec-identities-v2", "demo:sec-identities-v3"] {
+            assert_eq!(
+                classify_demo_cache(&HashSet::from([scope.to_owned()])),
+                DemoCacheState::Legacy
+            );
+        }
+        assert_eq!(
+            classify_demo_cache(&HashSet::from([demo::CHECKPOINT_SCOPE.to_owned()])),
+            DemoCacheState::Current
+        );
+    }
+
+    #[test]
+    fn bootstrap_preserves_inactive_candidates_and_their_favorites() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = Utc::now();
+        let mut inactive = crate::universe::embedded_companies(now)?
+            .into_iter()
+            .find(|company| company.rank == Some(1))
+            .expect("catalog has a first-ranked company");
+        let sector = inactive.sector.expect("catalog company has a sector");
+        inactive.in_universe = true;
+        inactive.retained = false;
+        storage.upsert_companies(&[inactive.clone()])?;
+        storage.set_favorite(&inactive.symbol, true)?;
+
+        bootstrap_universe(&storage)?;
+
+        let stored = storage
+            .company(&inactive.symbol)?
+            .expect("inactive catalog row remains stored");
+        assert!(!stored.retained);
+        assert!(!stored.in_universe);
+        assert!(storage.is_favorite(&inactive.symbol)?);
+        assert!(
+            storage
+                .memberships(sector, Some(now.date_naive()))?
+                .iter()
+                .all(|company| company.symbol != inactive.symbol)
+        );
+        for benchmark in MarketBenchmark::ALL {
+            let stored = storage
+                .company(benchmark.symbol)?
+                .expect("benchmark proxy is bootstrapped");
+            assert_eq!(stored.sector, None);
+            assert!(stored.retained);
+            assert!(stored.in_universe);
+        }
+        Ok(())
     }
 }

@@ -3,18 +3,21 @@
 use chrono::{DateTime, Datelike, Days, Duration, NaiveDate, NaiveTime, Utc, Weekday};
 
 use crate::{
+    benchmarks::MarketBenchmark,
     domain::{Bar, Company, NewsItem, Sector, Snapshot},
     universe,
 };
 
 pub const COMPANIES_PER_SECTOR: usize = 100;
-pub const CHECKPOINT_SCOPE: &str = "demo:sec-identities-v2";
+pub const TOTAL_COMPANIES: usize =
+    Sector::ALL.len() * COMPANIES_PER_SECTOR + MarketBenchmark::ALL.len();
+pub const CHECKPOINT_SCOPE: &str = "demo:sec-identities-v4";
 
 const FIVE_MINUTE_BARS: usize = 78;
 const HOURLY_SESSIONS: usize = 24;
 const HOURS_PER_SESSION: usize = 7;
-const DAILY_BARS: usize = 264;
-const WEEKLY_BARS: usize = 263;
+const DAILY_BARS: usize = 528;
+const WEEKLY_BARS: usize = 575;
 
 /// A complete demo-market payload ready for bulk insertion into storage.
 #[derive(Debug, Clone)]
@@ -32,7 +35,7 @@ pub struct DemoDataset {
 /// be treated as investment information.
 #[must_use]
 pub fn generate(as_of: DateTime<Utc>) -> DemoDataset {
-    let company_count = Sector::ALL.len() * COMPANIES_PER_SECTOR;
+    let company_count = TOTAL_COMPANIES;
     let bars_per_company =
         FIVE_MINUTE_BARS + HOURLY_SESSIONS * HOURS_PER_SESSION + DAILY_BARS + WEEKLY_BARS;
     let anchor = last_completed_market_close(as_of);
@@ -60,6 +63,18 @@ pub fn generate(as_of: DateTime<Utc>) -> DemoDataset {
         dataset
             .news
             .extend(make_news(&company, sector_index, rank, as_of));
+        dataset.companies.push(company);
+    }
+    for (index, benchmark) in MarketBenchmark::ALL.into_iter().enumerate() {
+        let (company, model) = make_benchmark_company(benchmark, index, as_of);
+        dataset.snapshots.push(make_snapshot(&model, as_of));
+        append_bars(&mut dataset.bars, &model, anchor);
+        dataset.news.extend(make_news(
+            &company,
+            Sector::ALL.len(),
+            u16::try_from(index + 1).unwrap_or(1),
+            as_of,
+        ));
         dataset.companies.push(company);
     }
 
@@ -174,6 +189,38 @@ fn make_company(
         previous_close,
         annual_drift,
         cycle_phase: unit(seed, 5) * std::f64::consts::TAU,
+        daily_volume,
+        daily_trades,
+    };
+    (company, model)
+}
+
+fn make_benchmark_company(
+    benchmark: MarketBenchmark,
+    index: usize,
+    as_of: DateTime<Utc>,
+) -> (Company, PriceModel) {
+    let mut company = benchmark.company(as_of);
+    company.raw_sector = Some("Broad-market ETF proxy · SIMULATED DEMO".to_owned());
+    company.description = format!(
+        "{} represents {} in the offline demo. Price, return, volume, chart history, statistics, and news are all simulated.",
+        benchmark.symbol, benchmark.label
+    );
+
+    let date_seed = u64::from(as_of.date_naive().num_days_from_ce().unsigned_abs());
+    let seed = hash64(benchmark.symbol) ^ date_seed.rotate_left(11);
+    let current_price = 200.0 + index as f64 * 145.0 + unit(seed, 1) * 90.0;
+    let day_return = ((unit(seed, 2) - 0.5) * 0.055).clamp(-0.04, 0.04);
+    let previous_close = current_price / (1.0 + day_return);
+    let daily_volume = 28_000_000.0 + unit(seed, 3) * 52_000_000.0;
+    let daily_trades = 850_000 + mixed(seed, 4) % 1_900_000;
+    let model = PriceModel {
+        symbol: benchmark.symbol.to_owned(),
+        seed,
+        current_price,
+        previous_close,
+        annual_drift: 0.07 + unit(seed, 5) * 0.16,
+        cycle_phase: unit(seed, 6) * std::f64::consts::TAU,
         daily_volume,
         daily_trades,
     };
@@ -444,6 +491,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::domain::DateRange;
 
     fn fixed_now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 7, 13, 22, 15, 0)
@@ -559,7 +607,22 @@ mod tests {
             .iter()
             .find(|bar| bar.timeframe == "1Week")
             .expect("weekly history");
-        assert!(anchor.signed_duration_since(oldest_week.timestamp) >= Duration::days(1_826));
+        assert!(
+            anchor.signed_duration_since(oldest_week.timestamp)
+                >= Duration::days(i64::try_from(DateRange::TenYears.days()).expect("10Y fits i64"))
+        );
+        for range in DateRange::ALL {
+            let bars_in_range = bars
+                .iter()
+                .filter(|bar| bar.timeframe == range.preferred_timeframe())
+                .filter(|bar| bar.timestamp >= range.cutoff(anchor))
+                .count();
+            assert!(
+                bars_in_range >= 2,
+                "{} should have enough points for a return",
+                range.label()
+            );
+        }
         assert!(bars.iter().all(|bar| {
             bar.open.is_finite()
                 && bar.high >= bar.open.max(bar.close)
@@ -600,5 +663,25 @@ mod tests {
         assert!(news.iter().all(|item| {
             item.symbols.len() == 1 && item.symbols.first() == Some(&first_company.symbol)
         }));
+    }
+
+    #[test]
+    fn benchmark_proxies_have_sectorless_simulated_market_data() {
+        for (index, benchmark) in MarketBenchmark::ALL.into_iter().enumerate() {
+            let (company, model) = make_benchmark_company(benchmark, index, fixed_now());
+            let snapshot = make_snapshot(&model, fixed_now());
+
+            assert_eq!(company.symbol, benchmark.symbol);
+            assert_eq!(company.sector, None);
+            assert!(company.in_universe);
+            assert!(company.retained);
+            assert!(company.description.contains("all simulated"));
+            assert!(snapshot.price.is_some_and(|price| price > 0.0));
+            assert!(
+                snapshot
+                    .volume
+                    .is_some_and(|volume| volume.is_finite() && volume > 0.0)
+            );
+        }
     }
 }

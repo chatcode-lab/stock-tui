@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use ratatui::layout::{Position, Rect};
 
 use crate::{
+    benchmarks::MarketBenchmark,
     domain::{Company, DateRange, MarketTile, Sector, SortMode, SyncProgress, TickerDetail},
     palette::Theme,
 };
@@ -75,6 +76,8 @@ pub struct UiState {
     pub date_range: DateRange,
     pub sort: SortMode,
     pub tiles: Vec<MarketTile>,
+    pub benchmarks: Vec<MarketTile>,
+    pub selected_benchmark: Option<usize>,
     pub detail: Option<TickerDetail>,
     pub search_query: String,
     pub search_results: Vec<Company>,
@@ -106,6 +109,8 @@ impl Default for UiState {
             date_range: DateRange::Day,
             sort: SortMode::MarketCap,
             tiles: Vec::new(),
+            benchmarks: Vec::new(),
+            selected_benchmark: None,
             detail: None,
             search_query: String::new(),
             search_results: Vec::new(),
@@ -172,6 +177,12 @@ impl UiState {
                         .iter()
                         .position(|candidate| candidate == sector)
                         .unwrap_or(self.selected_sector);
+                    self.selected_benchmark = None;
+                }
+                Some(UiAction::OpenTicker(symbol)) if matches!(self.route, Route::Overview) => {
+                    self.selected_benchmark = MarketBenchmark::ALL
+                        .iter()
+                        .position(|benchmark| benchmark.symbol == symbol);
                 }
                 Some(UiAction::OpenTicker(symbol))
                     if matches!(self.route, Route::Sector(_) | Route::Favorites) =>

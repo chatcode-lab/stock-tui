@@ -96,26 +96,43 @@ impl FromStr for Sector {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum DateRange {
     #[default]
+    #[serde(alias = "Day")]
     Day,
+    #[serde(alias = "Week")]
     Week,
+    #[serde(alias = "Month")]
     Month,
+    #[serde(alias = "ThreeMonths")]
     ThreeMonths,
+    #[serde(alias = "SixMonths")]
     SixMonths,
+    #[serde(alias = "Year")]
     Year,
+    #[serde(alias = "TwoYears")]
+    TwoYears,
+    #[serde(alias = "FiveYears")]
     FiveYears,
+    #[serde(alias = "TenYears")]
+    TenYears,
+    #[serde(alias = "All")]
+    All,
 }
 
 impl DateRange {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 10] = [
         Self::Day,
         Self::Week,
         Self::Month,
         Self::ThreeMonths,
         Self::SixMonths,
         Self::Year,
+        Self::TwoYears,
         Self::FiveYears,
+        Self::TenYears,
+        Self::All,
     ];
 
     #[must_use]
@@ -127,7 +144,10 @@ impl DateRange {
             Self::ThreeMonths => "3M",
             Self::SixMonths => "6M",
             Self::Year => "1Y",
+            Self::TwoYears => "2Y",
             Self::FiveYears => "5Y",
+            Self::TenYears => "10Y",
+            Self::All => "ALL",
         }
     }
 
@@ -140,7 +160,10 @@ impl DateRange {
             Self::ThreeMonths => 91,
             Self::SixMonths => 183,
             Self::Year => 365,
+            Self::TwoYears => 731,
             Self::FiveYears => 1_826,
+            Self::TenYears => 3_653,
+            Self::All => u64::MAX,
         }
     }
 
@@ -149,14 +172,34 @@ impl DateRange {
         match self {
             Self::Day => "5Min",
             Self::Week | Self::Month => "1Hour",
-            Self::FiveYears => "1Week",
+            Self::FiveYears | Self::TenYears | Self::All => "1Week",
             _ => "1Day",
         }
     }
 
     #[must_use]
     pub fn cutoff(self, now: DateTime<Utc>) -> DateTime<Utc> {
-        now.checked_sub_days(Days::new(self.days())).unwrap_or(now)
+        if self == Self::All {
+            DateTime::UNIX_EPOCH
+        } else {
+            now.checked_sub_days(Days::new(self.days())).unwrap_or(now)
+        }
+    }
+
+    #[must_use]
+    pub const fn shortcut(self) -> char {
+        match self {
+            Self::Day => '1',
+            Self::Week => '2',
+            Self::Month => '3',
+            Self::ThreeMonths => '4',
+            Self::SixMonths => '5',
+            Self::Year => '6',
+            Self::TwoYears => '7',
+            Self::FiveYears => '8',
+            Self::TenYears => '9',
+            Self::All => '0',
+        }
     }
 
     #[must_use]
@@ -393,9 +436,43 @@ mod tests {
     fn ranges_have_stable_labels_and_order() {
         assert_eq!(
             DateRange::ALL.map(DateRange::label),
-            ["1D", "1W", "1M", "3M", "6M", "1Y", "5Y"]
+            ["1D", "1W", "1M", "3M", "6M", "1Y", "2Y", "5Y", "10Y", "ALL"]
         );
         assert_eq!(DateRange::Month.previous(), DateRange::Week);
         assert_eq!(DateRange::Month.next(), DateRange::ThreeMonths);
+        assert_eq!(
+            DateRange::ALL.map(DateRange::shortcut),
+            ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
+        );
+        assert_eq!(DateRange::All.next(), DateRange::All);
+    }
+
+    #[test]
+    fn ranges_have_stable_cutoffs_and_serialization() {
+        let now = DateTime::parse_from_rfc3339("2026-07-23T12:00:00Z")
+            .expect("fixture timestamp")
+            .with_timezone(&Utc);
+        assert_eq!(
+            DateRange::TwoYears.cutoff(now),
+            now.checked_sub_days(Days::new(731))
+                .expect("fixture cutoff")
+        );
+        assert_eq!(DateRange::All.cutoff(now), DateTime::UNIX_EPOCH);
+        assert_eq!(
+            serde_json::to_string(&DateRange::TenYears).expect("range serializes"),
+            "\"ten_years\""
+        );
+        assert_eq!(
+            serde_json::from_str::<DateRange>("\"all\"").expect("range deserializes"),
+            DateRange::All
+        );
+        assert_eq!(
+            serde_json::from_str::<DateRange>("\"FiveYears\"").expect("legacy range deserializes"),
+            DateRange::FiveYears
+        );
+        assert_eq!(
+            "10Y".parse::<DateRange>().expect("label parses"),
+            DateRange::TenYears
+        );
     }
 }

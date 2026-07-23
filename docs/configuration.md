@@ -162,9 +162,9 @@ provider responses indicate pressure.
 
 Larger symbol batches reduce request count but increase payload size, response
 latency, and the amount retried after a failure. Defaults are designed for the
-broader candidate snapshot pool and the selected 900-company history universe.
-Increasing them does not increase account entitlement and may exceed
-endpoint-specific symbol or response limits.
+broader candidate snapshot pool and the selected 900-company history universe
+plus three benchmark ETF proxies. Increasing them does not increase account
+entitlement and may exceed endpoint-specific symbol or response limits.
 
 Transient requests use a 20-second timeout, up to three retries, exponential
 delays starting at 250 milliseconds, and a 30-second cap. A provider

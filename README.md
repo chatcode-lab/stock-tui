@@ -19,8 +19,11 @@ read-only: it displays market information and does not place orders.
 
 - Displays nine economic sectors in a 3x3 overview, with up to 100 companies
   per sector.
+- Shows S&P 500, Dow, and Nasdaq-100 performance through the liquid `SPY`,
+  `DIA`, and `QQQ` ETF proxies in the overview footer.
 - Colors each ticker from bright red through neutral gray to bright green from
-  its return over `1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, or `5Y`.
+  its return over `1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, `2Y`, `5Y`, `10Y`, or
+  all available history.
 - Reorders tickers by market capitalization, gain, volume, or symbol.
 - Provides responsive sector grids and a ticker detail screen with a
   Braille-resolution price trace, softly filled tint, price/time axes,
@@ -31,8 +34,9 @@ read-only: it displays market information and does not place orders.
 - Persists starred tickers and emphasizes them in every heatmap.
 - Opens immediately from a local SQLite cache while network synchronization
   proceeds in the background.
-- Runs without credentials using 900 real SEC-catalog issuer identities with
-  deterministic, clearly labeled simulated market values.
+- Runs without credentials using 900 real SEC-catalog issuer identities plus
+  three benchmark ETF identities, with deterministic, clearly labeled
+  simulated market values.
 
 The heat scale is symmetric around zero and capped using the visible market's
 90th-percentile absolute move. This keeps one extreme ticker from flattening
@@ -177,7 +181,7 @@ news row can be clicked with the left mouse button.
 
 | Input | Action |
 | --- | --- |
-| Mouse move | Select a sector, ticker, or news row; move the chart cursor |
+| Mouse move | Select a sector, benchmark, ticker, or news row; move the chart cursor |
 | Left click | Activate the control, sector, ticker, tab, or news item |
 | Wheel on overview/sector | Move to the previous or next date range |
 | Wheel on ticker chart | Move the selected chart sample |
@@ -189,12 +193,17 @@ news row can be clicked with the left mouse button.
 | `F` | Open starred tickers |
 | `f` | Star or unstar the focused ticker |
 | `[` / `]` | Previous / next date range |
-| `1` through `7` | Select `1D` through `5Y` directly |
+| `1` through `9` | Select `1D` through `10Y` directly |
+| `0` | Select all available history |
+| `Alt`/`Meta` + `c s h e t f i m u` | Open Consumer, Services, Healthcare, Energy, Technology, Financial, Industrial, Materials, or Utilities |
 | `Tab` | Cycle Chart, Statistics, and News in compact ticker view |
 | `r` | Request an immediate broad-market snapshot refresh |
 | `S` | Open read-only data status |
 | `?` | Open keyboard help |
 | `q` or `Ctrl-C` | Quit and restore the terminal |
+
+On ticker detail, Left/Right (or `h`/`l`) moves the chart cursor while
+Up/Down (or `k`/`j`) selects the related-news row; `Enter` opens it.
 
 In search, type or paste a query, use Up/Down to select a result, `Enter` to
 open it, `Ctrl-U` to clear the query, and `Esc` to close. Search is local and
@@ -233,9 +242,11 @@ The live client combines a versioned SEC-derived candidate catalog with Alpaca
 snapshots, adjusted bars, asset names/exchanges, and ticker news. It stores
 normalized records in a per-user SQLite database in WAL mode. On startup it
 refreshes candidate snapshots, updates top-100 sector membership where a
-current market cap can be estimated, and resumes a five-year daily backfill for
-the selected 900 companies with a seven-day overlap. It lazily requests the
-range-appropriate bars and 20 newest headlines when a ticker is opened.
+current market cap can be estimated, and resumes two years of daily bars plus
+all provider-available weekly history for the selected 900 companies and the
+three benchmark ETF proxies. Both history plans use a seven-day overlap after
+their initial backfill. It lazily requests range-appropriate bars and 20 newest
+headlines when a ticker is opened.
 In live mode, the broad-market snapshot refresh runs immediately on startup
 and every five minutes by default; `r` starts one immediately and restarts that
 timer. Opening a ticker or changing its range separately triggers a lazy detail

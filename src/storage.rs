@@ -11,8 +11,11 @@ use rusqlite::{
     Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params, types::Type,
 };
 
-use crate::domain::{
-    Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, SortMode, TickerDetail,
+use crate::{
+    benchmarks::MarketBenchmark,
+    domain::{
+        Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, SortMode, TickerDetail,
+    },
 };
 
 const SCHEMA_VERSION: i64 = 1;
@@ -736,23 +739,46 @@ impl Storage {
 
     /// Stores a successful synchronization timestamp. Checkpoints contain no credentials.
     pub fn set_sync_checkpoint(&self, scope: &str, completed_at: DateTime<Utc>) -> Result<()> {
-        let scope = scope.trim();
-        if scope.is_empty() {
+        self.set_sync_checkpoints(&[scope.to_owned()], completed_at)?;
+        Ok(())
+    }
+
+    /// Stores multiple successful synchronization timestamps atomically.
+    pub fn set_sync_checkpoints(
+        &self,
+        scopes: &[String],
+        completed_at: DateTime<Utc>,
+    ) -> Result<()> {
+        if scopes.iter().any(|scope| scope.trim().is_empty()) {
             bail!("sync checkpoint scope must not be empty");
         }
-        let connection = self.connection()?;
-        connection.execute(
-            "INSERT INTO sync_checkpoints (scope, completed_at, updated_at)
-             VALUES (?1, ?2, ?3)
-             ON CONFLICT(scope) DO UPDATE SET
-                completed_at = excluded.completed_at,
-                updated_at = excluded.updated_at",
-            params![
-                scope,
-                timestamp_millis(completed_at),
-                timestamp_millis(Utc::now())
-            ],
-        )?;
+        if scopes.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("could not begin checkpoint update")?;
+        {
+            let mut statement = transaction.prepare_cached(
+                "INSERT INTO sync_checkpoints (scope, completed_at, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(scope) DO UPDATE SET
+                    completed_at = excluded.completed_at,
+                    updated_at = excluded.updated_at",
+            )?;
+            let updated_at = timestamp_millis(Utc::now());
+            for scope in scopes {
+                statement.execute(params![
+                    scope.trim(),
+                    timestamp_millis(completed_at),
+                    updated_at
+                ])?;
+            }
+        }
+        transaction
+            .commit()
+            .context("could not commit checkpoint update")?;
         Ok(())
     }
 
@@ -769,6 +795,24 @@ impl Storage {
             .map(datetime_from_millis)
             .transpose()
             .map_err(Into::into)
+    }
+
+    pub fn sync_checkpoint_scopes(&self, prefix: &str) -> Result<HashSet<String>> {
+        let prefix = prefix.trim();
+        if prefix.is_empty() {
+            bail!("sync checkpoint prefix must not be empty");
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT scope FROM sync_checkpoints
+             WHERE substr(scope, 1, ?1) = ?2",
+        )?;
+        let rows = statement.query_map(
+            params![i64::try_from(prefix.len()).unwrap_or(i64::MAX), prefix],
+            |row| row.get(0),
+        )?;
+        rows.collect::<rusqlite::Result<HashSet<_>>>()
+            .context("could not load sync checkpoint scopes")
     }
 
     pub fn heatmap_tiles(
@@ -854,6 +898,41 @@ impl Storage {
         now: DateTime<Utc>,
     ) -> Result<Vec<MarketTile>> {
         self.heatmap_tiles(range, sort, None, true, now)
+    }
+
+    pub fn benchmark_tiles(&self, range: DateRange, now: DateTime<Utc>) -> Result<Vec<MarketTile>> {
+        let mut tiles = Vec::with_capacity(MarketBenchmark::ALL.len());
+        for benchmark in MarketBenchmark::ALL {
+            let Some(detail) = self.ticker_detail(benchmark.symbol, range, now, 0)? else {
+                continue;
+            };
+            let latest_bar = detail.bars.last();
+            let updated_at = detail
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.updated_at)
+                .or_else(|| latest_bar.map(|bar| bar.timestamp));
+            tiles.push(MarketTile {
+                price: detail
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.price)
+                    .or_else(|| latest_bar.map(|bar| bar.close)),
+                volume: detail
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.volume)
+                    .or_else(|| latest_bar.map(|bar| bar.volume)),
+                starred: detail.starred,
+                stale: updated_at.is_none_or(|updated| {
+                    now.signed_duration_since(updated).num_hours() > STALE_AFTER_HOURS
+                }),
+                updated_at,
+                company: detail.company,
+                period_return: detail.period_return,
+            });
+        }
+        Ok(tiles)
     }
 
     pub fn ticker_detail(
@@ -1162,8 +1241,8 @@ fn choose_timeframe(range: DateRange, available: Option<&HashSet<String>>) -> &'
         DateRange::Week => &["1Hour", "1Day", "15Min", "5Min", "1Week"],
         DateRange::Month => &["1Hour", "1Day", "1Week"],
         DateRange::ThreeMonths | DateRange::SixMonths => &["1Day", "1Hour", "1Week"],
-        DateRange::Year => &["1Day", "1Week", "1Hour"],
-        DateRange::FiveYears => &["1Week", "1Day"],
+        DateRange::Year | DateRange::TwoYears => &["1Day", "1Week", "1Hour"],
+        DateRange::FiveYears | DateRange::TenYears | DateRange::All => &["1Week", "1Day"],
     };
     available
         .and_then(|available| {
@@ -1713,6 +1792,34 @@ mod tests {
     }
 
     #[test]
+    fn benchmark_tiles_use_retained_sectorless_company_data() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        let benchmark = MarketBenchmark::ALL[0].company(now);
+        storage.upsert_companies(&[benchmark])?;
+        storage.upsert_bars(&[
+            bar("SPY", instant(5), 600.0, 1_000.0),
+            bar("SPY", now, 612.0, 2_000.0),
+        ])?;
+        storage.upsert_snapshots(&[snapshot("SPY", 612.0, 606.0, 2_000.0, now)])?;
+
+        let tiles = storage.benchmark_tiles(DateRange::Week, now)?;
+
+        assert_eq!(tiles.len(), 1);
+        assert_eq!(tiles[0].company.symbol, "SPY");
+        assert_eq!(tiles[0].company.sector, None);
+        assert_eq!(tiles[0].price, Some(612.0));
+        assert!(
+            tiles[0]
+                .period_return
+                .is_some_and(|value| (value - 0.02).abs() < f64::EPSILON * 4.0)
+        );
+        assert!(!tiles[0].stale);
+        Ok(())
+    }
+
+    #[test]
     fn search_checkpoints_concurrent_connections_and_reset() -> Result<()> {
         let directory = tempdir()?;
         let storage = Storage::open(directory.path().join("market.sqlite3"))?;
@@ -1738,8 +1845,22 @@ mod tests {
         ])?;
         assert_eq!(storage.search("cat", 10)?[0].symbol, "CAT");
         storage.set_sync_checkpoint("snapshots", now)?;
+        storage.set_sync_checkpoints(
+            &[
+                "history:1Week:all:symbol:CAT".to_owned(),
+                "history:1Week:all:symbol:C".to_owned(),
+            ],
+            now,
+        )?;
         assert_eq!(storage.sync_checkpoint("snapshots")?, Some(now));
         assert_eq!(storage.sync_checkpoint("history")?, None);
+        assert_eq!(
+            storage.sync_checkpoint_scopes("history:1Week:all")?,
+            HashSet::from([
+                "history:1Week:all:symbol:C".to_owned(),
+                "history:1Week:all:symbol:CAT".to_owned(),
+            ])
+        );
 
         let handles = (0_u16..4)
             .map(|index| {

@@ -293,7 +293,9 @@ fn format_axis_time(timestamp: DateTime<Utc>, range: DateRange, width: u16) -> S
         DateRange::Month | DateRange::ThreeMonths | DateRange::SixMonths | DateRange::Year => {
             local.format("%b %d").to_string()
         }
-        DateRange::FiveYears => local.format("%b %Y").to_string(),
+        DateRange::TwoYears | DateRange::FiveYears | DateRange::TenYears | DateRange::All => {
+            local.format("%b %Y").to_string()
+        }
     }
 }
 
@@ -369,7 +371,7 @@ fn render_area_gradient(
         for row in 0..area.height {
             let cell_top = bounds[1] - span * f64::from(row) / f64::from(area.height);
             let cell_bottom = bounds[1] - span * f64::from(row + 1) / f64::from(area.height);
-            let amount = area_gradient_amount(price, cell_top, cell_bottom, bounds[0]);
+            let amount = area_gradient_amount(price, cell_top, cell_bottom, bounds[0], bounds[1]);
             if amount > 0.0 {
                 buffer[(area.x + column, area.y + row)].set_bg(blend_color(PANEL, accent, amount));
             }
@@ -390,11 +392,22 @@ fn braille_column_price(points: &[(f64, f64)], column: usize, width: usize) -> O
     Some((left + right) * 0.5)
 }
 
-fn area_gradient_amount(price: f64, cell_top: f64, cell_bottom: f64, floor: f64) -> f64 {
+fn area_gradient_amount(
+    price: f64,
+    cell_top: f64,
+    cell_bottom: f64,
+    floor: f64,
+    ceiling: f64,
+) -> f64 {
     const OUTER_EDGE_AMOUNT: f64 = 0.055;
 
     let cell_height = cell_top - cell_bottom;
-    if !cell_height.is_finite() || cell_height <= 0.0 {
+    let vertical_span = ceiling - floor;
+    if !cell_height.is_finite()
+        || cell_height <= 0.0
+        || !vertical_span.is_finite()
+        || vertical_span <= 0.0
+    {
         return 0.0;
     }
     if price <= cell_bottom {
@@ -403,9 +416,8 @@ fn area_gradient_amount(price: f64, cell_top: f64, cell_bottom: f64, floor: f64)
     }
 
     let cell_center = (cell_top + cell_bottom) * 0.5;
-    let fill_span = (price - floor).max(f64::EPSILON);
-    let depth = ((price - cell_center) / fill_span).clamp(0.0, 1.0);
-    let inside_amount = 0.05 + 0.30 * (1.0 - depth).powf(1.4);
+    let vertical_position = ((cell_center - floor) / vertical_span).clamp(0.0, 1.0);
+    let inside_amount = 0.05 + 0.30 * vertical_position.powf(1.4);
     let coverage = ((price - cell_bottom) / cell_height).clamp(0.0, 1.0);
     OUTER_EDGE_AMOUNT + (inside_amount - OUTER_EDGE_AMOUNT) * coverage.powf(0.7)
 }
@@ -675,17 +687,27 @@ mod tests {
 
     #[test]
     fn area_gradient_softens_both_sides_of_the_trace_boundary() {
-        let boundary = area_gradient_amount(9.9, 10.0, 9.0, 0.0);
-        let just_outside = area_gradient_amount(9.9, 11.0, 10.0, 0.0);
-        let far_outside = area_gradient_amount(9.9, 12.0, 11.0, 0.0);
-        let deep_inside = area_gradient_amount(9.9, 5.0, 4.0, 0.0);
-        let entering_from_outside = area_gradient_amount(8.999, 10.0, 9.0, 0.0);
-        let entering_from_inside = area_gradient_amount(9.001, 10.0, 9.0, 0.0);
+        let boundary = area_gradient_amount(9.9, 10.0, 9.0, 0.0, 12.0);
+        let just_outside = area_gradient_amount(9.9, 11.0, 10.0, 0.0, 12.0);
+        let far_outside = area_gradient_amount(9.9, 12.0, 11.0, 0.0, 12.0);
+        let deep_inside = area_gradient_amount(9.9, 5.0, 4.0, 0.0, 12.0);
+        let entering_from_outside = area_gradient_amount(8.999, 10.0, 9.0, 0.0, 12.0);
+        let entering_from_inside = area_gradient_amount(9.001, 10.0, 9.0, 0.0, 12.0);
 
         assert!(boundary > deep_inside);
         assert!(just_outside > 0.0);
         assert_eq!(far_outside, 0.0);
         assert!((entering_from_outside - entering_from_inside).abs() < 0.01);
+    }
+
+    #[test]
+    fn area_gradient_interior_intensity_depends_only_on_y() {
+        let below_lower_trace = area_gradient_amount(7.0, 6.0, 5.0, 0.0, 10.0);
+        let below_higher_trace = area_gradient_amount(9.0, 6.0, 5.0, 0.0, 10.0);
+        let lower_row = area_gradient_amount(9.0, 2.0, 1.0, 0.0, 10.0);
+
+        assert_eq!(below_lower_trace, below_higher_trace);
+        assert!(below_lower_trace > lower_row);
     }
 
     #[test]
@@ -823,9 +845,16 @@ mod tests {
             format_axis_time(timestamp, DateRange::Month, 80).len(),
             "Jul 23".len()
         );
-        assert_eq!(
-            format_axis_time(timestamp, DateRange::FiveYears, 80).len(),
-            "Jul 2026".len()
-        );
+        for range in [
+            DateRange::TwoYears,
+            DateRange::FiveYears,
+            DateRange::TenYears,
+            DateRange::All,
+        ] {
+            assert_eq!(
+                format_axis_time(timestamp, range, 80).len(),
+                "Jul 2026".len()
+            );
+        }
     }
 }

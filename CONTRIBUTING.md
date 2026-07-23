@@ -44,8 +44,9 @@ cargo run -- --demo --db /tmp/stock-tui-development.sqlite3
 ```
 
 Use a private, platform-appropriate temporary path on systems without `/tmp`.
-The demo is deterministic and covers 900 companies, all seven date ranges,
-charts, news, search, and favorites without consuming API quota.
+The demo is deterministic and covers 900 sector companies plus three benchmark
+ETF proxies, all ten date ranges, charts, news, search, and favorites without
+consuming API quota.
 `--reset-demo` is deliberately destructive to its selected database, so never
 point that command at a cache or favorites list you need to retain.
 

@@ -9,12 +9,13 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    domain::{DateRange, NewsItem, SortMode, TickerDetail},
-    palette::{AMBER, BORDER, CANVAS, CYAN, MUTED, PANEL, PANEL_ALT, TEXT, detail_tint},
+    benchmarks::MarketBenchmark,
+    domain::{DateRange, MarketTile, NewsItem, SortMode, TickerDetail},
+    palette::{AMBER, BORDER, CANVAS, CYAN, HeatScale, MUTED, PANEL, PANEL_ALT, TEXT, detail_tint},
     ui::{
         chart::render_price_volume,
         heatmap,
-        layout::{AppLayout, LayoutMode},
+        layout::{AppLayout, LayoutMode, uniform_grid},
         state::{DetailTab, Overlay, Route, UiAction, UiState},
     },
 };
@@ -181,22 +182,7 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         );
         y += 1;
     }
-    for (index, range) in DateRange::ALL.into_iter().enumerate() {
-        if y >= area.bottom().saturating_sub(3) {
-            break;
-        }
-        let label = format!("{}: {}", index + 1, range.label());
-        y = rail_button(
-            frame,
-            state,
-            area,
-            y,
-            "",
-            &label,
-            UiAction::SelectRange(range),
-            state.date_range == range,
-        );
-    }
+    render_range_buttons(frame, state, area, y, area.bottom().saturating_sub(3));
     let bottom = area.bottom();
     if bottom >= area.y + 3 {
         rail_button(
@@ -229,6 +215,58 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             UiAction::OpenHelp,
             false,
         );
+    }
+}
+
+fn render_range_buttons(
+    frame: &mut Frame<'_>,
+    state: &mut UiState,
+    rail: Rect,
+    y: u16,
+    limit: u16,
+) {
+    let available_rows = limit.saturating_sub(y);
+    let columns = if usize::from(available_rows) >= DateRange::ALL.len() {
+        1_u16
+    } else {
+        2
+    };
+    let rows = u16::try_from(DateRange::ALL.len().div_ceil(usize::from(columns)))
+        .unwrap_or(available_rows);
+    let column_width = rail.width / columns;
+    for (index, range) in DateRange::ALL.into_iter().enumerate() {
+        let index = u16::try_from(index).unwrap_or(u16::MAX);
+        let column = index / rows;
+        let row = index % rows;
+        if row >= available_rows || column >= columns {
+            continue;
+        }
+        let x = rail.x + column * column_width;
+        let width = if column + 1 == columns {
+            rail.right().saturating_sub(x)
+        } else {
+            column_width
+        };
+        let rect = Rect::new(x, y + row, width, 1);
+        let active = state.date_range == range;
+        let style = if active {
+            Style::default()
+                .fg(CANVAS)
+                .bg(CYAN)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(TEXT).bg(PANEL)
+        };
+        frame.buffer_mut().set_style(rect, style);
+        let label = if columns == 1 {
+            format!("  {}: {}", range.shortcut(), range.label())
+        } else {
+            format!(" {}:{}", range.shortcut(), range.label())
+        };
+        frame
+            .buffer_mut()
+            .set_stringn(rect.x, rect.y, label, rect.width as usize, style);
+        state.register(rect, UiAction::SelectRange(range), None);
     }
 }
 
@@ -267,7 +305,11 @@ fn rail_button(
     y + 1
 }
 
-fn render_footer(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
+fn render_footer(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    if matches!(state.route, Route::Overview) {
+        render_benchmark_footer(frame, state, area);
+        return;
+    }
     let freshness = state.snapshot_checkpoint.map_or_else(
         || {
             if state.simulated_data {
@@ -298,6 +340,102 @@ fn render_footer(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
             .style(Style::default().fg(MUTED).bg(PANEL_ALT)),
         Rect::new(area.x + left_width, area.y, area.width - left_width, 1),
     );
+}
+
+fn render_benchmark_footer(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().bg(PANEL_ALT));
+    let floor = if state.date_range == DateRange::Day {
+        0.005
+    } else {
+        0.01
+    };
+    let scale = HeatScale::from_values(
+        state.benchmarks.iter().map(|tile| tile.period_return),
+        floor,
+        state.theme,
+    );
+    let cells = uniform_grid(area, MarketBenchmark::ALL.len() as u16, 1);
+    let mut targets = Vec::with_capacity(MarketBenchmark::ALL.len());
+    for (index, (benchmark, cell)) in MarketBenchmark::ALL.into_iter().zip(cells).enumerate() {
+        let tile = state
+            .benchmarks
+            .iter()
+            .find(|tile| tile.company.symbol == benchmark.symbol);
+        let period_return = tile.and_then(|tile| tile.period_return);
+        let selected = state.selected_benchmark == Some(index);
+        let mut style = Style::default()
+            .fg(if selected {
+                scale.focus_color(period_return)
+            } else {
+                scale.text_color(period_return)
+            })
+            .bg(scale.color(period_return));
+        if selected {
+            style = style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+        } else if tile.is_some_and(|tile| tile.stale) {
+            style = style.add_modifier(Modifier::UNDERLINED);
+        }
+        frame.render_widget(
+            Paragraph::new(benchmark_footer_text(benchmark, tile, cell.width))
+                .centered()
+                .style(style),
+            cell,
+        );
+        targets.push((cell, benchmark.symbol.to_owned()));
+    }
+    for (cell, symbol) in targets {
+        state.register(cell, UiAction::OpenTicker(symbol), None);
+    }
+}
+
+fn benchmark_footer_text(
+    benchmark: MarketBenchmark,
+    tile: Option<&MarketTile>,
+    width: u16,
+) -> String {
+    let full_label = format!("{} · {}", benchmark.label, benchmark.symbol);
+    let tight_label = format!("{}·{}", benchmark.label, benchmark.symbol);
+    let full_price = tile
+        .and_then(|tile| tile.price)
+        .map_or_else(|| "--".to_owned(), format_price);
+    let compact_price = tile.and_then(|tile| tile.price).map_or_else(
+        || "--".to_owned(),
+        |price| {
+            if price.abs() >= 1_000.0 {
+                format!("${}", format_compact(price))
+            } else {
+                format!("${price:.0}")
+            }
+        },
+    );
+    let full_return = tile
+        .and_then(|tile| tile.period_return)
+        .map_or_else(|| "--".to_owned(), format_percent);
+    let compact_return = tile.and_then(|tile| tile.period_return).map_or_else(
+        || "--".to_owned(),
+        |value| format!("{:+.1}%", value * 100.0),
+    );
+    let candidates = [
+        format!("{full_label}  {full_price}  {full_return}"),
+        format!("{tight_label} {compact_price} {compact_return}"),
+        format!("{} {compact_price} {compact_return}", benchmark.symbol),
+    ];
+    let width = usize::from(width);
+    candidates
+        .iter()
+        .find(|candidate| candidate.width() <= width)
+        .cloned()
+        .unwrap_or_else(|| truncate_to_width(&candidates[2], width))
+}
+
+fn truncate_to_width(value: &str, width: usize) -> String {
+    let mut value = value.to_owned();
+    while value.width() > width {
+        value.pop();
+    }
+    value
 }
 
 fn render_detail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, mode: LayoutMode) {
@@ -389,22 +527,29 @@ fn render_detail_header(
     area: Rect,
     tint: Color,
 ) {
-    let price = detail
-        .snapshot
-        .as_ref()
-        .and_then(|snapshot| snapshot.price)
-        .map_or_else(|| "--".to_owned(), |value| format!("${value:.2}"));
+    let price_value = detail.snapshot.as_ref().and_then(|snapshot| snapshot.price);
+    let price = price_value.map_or_else(|| "--".to_owned(), |value| format!("${value:.2}"));
     let period_return = detail.period_return.map_or_else(
         || "--".to_owned(),
         |value| format!("{:+.2}%", value * 100.0),
     );
-    let rank = detail
-        .sector_rank
-        .map_or_else(|| "--".to_owned(), |value| format!("#{value}"));
-    let sector = detail
-        .company
-        .sector
-        .map_or("Unclassified", |sector| sector.label());
+    let period_gain = price_value
+        .zip(detail.period_return)
+        .and_then(|(price, period_return)| absolute_period_gain(price, period_return))
+        .map_or_else(|| "--".to_owned(), format_signed_price);
+    let classification = MarketBenchmark::for_symbol(&detail.company.symbol).map_or_else(
+        || {
+            let rank = detail
+                .sector_rank
+                .map_or_else(|| "--".to_owned(), |value| format!("#{value}"));
+            let sector = detail
+                .company
+                .sector
+                .map_or("Unclassified", |sector| sector.label());
+            format!("{sector}  ·  {rank} in sector")
+        },
+        |benchmark| format!("{} benchmark  ·  ETF proxy", benchmark.label),
+    );
     let favorite = if detail.starred { "★" } else { "☆" };
     let favorite_offset = detail.company.symbol.width() as u16 + 2;
     let lines = vec![
@@ -417,7 +562,7 @@ fn render_detail_header(
                     .bold(),
             ),
             Span::styled(
-                format!("  {price}  {period_return}"),
+                format!("  {price}  {period_gain}  {period_return}"),
                 Style::default().fg(TEXT).bold(),
             ),
         ]),
@@ -425,10 +570,7 @@ fn render_detail_header(
             format!(" {}", detail.company.name),
             Style::default().fg(TEXT),
         ),
-        Line::styled(
-            format!(" {sector}  ·  {rank} in sector"),
-            Style::default().fg(MUTED),
-        ),
+        Line::styled(format!(" {classification}"), Style::default().fg(MUTED)),
     ];
     frame.render_widget(
         Paragraph::new(lines)
@@ -704,7 +846,7 @@ fn render_sort(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 }
 
 fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
-    let modal = centered(area, 58.min(area.width.saturating_sub(4)), 17);
+    let modal = centered(area, 58.min(area.width.saturating_sub(4)), 19);
     frame.render_widget(Clear, modal);
     let content = vec![
         Line::styled("Keyboard", Style::default().fg(CYAN).bold()),
@@ -717,8 +859,10 @@ fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
         Line::from("Starred      F"),
         Line::from("Refresh      r"),
         Line::from("Data status  S"),
-        Line::from("Ranges       1..7 or [ ]"),
+        Line::from("Ranges       1..9, 0 or [ ]"),
+        Line::from("Sectors      Alt/Meta + c s h e t f i m u"),
         Line::from("Detail tabs  Tab"),
+        Line::from("Detail       Left/Right chart, Up/Down news"),
         Line::from("Quit         q"),
         Line::from(""),
         Line::styled("Market prices and news: Alpaca", Style::default().fg(MUTED)),
@@ -738,7 +882,7 @@ fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
 }
 
 fn render_sync(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
-    let modal = centered(area, 62.min(area.width.saturating_sub(4)), 11);
+    let modal = centered(area, 62.min(area.width.saturating_sub(4)), 13);
     frame.render_widget(Clear, modal);
     let percent = (state.sync.fraction() * 100.0).round();
     let error = state.sync.last_error.as_deref().unwrap_or("None");
@@ -763,6 +907,14 @@ fn render_sync(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         Line::from(format!("Status      {}", state.sync.message)),
         Line::from(format!("Auto refresh {cadence}")),
         Line::from(format!("Price cache {snapshot}")),
+        Line::styled(
+            "Coverage     Refresh requests every retained ticker",
+            Style::default().fg(MUTED),
+        ),
+        Line::styled(
+            "Stale data   Provider observation is over 72h old",
+            Style::default().fg(MUTED),
+        ),
         Line::styled(format!("Last error  {error}"), Style::default().fg(MUTED)),
     ];
     frame.render_widget(
@@ -808,6 +960,20 @@ fn performance_accent(value: Option<f64>) -> Color {
 
 fn format_price(value: f64) -> String {
     format!("${value:.2}")
+}
+
+fn format_signed_price(value: f64) -> String {
+    let sign = if value.is_sign_negative() { '-' } else { '+' };
+    format!("{sign}${:.2}", value.abs())
+}
+
+fn absolute_period_gain(price: f64, period_return: f64) -> Option<f64> {
+    let denominator = 1.0 + period_return;
+    if price.is_finite() && denominator.is_finite() && denominator.abs() > f64::EPSILON {
+        Some(price - price / denominator)
+    } else {
+        None
+    }
 }
 
 fn format_percent(value: f64) -> String {

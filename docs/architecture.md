@@ -39,6 +39,7 @@ the relevant cached view. The renderer never performs HTTP requests.
 | `config` | Resolves project directories, `.env`, TOML, environment, defaults, and redacted credentials. |
 | `logging` | Writes non-ANSI daily tracing logs below the platform cache directory. |
 | `domain` | Defines sectors, date ranges, sort modes, companies, bars, snapshots, news, tiles, and sync state. |
+| `benchmarks` | Defines the labeled ETF proxies displayed beneath the sector overview. |
 | `universe` | Loads the versioned issuer catalog used to seed the nine sector memberships. |
 | `providers` | Defines provider traits and translates authenticated Alpaca responses into domain records. |
 | `storage` | Owns SQLite migrations, transactions, search, favorites, period metrics, and detail queries. |
@@ -64,9 +65,10 @@ blocking worker if it does not already contain a complete demo data set.
 The generator selects the first 100 ranked identities in each of the nine
 sectors from the embedded SEC catalog. It then creates simulated rankings,
 snapshots, two clearly marked simulated headlines per company, and `5Min`,
-`1Hour`, `1Day`, and `1Week` bars sufficient for every range. Issuer identity
-and exchange associations come from the catalog; every displayed market value
-is deterministic demo data rather than a factual quote.
+`1Hour`, `1Day`, and `1Week` bars sufficient for every range through `10Y` and
+the complete generated demo history used by `ALL`. Issuer identity and exchange
+associations come from the catalog; every displayed market value is
+deterministic demo data rather than a factual quote.
 
 ### Live Mode
 
@@ -79,14 +81,17 @@ rank. It then loads cached tiles and starts the provider worker unless
 
 The worker initially:
 
-1. Fetches snapshots for retained sector candidates in batches.
-2. Estimates market cap as current price times SEC-reported shares where both
+1. Reconciles the candidate catalog against Alpaca's active US-equity assets
+   and recomputes memberships. Active catalog candidates are retained or
+   reactivated; missing candidates leave the current universe while their
+   rows, cached data, and favorites remain stored.
+2. Fetches snapshots for retained candidates in batches.
+3. Estimates market cap as current price times SEC-reported shares where both
    exist, then writes a new top-100 membership for each sector. Catalog proxy
    rank breaks ties and covers candidates without usable shares.
-3. Starts an adjusted five-year daily-bar backfill for the selected 900 members
-   in the background.
-4. Refreshes active Alpaca asset names and exchanges without discarding the
-   candidate catalog's sector/rank metadata.
+4. Starts adjusted two-year daily-bar and all-provider-available weekly-bar
+   backfills for the selected 900 members and three benchmark ETF proxies in
+   the background.
 
 It then accepts manual or timed snapshot refresh commands and ticker-detail
 requests. Opening a ticker reads cached detail immediately and requests a
@@ -99,7 +104,8 @@ See [Cache and Sync](cache-and-sync.md) for watermarks and failure behavior.
 
 The UI has four routes:
 
-- `Overview`: nine sector panels in a fixed 3x3 order.
+- `Overview`: nine sector panels in a fixed 3x3 order plus a selectable
+  `SPY`/`DIA`/`QQQ` benchmark-proxy strip.
 - `Sector`: up to 100 companies in an adaptive grid.
 - `Ticker`: a tinted detail view for one cached company.
 - `Favorites`: the persisted starred-company subset.
@@ -190,7 +196,8 @@ cache retention, attribution, and redistribution restrictions. See
   backoff; `Retry-After` is honored up to 30 seconds.
 - Provider errors update the status/sync overlay but do not delete cached data.
 - Each history batch is independently upserted, so a later run resumes from
-  the cache rather than restarting the whole five-year window.
+  per-symbol checkpoints and cached watermarks rather than restarting each
+  complete history window.
 - Normal shutdown gives the provider worker a bounded grace period to finish
   current cache work before outstanding network tasks are aborted.
 - Offline mode never creates a provider worker.

@@ -87,27 +87,35 @@ leaves the top-100 universe, provided its company row is retained.
 ### `sync_checkpoints`
 
 Successful completion times keyed by a textual scope such as `snapshots`,
-`history:1Day:all`, or `demo`. Checkpoints contain no credentials.
+`history:1Day:2Y`, `history:1Week:all`, their per-symbol child scopes, or the
+versioned demo scope. Checkpoints contain no credentials.
 
 ## First Live Launch
 
-An empty live database is populated in stages:
+A live database is prepared in stages:
 
 1. Upsert the embedded SEC-derived catalog. It contains between 100 and 250
-   retained candidates per sector, depending on the number of eligible SEC
-   facts; candidates are initially outside the active universe.
-2. Select 100 initial members per sector. With no cached market caps this uses
-   the catalog's descending SEC public-float proxy rank.
-3. Request current snapshots for all retained sector candidates in
-   configurable batches (100 by default).
-4. Where SEC-reported shares are available, calculate an estimated market cap
+   candidates per sector, depending on the number of eligible SEC facts.
+   Previously reconciled retention flags survive this bootstrap.
+2. Select up to 100 retained initial members per sector. With no cached market
+   caps this uses the catalog's descending SEC public-float proxy rank.
+3. Fetch Alpaca's active US-equity asset list before requesting snapshots.
+   Present catalog candidates are reactivated; missing candidates are removed
+   from current membership without deleting their company rows, favorites, or
+   cached data. Memberships are then recomputed and current names/exchanges
+   are merged without erasing catalog sector, rank, or market-cap metadata.
+4. Request current snapshots for all retained sector candidates and the three
+   benchmark ETF proxies in configurable batches (100 by default).
+5. Where SEC-reported shares are available, calculate an estimated market cap
    from shares times current price. Re-select 100 members per sector by known
    market cap first and proxy rank as fallback, and store a dated snapshot.
-5. Start adjusted `1Day` history requests for only those selected 900 companies
-   over the prior 1,826 days, in configurable 50-symbol batches.
-6. Fetch Alpaca's active US-equity asset list and merge current names/exchanges
-   without erasing catalog sector, rank, market cap, or retention flags. Other
-   active Alpaca assets can remain searchable without joining a heatmap sector.
+6. Start adjusted history requests for those selected 900 companies and three
+   benchmark ETF proxies in configurable 50-symbol batches: two years of
+   `1Day` bars and all provider-available `1Week` bars.
+
+Other active Alpaca assets can remain searchable without joining a heatmap
+sector. If the active-asset request fails, startup reports the provider error
+and continues from the last reconciled retention state in the cache.
 
 The UI remains interactive during history population. A tile can be neutral or
 marked stale until enough data for its selected range arrives. The Data Status
@@ -115,19 +123,26 @@ overlay shows phase, completed/total counts, automatic-refresh cadence, the
 latest snapshot-cache checkpoint, status text, and the last provider error.
 Opening this overlay with `S` is read-only and does not start a request.
 
-## Incremental Five-Year Sync
+## Incremental History Sync
 
-Before each history batch, the worker examines the latest cached `1Day` bar for
-every selected-universe symbol in that batch:
+The bulk cache has two plans: `1Day` bars beginning 731 days before now and
+`1Week` bars beginning at the unbounded `ALL` cutoff. For Alpaca, an unbounded
+request returns whatever history the account and feed make available rather
+than manufacturing data before the provider's coverage.
 
-- If any member lacks a watermark, the request begins 1,826 days before now so
-  a newly selected company cannot inherit a peer's shorter window.
-- Otherwise it begins seven days before the earliest watermark in the batch.
+Each plan records completion per symbol. Before a batch:
+
+- If any member lacks that plan's completion checkpoint or latest-bar
+  watermark, the request uses the plan's full initial cutoff. A newly selected
+  company therefore cannot inherit a peer's shorter window.
+- Otherwise the request begins seven days before the earliest latest-bar
+  watermark in the batch.
 
 The seven-day overlap repairs recently adjusted or late bars and makes restart
 behavior robust. Primary-key upserts make the overlap idempotent. Each batch is
-committed independently, so quitting after 300 of 900 symbols preserves those
-results; a later launch resumes from the stored watermarks.
+committed independently, so quitting partway through preserves completed
+symbols; a later launch resumes from the stored watermarks. A plan-level
+checkpoint is written only after every batch in that plan succeeds.
 
 History requests use `adjustment=all`, ascending order, pagination, and the
 configured feed. "Adjusted" is provider-defined and does not guarantee that
@@ -156,6 +171,14 @@ closure, which is an informational hint rather than a feed diagnosis. Stale
 ticker labels are underlined while retaining the same contrast-aware foreground
 as current labels.
 
+Every broad refresh requests every currently retained candidate and benchmark
+proxy. A successful request does not guarantee a new observation for every
+symbol: an active but thinly traded security can still carry an older IEX trade
+timestamp, and the client deliberately does not replace it with the request
+time. The active-asset reconciliation at startup removes inactive catalog
+symbols from current membership while preserving their cached history and
+favorite state.
+
 ## Lazy Detail Sync
 
 Opening a ticker first loads its cached record, then concurrently requests:
@@ -170,22 +193,24 @@ Preferred chart timeframes are:
 | --- | --- |
 | `1D` | `5Min` |
 | `1W`, `1M` | `1Hour` |
-| `3M`, `6M`, `1Y` | `1Day` |
-| `5Y` | `1Week` |
+| `3M`, `6M`, `1Y`, `2Y` | `1Day` |
+| `5Y`, `10Y`, `ALL` | `1Week` |
 
 While a preferred timeframe is not cached, storage chooses an available
 fallback appropriate for that range. Changing the range on a detail view
 triggers another lazy request and redraws from whatever is already cached.
 
-News is not globally downloaded for all 900 companies. This keeps startup and
-provider usage bounded. Cached headlines remain available offline.
+News is not globally downloaded for every sector company or benchmark proxy.
+This keeps startup and provider usage bounded. Cached headlines remain
+available offline.
 
 ## Period Calculations And Sorting
 
 For non-day ranges, the baseline is the last close at or before the exact
 cutoff, falling back to the first close after it. Return is latest close divided
 by baseline minus one. Calendar-day cutoffs mean the number of trading sessions
-varies with weekends and holidays.
+varies with weekends and holidays. `ALL` uses the earliest bar present in the
+provider-backed local cache.
 
 Sort modes operate within each sector:
 
@@ -205,11 +230,14 @@ symbol matches rank first, then name prefixes, current-universe status, market
 cap, and symbol. The UI requests at most 20 results.
 
 Company rows support `in_universe` and `retained` independently. SEC-derived
-sector candidates remain retained so snapshot refresh can move a candidate
-into or out of the top 100 without discarding identity or cached data. An
-updated embedded catalog is still required to consider an issuer absent from
-the current candidate set. The current release does not run automatic garbage
-collection for old retained companies.
+sector candidates reported by Alpaca as active are retained so snapshot refresh
+can move them into or out of the top 100. A catalog candidate missing from the
+active-asset response is marked unretained and removed from current membership,
+but its company row, bars, news, and favorite remain intact. A later active
+response reactivates that candidate. An updated embedded catalog is still
+required to consider an issuer absent from the current candidate set. The
+current release does not run automatic garbage collection for old company
+rows.
 
 ## Offline And Demo Behavior
 
@@ -218,12 +246,12 @@ database. It does not update freshness timestamps or fetch a search miss.
 
 Demo mode writes simulated records into the selected database and records a
 versioned demo checkpoint. It reuses a complete cache only when that checkpoint
-matches the current generator. The v1-to-v2 migration replaces the old
-fabricated ticker identities with real SEC-catalog identities and restores
-favorites whose symbols remain in the new universe. `--reset-demo` clears every
-table in the selected database, including favorites and live-provider data,
-before regeneration. Because live and demo data share a schema, use separate
-paths when switching modes or preserving a valuable live cache.
+matches the current generator. Any recognized older demo checkpoint triggers a
+clean regeneration so incompatible historical rows cannot overlap; favorites
+whose symbols remain in the new universe are restored. `--reset-demo` clears
+every table in the selected database, including favorites and live-provider
+data, before regeneration. Because live and demo data share a schema, use
+separate paths when switching modes or preserving a valuable live cache.
 
 ## Operational Guidance
 

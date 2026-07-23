@@ -13,8 +13,9 @@ and terms change; verify them for your account and use case.
 | --- | --- | --- | --- |
 | Nine-sector candidates and proxy rank | Versioned catalog generated from SEC identity, SIC, and XBRL facts | Yes | Keeps 100-250 candidates per sector and displays the selected top 100. |
 | Issuer name, ticker, exchange associations | US SEC EDGAR catalog, supplemented by Alpaca active assets | Yes | Associations are identifiers, not a complete security master. |
+| Overview benchmarks | Alpaca stock data for `SPY`, `DIA`, and `QQQ` ETF proxies | Yes | Labeled as proxies; values are not literal S&P 500, Dow, or Nasdaq index levels. |
 | Current price, previous close, OHLC, volume | Alpaca stock snapshots | Yes | Coverage depends on the selected feed and subscription. |
-| Historical OHLCV, trades, VWAP | Alpaca multi-symbol bars | Yes | Requests use `adjustment=all`; five-year bulk cache uses daily bars. |
+| Historical OHLCV, trades, VWAP | Alpaca multi-symbol bars | Yes | Requests use `adjustment=all`; the bulk cache keeps two years of daily bars and all available weekly bars. |
 | News headline, date, source, summary, URL, symbols | Alpaca Historical News API (currently Benzinga content) | Yes | Loaded lazily for an opened ticker. |
 | Demo issuer identities | Embedded SEC-derived catalog | Yes | Real ticker/name associations; not a claim that the security remains active. |
 | Demo prices, rankings, volume, descriptions, news | Built-in deterministic generator | Yes | Entirely simulated and visibly labeled; no provider market data is used. |
@@ -39,7 +40,21 @@ Relevant official documentation:
 - [Historical stock data](https://docs.alpaca.markets/us/docs/historical-stock-data-1)
 - [Historical news data](https://docs.alpaca.markets/us/docs/historical-news-data)
 - [News endpoint reference](https://docs.alpaca.markets/us/reference/news-3)
+- [Index market-data launch](https://docs.alpaca.markets/us/changelog/2026-06-03-market-data-9dddd18)
 - [Alpaca disclosures and agreements](https://alpaca.markets/disclosures)
+
+### Benchmark Proxies
+
+The overview uses `SPY` for the S&P 500, `DIA` for the Dow Jones Industrial
+Average, and `QQQ` for the Nasdaq-100. These liquid ETFs are explicitly labeled
+as proxies and use the same free-equity snapshot, bars, and news paths as other
+tickers, so each cell can open a complete detail view.
+
+Alpaca also exposes native index-value endpoints, but access depends on an
+account's index-data entitlement and those value records do not provide the
+same OHLCV/news contract as the stock endpoints. The client therefore does not
+silently substitute native index levels for ETF prices. A future provider can
+add entitled native indices as a separately labeled instrument type.
 
 ### Basic Plan And IEX
 
@@ -62,6 +77,14 @@ These are client-side limits, not a promise that an account is entitled to a
 request. Alpaca remains authoritative. The adapter handles pagination, retries
 transient failures, and reports authentication/permission errors without
 falling back to fabricated live values.
+
+At live startup, the client reconciles embedded sector candidates against
+Alpaca's active-asset response before requesting snapshots. Missing candidates
+are excluded from current memberships and routine snapshot refresh, but their
+company rows, favorites, and cached observations are preserved. A later
+active-asset response reactivates catalog candidates. Alpaca's `active` status
+does not by itself guarantee current liquidity, tradability for a particular
+account, or complete quote coverage.
 
 `sip` requires appropriate account entitlement for current consolidated data.
 When a requested snapshot feed is unavailable, the adapter may try an allowed
@@ -169,8 +192,9 @@ capitalization**. The build does not write it into `Company.market_cap`; it is
 only the initial ranking proxy. When both SEC-reported shares and an Alpaca
 snapshot price exist, runtime estimates market cap as shares times current
 price. Each successful candidate snapshot refresh then selects 100 companies
-per sector by known estimated market cap, with proxy rank as fallback. Only
-those 900 companies receive the bulk five-year history backfill.
+per sector by known estimated market cap, with proxy rank as fallback. Those
+900 companies and the three explicitly configured benchmark ETF proxies
+receive the bulk daily and all-provider-available weekly history backfills.
 
 This means a company can move into the visible top 100 as prices change if it
 is already in the embedded candidate pool and has usable shares. A new issuer,

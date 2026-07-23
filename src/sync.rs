@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use chrono::{Duration as ChronoDuration, Utc};
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -32,6 +35,29 @@ pub struct SyncHandle {
     pub worker: JoinHandle<()>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct HistoryPlan {
+    timeframe: &'static str,
+    range: DateRange,
+    checkpoint: &'static str,
+    message: &'static str,
+}
+
+const HISTORY_PLANS: [HistoryPlan; 2] = [
+    HistoryPlan {
+        timeframe: "1Day",
+        range: DateRange::TwoYears,
+        checkpoint: "history:1Day:2Y",
+        message: "Caching adjusted daily history",
+    },
+    HistoryPlan {
+        timeframe: "1Week",
+        range: DateRange::All,
+        checkpoint: "history:1Week:all",
+        message: "Caching all available weekly history",
+    },
+];
+
 pub fn spawn(settings: Settings, storage: Storage) -> SyncHandle {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
@@ -58,6 +84,10 @@ async fn run_worker(
         }
     };
     let cancellation = CancellationToken::new();
+    if let Err(error) = refresh_assets(&storage, provider.as_ref(), &events).await {
+        tracing::warn!(error = %error, "initial active-asset refresh failed");
+        let _ = events.send(SyncEvent::Error(error));
+    }
     let snapshots_ready = match refresh_snapshots(&storage, provider.as_ref(), &events).await {
         Ok(()) => true,
         Err(error) => {
@@ -75,11 +105,6 @@ async fn run_worker(
             settings.history_batch_size,
         ))
     });
-    let assets_task = tokio::spawn(refresh_assets(
-        storage.clone(),
-        Arc::clone(&provider),
-        events.clone(),
-    ));
 
     while let Some(command) = commands.recv().await {
         match command {
@@ -119,7 +144,6 @@ async fn run_worker(
     if let Some(task) = history_task {
         let _ = task.await;
     }
-    let _ = assets_task.await;
 }
 
 async fn refresh_snapshots(
@@ -132,7 +156,7 @@ async fn refresh_snapshots(
         .map_err(|error| error.to_string())?;
     let companies = companies
         .into_iter()
-        .filter(|company| company.sector.is_some() && (company.retained || company.in_universe))
+        .filter(is_snapshot_candidate)
         .collect::<Vec<_>>();
     let symbols: Vec<String> = companies
         .iter()
@@ -223,64 +247,79 @@ async fn backfill_history(
             return;
         }
     };
-    let total = companies.len();
+    let total = companies.len().saturating_mul(HISTORY_PLANS.len());
     let now = provider.latest_historical_end(Utc::now());
     let mut failed_batches = 0_usize;
-    let mut completed_symbols = 0_usize;
-    for (batch_index, batch) in companies.chunks(batch_size.max(1)).enumerate() {
-        if cancellation.is_cancelled() {
-            return;
-        }
-        let symbols: Vec<String> = batch.iter().map(|company| company.symbol.clone()).collect();
-        let watermarks = match batch
-            .iter()
-            .map(|company| storage.latest_bar_timestamp(&company.symbol, "1Day"))
-            .collect::<Result<Vec<_>, _>>()
-        {
-            Ok(watermarks) => watermarks,
+    let mut completed_units = 0_usize;
+    for (plan_index, plan) in HISTORY_PLANS.into_iter().enumerate() {
+        let completed_scopes = match storage.sync_checkpoint_scopes(plan.checkpoint) {
+            Ok(scopes) => scopes,
             Err(error) => {
-                failed_batches += 1;
                 let _ = events.send(SyncEvent::Error(error.to_string()));
-                continue;
+                return;
             }
         };
-        let start = if watermarks.iter().any(Option::is_none) {
-            now - ChronoDuration::days(1_826)
-        } else {
-            watermarks
-                .into_iter()
-                .flatten()
-                .min()
-                .map_or(now - ChronoDuration::days(1_826), |watermark| {
-                    watermark - ChronoDuration::days(7)
-                })
-        };
-        send_progress(
-            &events,
-            SyncPhase::History,
-            (batch_index * batch_size).min(total),
-            total,
-            "Caching adjusted daily history",
-            None,
-        );
-        match provider.fetch_bars(&symbols, "1Day", start, now).await {
-            Ok(bars) => {
-                if let Err(error) = storage.upsert_bars(&bars) {
+        let failures_before_plan = failed_batches;
+        for (batch_index, batch) in companies.chunks(batch_size.max(1)).enumerate() {
+            if cancellation.is_cancelled() {
+                return;
+            }
+            let symbols: Vec<String> = batch.iter().map(|company| company.symbol.clone()).collect();
+            let checkpoint_scopes = symbols
+                .iter()
+                .map(|symbol| history_symbol_checkpoint(plan, symbol))
+                .collect::<Vec<_>>();
+            let fully_backfilled = checkpoint_scopes
+                .iter()
+                .all(|scope| completed_scopes.contains(scope));
+            let watermarks = match batch
+                .iter()
+                .map(|company| storage.latest_bar_timestamp(&company.symbol, plan.timeframe))
+                .collect::<Result<Vec<_>, _>>()
+            {
+                Ok(watermarks) => watermarks,
+                Err(error) => {
                     failed_batches += 1;
                     let _ = events.send(SyncEvent::Error(error.to_string()));
-                } else {
-                    completed_symbols += batch.len();
-                    let _ = events.send(SyncEvent::DataChanged);
+                    continue;
+                }
+            };
+            let start = history_batch_start(plan, now, &watermarks, fully_backfilled);
+            send_progress(
+                &events,
+                SyncPhase::History,
+                (plan_index * companies.len() + batch_index * batch_size).min(total),
+                total,
+                plan.message,
+                None,
+            );
+            match provider
+                .fetch_bars(&symbols, plan.timeframe, start, now)
+                .await
+            {
+                Ok(bars) => {
+                    let result = storage
+                        .upsert_bars(&bars)
+                        .and_then(|_| storage.set_sync_checkpoints(&checkpoint_scopes, Utc::now()));
+                    if let Err(error) = result {
+                        failed_batches += 1;
+                        let _ = events.send(SyncEvent::Error(error.to_string()));
+                    } else {
+                        completed_units += batch.len();
+                        let _ = events.send(SyncEvent::DataChanged);
+                    }
+                }
+                Err(error) => {
+                    failed_batches += 1;
+                    let _ = events.send(SyncEvent::Error(error.to_string()));
                 }
             }
-            Err(error) => {
-                failed_batches += 1;
-                let _ = events.send(SyncEvent::Error(error.to_string()));
-            }
+        }
+        if failed_batches == failures_before_plan {
+            let _ = storage.set_sync_checkpoint(plan.checkpoint, Utc::now());
         }
     }
     if failed_batches == 0 {
-        let _ = storage.set_sync_checkpoint("history:1Day:all", Utc::now());
         send_progress(
             &events,
             SyncPhase::Complete,
@@ -293,12 +332,31 @@ async fn backfill_history(
         send_progress(
             &events,
             SyncPhase::Error,
-            completed_symbols,
+            completed_units,
             total,
             "Historical cache is incomplete; refresh to retry",
             Some(format!("{failed_batches} history batches failed")),
         );
     }
+}
+
+fn history_symbol_checkpoint(plan: HistoryPlan, symbol: &str) -> String {
+    format!("{}:symbol:{symbol}", plan.checkpoint)
+}
+
+fn history_batch_start(
+    plan: HistoryPlan,
+    now: chrono::DateTime<Utc>,
+    watermarks: &[Option<chrono::DateTime<Utc>>],
+    fully_backfilled: bool,
+) -> chrono::DateTime<Utc> {
+    if !fully_backfilled || watermarks.iter().any(Option::is_none) {
+        return plan.range.cutoff(now);
+    }
+    watermarks.iter().flatten().min().map_or_else(
+        || plan.range.cutoff(now),
+        |watermark| *watermark - ChronoDuration::days(7),
+    )
 }
 
 async fn refresh_ticker(
@@ -373,28 +431,65 @@ async fn refresh_ticker(
 }
 
 async fn refresh_assets(
-    storage: Storage,
-    provider: Arc<AlpacaProvider>,
-    events: mpsc::UnboundedSender<SyncEvent>,
-) {
-    let assets = match provider.fetch_assets().await {
-        Ok(assets) => assets,
-        Err(error) => {
-            let _ = events.send(SyncEvent::Error(error.to_string()));
-            return;
-        }
-    };
-    let existing: HashMap<String, Company> = match storage.companies(None, false) {
-        Ok(companies) => companies,
-        Err(error) => {
-            let _ = events.send(SyncEvent::Error(error.to_string()));
-            return;
-        }
+    storage: &Storage,
+    provider: &AlpacaProvider,
+    events: &mpsc::UnboundedSender<SyncEvent>,
+) -> Result<(), String> {
+    send_progress(
+        events,
+        SyncPhase::Universe,
+        0,
+        1,
+        "Checking active Alpaca assets",
+        None,
+    );
+    let assets = provider
+        .fetch_assets()
+        .await
+        .map_err(|error| error.to_string())?;
+    let existing: HashMap<String, Company> = storage
+        .companies(None, false)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|company| (company.symbol.clone(), company))
+        .collect();
+    let merged = reconcile_active_assets(assets, &existing, Utc::now());
+    storage
+        .upsert_companies(&merged)
+        .map_err(|error| error.to_string())?;
+    let as_of = Utc::now().date_naive();
+    for sector in Sector::ALL {
+        let candidates = merged
+            .iter()
+            .filter(|company| company.sector == Some(sector) && company.retained)
+            .cloned()
+            .collect::<Vec<_>>();
+        storage
+            .replace_memberships(as_of, sector, &candidates)
+            .map_err(|error| error.to_string())?;
     }
-    .into_iter()
-    .map(|company| (company.symbol.clone(), company))
-    .collect();
-    let merged: Vec<Company> = assets
+    send_progress(
+        events,
+        SyncPhase::Universe,
+        1,
+        1,
+        "Active asset catalog reconciled",
+        None,
+    );
+    let _ = events.send(SyncEvent::DataChanged);
+    Ok(())
+}
+
+fn reconcile_active_assets(
+    active_assets: Vec<Company>,
+    existing: &HashMap<String, Company>,
+    updated_at: chrono::DateTime<Utc>,
+) -> Vec<Company> {
+    let active_symbols = active_assets
+        .iter()
+        .map(|asset| asset.symbol.clone())
+        .collect::<HashSet<_>>();
+    let mut merged = active_assets
         .into_iter()
         .map(|mut asset| {
             if let Some(current) = existing.get(&asset.symbol) {
@@ -406,14 +501,25 @@ async fn refresh_assets(
                 asset.rank = current.rank;
                 asset.description.clone_from(&current.description);
                 asset.in_universe = current.in_universe;
-                asset.retained = current.retained;
+                asset.retained = current.sector.is_some() || current.retained;
             }
             asset
         })
-        .collect();
-    if let Err(error) = storage.upsert_companies(&merged) {
-        let _ = events.send(SyncEvent::Error(error.to_string()));
+        .collect::<Vec<_>>();
+    for current in existing.values().filter(|company| {
+        company.sector.is_some() && !active_symbols.contains(company.symbol.as_str())
+    }) {
+        let mut inactive = current.clone();
+        inactive.in_universe = false;
+        inactive.retained = false;
+        inactive.updated_at = updated_at;
+        merged.push(inactive);
     }
+    merged
+}
+
+fn is_snapshot_candidate(company: &Company) -> bool {
+    company.retained || company.in_universe
 }
 
 fn send_progress(
@@ -432,4 +538,119 @@ fn send_progress(
         last_error,
         updated_at: Utc::now(),
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone};
+
+    use super::*;
+
+    fn instant() -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 7, 23, 12, 0, 0)
+            .single()
+            .expect("valid fixture timestamp")
+    }
+
+    fn company(symbol: &str, sector: Option<Sector>, retained: bool, in_universe: bool) -> Company {
+        Company {
+            symbol: symbol.to_owned(),
+            name: format!("{symbol} name"),
+            sector,
+            raw_sector: sector.map(|value| value.label().to_owned()),
+            exchange: "TEST".to_owned(),
+            industry: "Test industry".to_owned(),
+            market_cap: Some(1_000_000.0),
+            shares_outstanding: Some(10_000.0),
+            rank: Some(1),
+            description: "Catalog description".to_owned(),
+            in_universe,
+            retained,
+            updated_at: instant() - Duration::days(1),
+        }
+    }
+
+    #[test]
+    fn active_assets_reactivate_catalog_candidates_and_preserve_non_catalog_flags() {
+        let active_catalog = company("LIVE", Some(Sector::Technology), false, false);
+        let inactive_catalog = company("GONE", Some(Sector::Technology), true, true);
+        let benchmark = company("SPY", None, true, true);
+        let searchable = company("FUND", None, false, false);
+        let existing = [active_catalog, inactive_catalog, benchmark, searchable]
+            .into_iter()
+            .map(|company| (company.symbol.clone(), company))
+            .collect::<HashMap<_, _>>();
+        let active = ["LIVE", "SPY", "FUND"]
+            .into_iter()
+            .map(|symbol| company(symbol, None, false, false))
+            .collect();
+
+        let reconciled = reconcile_active_assets(active, &existing, instant());
+        let by_symbol = reconciled
+            .iter()
+            .map(|company| (company.symbol.as_str(), company))
+            .collect::<HashMap<_, _>>();
+
+        let live = by_symbol["LIVE"];
+        assert_eq!(live.sector, Some(Sector::Technology));
+        assert!(live.retained);
+        assert!(!live.in_universe);
+        assert_eq!(live.description, "Catalog description");
+
+        let gone = by_symbol["GONE"];
+        assert!(!gone.retained);
+        assert!(!gone.in_universe);
+        assert_eq!(gone.updated_at, instant());
+
+        assert!(by_symbol["SPY"].retained);
+        assert!(by_symbol["SPY"].in_universe);
+        assert!(!by_symbol["FUND"].retained);
+        assert!(!by_symbol["FUND"].in_universe);
+    }
+
+    #[test]
+    fn snapshot_candidates_exclude_reconciled_inactive_catalog_rows() {
+        assert!(is_snapshot_candidate(&company(
+            "LIVE",
+            Some(Sector::Technology),
+            true,
+            false
+        )));
+        assert!(is_snapshot_candidate(&company("SPY", None, true, true)));
+        assert!(!is_snapshot_candidate(&company(
+            "GONE",
+            Some(Sector::Technology),
+            false,
+            false
+        )));
+    }
+
+    #[test]
+    fn history_plans_cover_medium_and_all_available_ranges() {
+        assert_eq!(HISTORY_PLANS[0].timeframe, "1Day");
+        assert_eq!(HISTORY_PLANS[0].range, DateRange::TwoYears);
+        assert_eq!(HISTORY_PLANS[1].timeframe, "1Week");
+        assert_eq!(HISTORY_PLANS[1].range, DateRange::All);
+
+        let now = instant();
+        assert_eq!(
+            history_batch_start(HISTORY_PLANS[0], now, &[None], false),
+            DateRange::TwoYears.cutoff(now)
+        );
+        assert_eq!(
+            history_batch_start(HISTORY_PLANS[1], now, &[None], false),
+            chrono::DateTime::UNIX_EPOCH
+        );
+    }
+
+    #[test]
+    fn completed_history_plan_resumes_with_a_bounded_overlap() {
+        let now = instant();
+        let first = now - Duration::days(4);
+        let second = now - Duration::days(2);
+        assert_eq!(
+            history_batch_start(HISTORY_PLANS[1], now, &[Some(second), Some(first)], true),
+            first - Duration::days(7)
+        );
+    }
 }

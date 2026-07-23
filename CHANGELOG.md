@@ -13,8 +13,10 @@ pre-1.0 releases.
   bundled SQLite.
 - StockTouch-inspired 3x3 overview with nine legacy economic sectors and up to
   100 color-coded companies per sector.
-- Seven ranges (`1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, `5Y`) and market-cap,
-  gain, volume, and alphabetical ordering.
+- Selectable S&P 500, Dow, and Nasdaq-100 overview status through explicitly
+  labeled `SPY`, `DIA`, and `QQQ` ETF proxies.
+- Ten ranges (`1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, `2Y`, `5Y`, `10Y`, `ALL`)
+  and market-cap, gain, volume, and alphabetical ordering.
 - SGR-only mouse hover/click/drag/wheel input, keyboard navigation,
   paste-aware search, and terminal restoration on exit or panic.
 - Responsive compact/full layouts, centered equal-cell heatmaps, half-block
@@ -26,9 +28,9 @@ pre-1.0 releases.
   with OSC 52 clipboard fallback.
 - Persistent favorites, dedicated Starred view, and local ticker/company-name
   search.
-- Deterministic offline demo market values for 900 real SEC-catalog identities,
-  all chart ranges, persistent simulation labeling, and clearly labeled
-  simulated news.
+- Deterministic offline demo market values for 900 real SEC-catalog identities
+  plus three benchmark ETF identities, all chart ranges, persistent simulation
+  labeling, and clearly labeled simulated news.
 - Alpaca adapter for active US equity assets, batched snapshots, paginated
   adjusted bars, and historical news, with secret redaction, request limiting,
   bounded retry/backoff, and feed fallback.
@@ -37,8 +39,9 @@ pre-1.0 releases.
 - SQLite schema for companies, memberships, bars, snapshots, news,
   news-symbol relationships, favorites, and sync checkpoints, using WAL and
   transactional upserts.
-- Background snapshot refresh, resumable five-year daily history caching with
-  a seven-day overlap, and lazy range-specific ticker/news synchronization.
+- Background snapshot refresh, resumable two-year daily and all-available
+  weekly history caching with a seven-day overlap, and lazy range-specific
+  ticker/news synchronization.
 - CLI modes for demo, offline cache, database/feed/refresh overrides, demo
   reset, and redacted effective-configuration output.
 - Public architecture, provider/licensing, cache/sync, configuration,

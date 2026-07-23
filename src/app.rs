@@ -4,6 +4,7 @@ use crossterm::event::{
 use ratatui::layout::Position;
 
 use crate::{
+    benchmarks::MarketBenchmark,
     domain::{DateRange, Sector, SortMode},
     ui::state::{DetailTab, Overlay, Route, UiAction, UiState},
 };
@@ -37,10 +38,13 @@ fn handle_key(state: &mut UiState, key: KeyEvent) -> Vec<AppCommand> {
     if let Some(overlay) = state.overlay.clone() {
         return handle_overlay_key(state, overlay, key);
     }
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return vec![AppCommand::Quit];
+    }
+    if let Some(sector) = sector_shortcut(key) {
+        return apply_action(state, UiAction::OpenSector(sector));
+    }
     match key.code {
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            vec![AppCommand::Quit]
-        }
         KeyCode::Char('q') if key.modifiers.is_empty() => vec![AppCommand::Quit],
         KeyCode::Esc | KeyCode::Backspace => apply_action(state, UiAction::Back),
         KeyCode::Char('/') => apply_action(state, UiAction::OpenSearch),
@@ -59,7 +63,8 @@ fn handle_key(state: &mut UiState, key: KeyEvent) -> Vec<AppCommand> {
             apply_action(state, UiAction::SelectRange(state.date_range.previous()))
         }
         KeyCode::Char(']') => apply_action(state, UiAction::SelectRange(state.date_range.next())),
-        KeyCode::Char(character @ '1'..='7') => {
+        KeyCode::Char('0') => apply_action(state, UiAction::SelectRange(DateRange::All)),
+        KeyCode::Char(character @ '1'..='9') => {
             let index = usize::from(character as u8 - b'1');
             apply_action(state, UiAction::SelectRange(DateRange::ALL[index]))
         }
@@ -208,8 +213,21 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
     match state.route {
         Route::Overview => {
             state.hovered_symbol = None;
+            if let Some(selected) = state.selected_benchmark {
+                if vertical < 0 {
+                    state.selected_sector = 6 + selected.min(2);
+                    state.selected_benchmark = None;
+                } else if horizontal != 0 {
+                    state.selected_benchmark = Some(offset(selected, horizontal, 2));
+                }
+                return Vec::new();
+            }
             let row = state.selected_sector / 3;
             let column = state.selected_sector % 3;
+            if row == 2 && vertical > 0 {
+                state.selected_benchmark = Some(column);
+                return Vec::new();
+            }
             let row = offset(row, vertical, 2);
             let column = offset(column, horizontal, 2);
             state.selected_sector = row * 3 + column;
@@ -225,36 +243,48 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
             let column = offset(column, horizontal, columns - 1);
             state.selected_ticker = (row * columns + column).min(count.saturating_sub(1));
         }
-        Route::Ticker(_) => match state.detail_tab {
-            DetailTab::Chart => {
+        Route::Ticker(_) => {
+            if horizontal != 0 {
                 let current = state
                     .detail_hover
                     .unwrap_or_else(|| state.chart_sample_indices.len().saturating_sub(1));
                 state.detail_hover = Some(offset(
                     current,
-                    horizontal + vertical,
+                    horizontal,
                     state.chart_sample_indices.len().saturating_sub(1),
                 ));
             }
-            DetailTab::News => {
+            if vertical != 0 {
                 let maximum = state
                     .detail
                     .as_ref()
                     .map_or(0, |detail| detail.news.len().saturating_sub(1));
-                state.selected_news = offset(state.selected_news, horizontal + vertical, maximum);
+                state.selected_news = offset(state.selected_news, vertical, maximum);
             }
-            DetailTab::Statistics => {}
-        },
+        }
     }
     Vec::new()
 }
 
 fn activate_selection(state: &mut UiState) -> Vec<AppCommand> {
     match state.route.clone() {
-        Route::Overview => apply_action(
-            state,
-            UiAction::OpenSector(Sector::ALL[state.selected_sector.min(8)]),
-        ),
+        Route::Overview => {
+            if let Some(index) = state.selected_benchmark {
+                apply_action(
+                    state,
+                    UiAction::OpenTicker(
+                        MarketBenchmark::ALL[index.min(MarketBenchmark::ALL.len() - 1)]
+                            .symbol
+                            .to_owned(),
+                    ),
+                )
+            } else {
+                apply_action(
+                    state,
+                    UiAction::OpenSector(Sector::ALL[state.selected_sector.min(8)]),
+                )
+            }
+        }
         Route::Sector(_) | Route::Favorites => state
             .visible_tiles()
             .get(state.selected_ticker)
@@ -262,10 +292,7 @@ fn activate_selection(state: &mut UiState) -> Vec<AppCommand> {
             .map_or_else(Vec::new, |symbol| {
                 apply_action(state, UiAction::OpenTicker(symbol))
             }),
-        Route::Ticker(_) if state.detail_tab == DetailTab::News => {
-            apply_action(state, UiAction::OpenNews(state.selected_news))
-        }
-        Route::Ticker(_) => Vec::new(),
+        Route::Ticker(_) => apply_action(state, UiAction::OpenNews(state.selected_news)),
     }
 }
 
@@ -315,6 +342,7 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
             state.overlay = None;
             state.route = Route::Favorites;
             state.selected_ticker = 0;
+            state.selected_benchmark = None;
             state.hovered_symbol = None;
             state.detail_return_route = None;
             Vec::new()
@@ -359,11 +387,17 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
                 .position(|item| *item == sector)
                 .unwrap_or(0);
             state.selected_ticker = 0;
+            state.selected_benchmark = None;
             state.hovered_symbol = None;
             state.detail_return_route = None;
             Vec::new()
         }
         UiAction::OpenTicker(symbol) | UiAction::SearchResult(symbol) => {
+            if matches!(state.route, Route::Overview) {
+                state.selected_benchmark = MarketBenchmark::ALL
+                    .iter()
+                    .position(|benchmark| benchmark.symbol == symbol);
+            }
             if matches!(state.route, Route::Sector(_) | Route::Favorites) {
                 state.select_visible_symbol(&symbol);
                 state.detail_return_route = Some(state.route.clone());
@@ -400,6 +434,30 @@ fn offset(value: usize, amount: isize, maximum: usize) -> usize {
     value.saturating_add_signed(amount).min(maximum)
 }
 
+fn sector_shortcut(key: KeyEvent) -> Option<Sector> {
+    let navigation_modifiers = KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::META;
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        || !key.modifiers.intersects(navigation_modifiers)
+    {
+        return None;
+    }
+    let KeyCode::Char(character) = key.code else {
+        return None;
+    };
+    match character.to_ascii_lowercase() {
+        'c' => Some(Sector::Consumer),
+        's' => Some(Sector::Services),
+        'h' => Some(Sector::Healthcare),
+        'e' => Some(Sector::Energy),
+        't' => Some(Sector::Technology),
+        'f' => Some(Sector::Financial),
+        'i' => Some(Sector::Industrial),
+        'm' => Some(Sector::Materials),
+        'u' => Some(Sector::Utilities),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,12 +465,19 @@ mod tests {
     #[test]
     fn numeric_range_shortcuts_are_direct() {
         let mut state = UiState::default();
-        let commands = handle_event(
+        let eight_commands = handle_event(
             &mut state,
-            Event::Key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::NONE)),
+            Event::Key(KeyEvent::new(KeyCode::Char('8'), KeyModifiers::NONE)),
         );
         assert_eq!(state.date_range, DateRange::FiveYears);
-        assert_eq!(commands, vec![AppCommand::ReloadTiles]);
+        assert_eq!(eight_commands, vec![AppCommand::ReloadTiles]);
+
+        let zero_commands = handle_event(
+            &mut state,
+            Event::Key(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE)),
+        );
+        assert_eq!(state.date_range, DateRange::All);
+        assert_eq!(zero_commands, vec![AppCommand::ReloadTiles]);
     }
 
     #[test]
@@ -427,5 +492,84 @@ mod tests {
         );
         assert_eq!(state.search_query, "q");
         assert_eq!(commands, vec![AppCommand::Search("q".to_owned())]);
+    }
+
+    #[test]
+    fn overview_arrows_move_between_sectors_and_benchmarks() {
+        let mut state = UiState {
+            selected_sector: 7,
+            ..UiState::default()
+        };
+
+        assert!(move_selection(&mut state, 0, 1).is_empty());
+        assert_eq!(state.selected_benchmark, Some(1));
+        assert!(move_selection(&mut state, 1, 0).is_empty());
+        assert_eq!(state.selected_benchmark, Some(2));
+        assert!(move_selection(&mut state, 0, -1).is_empty());
+        assert_eq!(state.selected_benchmark, None);
+        assert_eq!(state.selected_sector, 8);
+
+        assert!(move_selection(&mut state, 0, 1).is_empty());
+        assert_eq!(
+            activate_selection(&mut state),
+            vec![AppCommand::LoadTicker("QQQ".to_owned())]
+        );
+        assert_eq!(state.route, Route::Ticker("QQQ".to_owned()));
+    }
+
+    #[test]
+    fn modified_sector_shortcuts_preserve_ctrl_c_and_plain_keys() {
+        let shortcuts = [
+            ('c', Sector::Consumer),
+            ('s', Sector::Services),
+            ('h', Sector::Healthcare),
+            ('e', Sector::Energy),
+            ('t', Sector::Technology),
+            ('f', Sector::Financial),
+            ('i', Sector::Industrial),
+            ('m', Sector::Materials),
+            ('u', Sector::Utilities),
+        ];
+        for (index, (key, sector)) in shortcuts.into_iter().enumerate() {
+            let mut state = UiState {
+                selected_benchmark: Some(1),
+                ..UiState::default()
+            };
+            let modifiers = if index.is_multiple_of(2) {
+                KeyModifiers::ALT
+            } else {
+                KeyModifiers::META
+            };
+
+            assert!(
+                handle_event(
+                    &mut state,
+                    Event::Key(KeyEvent::new(KeyCode::Char(key), modifiers))
+                )
+                .is_empty()
+            );
+            assert_eq!(state.route, Route::Sector(sector));
+            assert_eq!(state.selected_benchmark, None);
+        }
+
+        let mut state = UiState::default();
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(
+                    KeyCode::Char('c'),
+                    KeyModifiers::CONTROL | KeyModifiers::ALT,
+                ))
+            ),
+            vec![AppCommand::Quit]
+        );
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert_eq!(state.overlay, Some(Overlay::Sort));
     }
 }

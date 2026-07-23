@@ -5,6 +5,7 @@ use crossterm::event::{
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect, style::Modifier};
 use stock_tui::{
     app::{AppCommand, handle_event},
+    benchmarks::MarketBenchmark,
     domain::{Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, TickerDetail},
     palette::{CANVAS, HeatScale, MUTED, PANEL, Theme},
     ui::{
@@ -98,6 +99,8 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
     for expected in [
         "ACME / DETAIL",
         "$103.75",
+        "+$7.01",
+        "+7.25%",
         "PRICE",
         "VOLUME",
         "STATISTICS",
@@ -183,6 +186,51 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
             "https://example.invalid/acme/results".to_owned()
         )]
     );
+}
+
+#[test]
+fn detail_arrow_axes_keep_chart_and_news_selection_independent() {
+    let mut state = detail_state();
+    render_at(&mut state, 160, 48);
+    let plot = state
+        .chart_rect
+        .expect("detail chart exposes its plot area");
+    let hovered_index = 5;
+
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: plot.x + hovered_index,
+                row: plot.y + plot.height / 2,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    assert_eq!(state.detail_hover, Some(usize::from(hovered_index)));
+
+    state.selected_news = 1;
+    assert!(press(&mut state, KeyCode::Up, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.selected_news, 0);
+    assert_eq!(state.detail_hover, Some(usize::from(hovered_index)));
+
+    assert!(press(&mut state, KeyCode::Right, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.detail_hover, Some(usize::from(hovered_index) + 1));
+    assert_eq!(state.selected_news, 0);
+    assert_eq!(
+        press(&mut state, KeyCode::Enter, KeyModifiers::NONE),
+        vec![AppCommand::OpenUrl(
+            "https://example.invalid/acme/analytics".to_owned()
+        )]
+    );
+
+    state.detail_tab = DetailTab::News;
+    assert!(press(&mut state, KeyCode::Left, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.detail_hover, Some(usize::from(hovered_index)));
+    assert!(press(&mut state, KeyCode::Down, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.selected_news, 1);
 }
 
 #[test]
@@ -489,6 +537,127 @@ fn overview_hover_selects_only_the_enclosing_sector() {
 }
 
 #[test]
+fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
+    let mut state = fixture_state();
+    let buffer = render_at(&mut state, 120, 40);
+    let screen = screen_text(&buffer);
+    for expected in [
+        "S&P 500 · SPY",
+        "DOW · DIA",
+        "NASDAQ 100 · QQQ",
+        "$510.25",
+        "-1.20%",
+        "+2.10%",
+    ] {
+        assert!(
+            screen.contains(expected),
+            "missing benchmark footer value {expected:?}"
+        );
+    }
+
+    let footer = AppLayout::calculate(Rect::new(0, 0, 120, 40)).footer;
+    let benchmark_targets: Vec<_> = state
+        .hit_targets
+        .iter()
+        .filter(|target| {
+            matches!(
+                &target.action,
+                UiAction::OpenTicker(symbol)
+                    if MarketBenchmark::for_symbol(symbol).is_some()
+            )
+        })
+        .cloned()
+        .collect();
+    assert_eq!(benchmark_targets.len(), 3);
+    assert!(
+        benchmark_targets
+            .iter()
+            .all(|target| target.rect.y == footer.y
+                && target.rect.height == 1
+                && target.rect.width == benchmark_targets[0].rect.width)
+    );
+
+    let qqq = benchmark_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("QQQ".to_owned()))
+        .expect("QQQ benchmark target");
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: qqq.rect.x + qqq.rect.width / 2,
+                row: qqq.rect.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    assert_eq!(state.selected_benchmark, Some(2));
+
+    let selected_buffer = render_at(&mut state, 120, 40);
+    assert!((qqq.rect.x..qqq.rect.right()).any(|x| {
+        selected_buffer[(x, qqq.rect.y)]
+            .modifier
+            .contains(Modifier::BOLD)
+    }));
+    let technology = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenSector(Sector::Technology))
+        .expect("technology sector target")
+        .clone();
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: technology.rect.x + technology.rect.width / 2,
+                row: technology.rect.y + technology.rect.height / 2,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    assert_eq!(state.selected_benchmark, None);
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: qqq.rect.x + qqq.rect.width / 2,
+                row: qqq.rect.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    assert_eq!(state.selected_benchmark, Some(2));
+    assert_eq!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: qqq.rect.x + qqq.rect.width / 2,
+                row: qqq.rect.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        ),
+        vec![AppCommand::LoadTicker("QQQ".to_owned())]
+    );
+    assert_eq!(state.route, Route::Ticker("QQQ".to_owned()));
+
+    let mut compact = fixture_state();
+    let compact_screen = screen_text(&render_at(&mut compact, 60, 20));
+    for symbol in ["SPY", "DIA", "QQQ"] {
+        assert!(
+            compact_screen.contains(symbol),
+            "compact benchmark footer hides {symbol}"
+        );
+    }
+}
+
+#[test]
 fn sector_heatmap_uses_equal_centered_tiles_without_corner_artifacts() {
     let mut state = fixture_state();
     let template = state
@@ -562,7 +731,7 @@ fn keyboard_changes_ranges_opens_favorites_toggles_star_and_goes_back() {
         vec![AppCommand::ToggleFavorite("ACME".to_owned())]
     );
     assert_eq!(
-        press(&mut state, KeyCode::Char('7'), KeyModifiers::NONE),
+        press(&mut state, KeyCode::Char('8'), KeyModifiers::NONE),
         vec![AppCommand::ReloadTiles]
     );
     assert_eq!(state.date_range, DateRange::FiveYears);
@@ -570,7 +739,17 @@ fn keyboard_changes_ranges_opens_favorites_toggles_star_and_goes_back() {
         press(&mut state, KeyCode::Char('['), KeyModifiers::NONE),
         vec![AppCommand::ReloadTiles]
     );
-    assert_eq!(state.date_range, DateRange::Year);
+    assert_eq!(state.date_range, DateRange::TwoYears);
+    assert_eq!(
+        press(&mut state, KeyCode::Char('0'), KeyModifiers::NONE),
+        vec![AppCommand::ReloadTiles]
+    );
+    assert_eq!(state.date_range, DateRange::All);
+    assert_eq!(
+        press(&mut state, KeyCode::Char('['), KeyModifiers::NONE),
+        vec![AppCommand::ReloadTiles]
+    );
+    assert_eq!(state.date_range, DateRange::TenYears);
 
     assert!(press(&mut state, KeyCode::Char('F'), KeyModifiers::SHIFT).is_empty());
     assert_eq!(state.route, Route::Favorites);
@@ -598,7 +777,8 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         "s Sort",
         "F Starred",
         "1: 1D",
-        "7: 5Y",
+        "8: 5Y",
+        "0: ALL",
         "r Refresh",
         "S Status",
         "? Help",
@@ -613,7 +793,9 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         "Navigate",
         "arrows or h j k l",
         "Starred      F",
-        "Ranges       1..7 or [ ]",
+        "Ranges       1..9, 0 or [ ]",
+        "Sectors      Alt/Meta + c s h e t f i m u",
+        "Detail       Left/Right chart, Up/Down news",
         "Quit         q",
     ] {
         assert!(help.contains(expected), "missing help text {expected:?}");
@@ -623,7 +805,12 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
     assert!(press(&mut state, KeyCode::Char('S'), KeyModifiers::SHIFT).is_empty());
     assert_eq!(state.overlay, Some(Overlay::Sync));
     let status = screen_text(&render_at(&mut state, 80, 24));
-    for expected in ["DATA STATUS", "Auto refresh Disabled (demo/offline)"] {
+    for expected in [
+        "DATA STATUS",
+        "Auto refresh Disabled (demo/offline)",
+        "Coverage     Refresh requests every retained ticker",
+        "Stale data   Provider observation is over 72h old",
+    ] {
         assert!(
             status.contains(expected),
             "missing data status text {expected:?}"
@@ -644,6 +831,24 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
     state.auto_refresh_interval = Some(std::time::Duration::from_secs(300));
     let live_status = screen_text(&render_at(&mut state, 80, 24));
     assert!(live_status.contains("Auto refresh Every 5m"));
+}
+
+#[test]
+fn every_range_remains_clickable_at_the_minimum_supported_height() {
+    let mut state = fixture_state();
+    state.route = Route::Sector(Sector::Technology);
+    render_at(&mut state, 60, 20);
+
+    for range in DateRange::ALL {
+        assert!(
+            state
+                .hit_targets
+                .iter()
+                .any(|target| target.action == UiAction::SelectRange(range)),
+            "{} range has no compact rail target",
+            range.label()
+        );
+    }
 }
 
 fn fixture_state() -> UiState {
@@ -679,9 +884,24 @@ fn fixture_state() -> UiState {
             });
         }
     }
+    let benchmark_returns = [-0.012, 0.004, 0.021];
+    let benchmarks = MarketBenchmark::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(index, benchmark)| MarketTile {
+            company: benchmark.company(fixture_time()),
+            price: Some(510.25 - index as f64 * 34.5),
+            period_return: Some(benchmark_returns[index]),
+            volume: Some(40_000_000.0 + index as f64 * 5_000_000.0),
+            starred: false,
+            stale: false,
+            updated_at: Some(fixture_time()),
+        })
+        .collect();
 
     UiState {
         tiles,
+        benchmarks,
         status: "Fixture cache ready".to_owned(),
         snapshot_checkpoint: Some(fixture_time()),
         ..UiState::default()
