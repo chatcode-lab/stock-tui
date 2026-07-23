@@ -207,6 +207,7 @@ fn update_chart_hover(state: &mut UiState, position: Position) {
 fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Vec<AppCommand> {
     match state.route {
         Route::Overview => {
+            state.hovered_symbol = None;
             let row = state.selected_sector / 3;
             let column = state.selected_sector % 3;
             let row = offset(row, vertical, 2);
@@ -214,6 +215,7 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
             state.selected_sector = row * 3 + column;
         }
         Route::Sector(_) | Route::Favorites => {
+            state.hovered_symbol = None;
             let columns = state.sector_columns.max(1);
             let row = state.selected_ticker / columns;
             let column = state.selected_ticker % columns;
@@ -223,8 +225,8 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
             let column = offset(column, horizontal, columns - 1);
             state.selected_ticker = (row * columns + column).min(count.saturating_sub(1));
         }
-        Route::Ticker(_) => {
-            if state.detail_tab == DetailTab::Chart {
+        Route::Ticker(_) => match state.detail_tab {
+            DetailTab::Chart => {
                 let current = state
                     .detail_hover
                     .unwrap_or_else(|| state.chart_sample_indices.len().saturating_sub(1));
@@ -234,7 +236,15 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
                     state.chart_sample_indices.len().saturating_sub(1),
                 ));
             }
-        }
+            DetailTab::News => {
+                let maximum = state
+                    .detail
+                    .as_ref()
+                    .map_or(0, |detail| detail.news.len().saturating_sub(1));
+                state.selected_news = offset(state.selected_news, horizontal + vertical, maximum);
+            }
+            DetailTab::Statistics => {}
+        },
     }
     Vec::new()
 }
@@ -252,6 +262,9 @@ fn activate_selection(state: &mut UiState) -> Vec<AppCommand> {
             .map_or_else(Vec::new, |symbol| {
                 apply_action(state, UiAction::OpenTicker(symbol))
             }),
+        Route::Ticker(_) if state.detail_tab == DetailTab::News => {
+            apply_action(state, UiAction::OpenNews(state.selected_news))
+        }
         Route::Ticker(_) => Vec::new(),
     }
 }
@@ -262,17 +275,34 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
             if state.overlay.take().is_some() {
                 return Vec::new();
             }
-            state.route = match &state.route {
-                Route::Ticker(_) => state
-                    .detail
-                    .as_ref()
-                    .and_then(|detail| detail.company.sector)
-                    .map_or(Route::Overview, Route::Sector),
-                Route::Sector(_) | Route::Favorites => Route::Overview,
+            let current_route = state.route.clone();
+            let ticker_symbol = match &current_route {
+                Route::Ticker(symbol) => Some(symbol.clone()),
+                _ => None,
+            };
+            state.route = match current_route {
+                Route::Ticker(_) => state.detail_return_route.take().unwrap_or_else(|| {
+                    state
+                        .detail
+                        .as_ref()
+                        .and_then(|detail| detail.company.sector)
+                        .map_or(Route::Overview, Route::Sector)
+                }),
+                Route::Sector(_) | Route::Favorites => {
+                    state.detail_return_route = None;
+                    Route::Overview
+                }
                 Route::Overview => Route::Overview,
             };
             state.detail = None;
-            state.selected_ticker = 0;
+            state.hovered_symbol = None;
+            if let Some(symbol) = ticker_symbol
+                && matches!(state.route, Route::Sector(_) | Route::Favorites)
+            {
+                state.select_visible_symbol(&symbol);
+            } else if matches!(state.route, Route::Overview) {
+                state.selected_ticker = 0;
+            }
             Vec::new()
         }
         UiAction::OpenSearch => {
@@ -285,6 +315,8 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
             state.overlay = None;
             state.route = Route::Favorites;
             state.selected_ticker = 0;
+            state.hovered_symbol = None;
+            state.detail_return_route = None;
             Vec::new()
         }
         UiAction::OpenHelp => {
@@ -327,23 +359,36 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
                 .position(|item| *item == sector)
                 .unwrap_or(0);
             state.selected_ticker = 0;
+            state.hovered_symbol = None;
+            state.detail_return_route = None;
             Vec::new()
         }
         UiAction::OpenTicker(symbol) | UiAction::SearchResult(symbol) => {
+            if matches!(state.route, Route::Sector(_) | Route::Favorites) {
+                state.select_visible_symbol(&symbol);
+                state.detail_return_route = Some(state.route.clone());
+            } else if !matches!(state.route, Route::Ticker(_)) {
+                state.detail_return_route = None;
+            }
             state.overlay = None;
             state.route = Route::Ticker(symbol.clone());
             state.detail = None;
             state.detail_hover = None;
+            state.selected_news = 0;
+            state.hovered_symbol = None;
             vec![AppCommand::LoadTicker(symbol)]
         }
         UiAction::ToggleFavorite(symbol) => vec![AppCommand::ToggleFavorite(symbol)],
-        UiAction::OpenNews(index) => state
-            .detail
-            .as_ref()
-            .and_then(|detail| detail.news.get(index))
-            .map(|item| AppCommand::OpenUrl(item.url.clone()))
-            .into_iter()
-            .collect(),
+        UiAction::OpenNews(index) => {
+            state.selected_news = index;
+            state
+                .detail
+                .as_ref()
+                .and_then(|detail| detail.news.get(index))
+                .map(|item| AppCommand::OpenUrl(item.url.clone()))
+                .into_iter()
+                .collect()
+        }
         UiAction::SelectDetailTab(tab) => {
             state.detail_tab = tab;
             Vec::new()

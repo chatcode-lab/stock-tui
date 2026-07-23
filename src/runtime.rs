@@ -1,9 +1,11 @@
 use std::{
     collections::{HashMap, HashSet},
+    io::{self, Write},
     time::Duration,
 };
 
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use crossterm::event::EventStream;
 use futures_util::StreamExt;
@@ -206,11 +208,34 @@ fn execute_command(
         }
         AppCommand::OpenUrl(url) => {
             if let Err(error) = webbrowser::open(&url) {
-                state.status = format!("Could not open news URL: {error}");
+                state.status = recover_news_url(&url, &error, copy_to_terminal_clipboard);
             }
         }
     }
     Ok(false)
+}
+
+fn recover_news_url(
+    url: &str,
+    browser_error: &impl std::fmt::Display,
+    copy: impl FnOnce(&str) -> io::Result<()>,
+) -> String {
+    match copy(url) {
+        Ok(()) => "Browser unavailable; news URL copied to clipboard".to_owned(),
+        Err(clipboard_error) => {
+            format!("Could not open news URL: {browser_error}; clipboard: {clipboard_error}")
+        }
+    }
+}
+
+fn copy_to_terminal_clipboard(value: &str) -> io::Result<()> {
+    let mut output = io::stdout().lock();
+    output.write_all(terminal_clipboard_sequence(value).as_bytes())?;
+    output.flush()
+}
+
+fn terminal_clipboard_sequence(value: &str) -> String {
+    format!("\x1b]52;c;{}\x1b\\", STANDARD.encode(value))
 }
 
 fn apply_sync_event(event: SyncEvent, storage: &Storage, state: &mut UiState) -> Result<()> {
@@ -331,4 +356,43 @@ fn seed_demo(
     }));
     let _ = events.send(SyncEvent::DataChanged);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, io};
+
+    use super::{recover_news_url, terminal_clipboard_sequence};
+
+    #[test]
+    fn terminal_clipboard_uses_osc_52_with_a_base64_payload() {
+        assert_eq!(
+            terminal_clipboard_sequence("https://example.test/news?a=1&b=2"),
+            "\u{1b}]52;c;aHR0cHM6Ly9leGFtcGxlLnRlc3QvbmV3cz9hPTEmYj0y\u{1b}\\"
+        );
+    }
+
+    #[test]
+    fn browser_failure_copies_the_original_news_url() {
+        let copied = RefCell::new(String::new());
+        let status = recover_news_url("https://example.test/article", &"no browser", |value| {
+            copied.replace(value.to_owned());
+            Ok(())
+        });
+
+        assert_eq!(*copied.borrow(), "https://example.test/article");
+        assert_eq!(status, "Browser unavailable; news URL copied to clipboard");
+    }
+
+    #[test]
+    fn browser_and_clipboard_failures_are_both_reported() {
+        let status = recover_news_url("https://example.test/article", &"no browser", |_| {
+            Err(io::Error::other("terminal rejected OSC 52"))
+        });
+
+        assert_eq!(
+            status,
+            "Could not open news URL: no browser; clipboard: terminal rejected OSC 52"
+        );
+    }
 }

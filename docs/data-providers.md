@@ -99,7 +99,9 @@ The client requests the 20 newest items related to a ticker from Alpaca's
 `/v1beta1/news` endpoint, without article body content. It stores provider ID,
 headline, source, publication time, URL, summary, and related symbols. The TUI
 shows the concise date, headline, and source; activating a row opens the
-publisher/provider URL in the default browser.
+publisher/provider URL in the default browser. When browser launch is
+unavailable, it copies that URL through OSC 52 so a browser-hosted terminal can
+offer it to the client clipboard.
 
 Alpaca documents historical news back to 2015 and identifies Benzinga as its
 current news source. Availability, permitted display, retention, and

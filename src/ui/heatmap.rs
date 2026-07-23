@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     domain::{MarketTile, Sector},
-    palette::{AMBER, CANVAS, CYAN, HeatScale, MUTED, PANEL, TEXT},
+    palette::{AMBER, BORDER, CANVAS, CYAN, HeatScale, MUTED, PANEL, TEXT},
     ui::{
         layout::uniform_grid,
         state::{HitTarget, Route, UiAction, UiState},
@@ -68,23 +68,25 @@ fn render_overview(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, scale
             hover_symbol: None,
         });
         if panel.height <= 1 {
+            render_sector_marker(frame.buffer_mut(), panel, selected);
             continue;
         }
-        let body = Rect::new(panel.x, panel.y + 1, panel.width, panel.height - 1);
+        let body = Rect::new(
+            panel.x.saturating_add(1),
+            panel.y + 1,
+            panel.width.saturating_sub(1),
+            panel.height - 1,
+        );
         if body.height >= 10 {
             let cells = uniform_grid(body, 10, 10);
             for (index, tile) in tiles.iter().enumerate().take(cells.len()) {
                 let cell = cells[index];
                 draw_tile(frame.buffer_mut(), cell, tile, scale, false, false);
-                targets.push(HitTarget {
-                    rect: cell,
-                    action: UiAction::OpenSector(sector),
-                    hover_symbol: Some(tile.company.symbol.clone()),
-                });
             }
         } else {
             render_paired_rows(frame.buffer_mut(), body, tiles, scale);
         }
+        render_sector_marker(frame.buffer_mut(), panel, selected);
     }
     drop(grouped);
     state.hit_targets.extend(targets);
@@ -112,6 +114,7 @@ fn render_sector(
         usize::from((area.width / 7).clamp(3, 10))
     };
     state.sector_columns = columns;
+    state.selected_ticker = state.selected_ticker.min(tiles.len().saturating_sub(1));
     let rows = tiles.len().div_ceil(columns).max(1);
     let cells = uniform_grid(area, columns as u16, rows as u16);
     for (index, tile) in tiles.iter().enumerate() {
@@ -163,8 +166,18 @@ fn render_sector_header(
         area.width.saturating_sub(1) as usize,
         style,
     );
-    if area.x > 0 {
-        buffer[(area.x, area.y)].set_symbol(if selected { "▌" } else { "│" });
+}
+
+fn render_sector_marker(buffer: &mut Buffer, area: Rect, selected: bool) {
+    for y in area.y..area.bottom() {
+        let cell = &mut buffer[(area.x, y)];
+        cell.set_symbol(if selected { "▌" } else { "│" })
+            .set_fg(if selected { CYAN } else { BORDER });
+        if y == area.y {
+            cell.set_bg(PANEL);
+        } else {
+            cell.set_bg(CANVAS);
+        }
     }
 }
 

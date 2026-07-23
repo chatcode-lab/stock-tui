@@ -1,13 +1,14 @@
 use chrono::{DateTime, Local, Utc};
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Style},
     symbols::Marker,
     text::Line as TextLine,
     widgets::{
-        Block, Borders, Paragraph, Sparkline,
-        canvas::{Canvas, FilledLine, Line},
+        Block, Borders, Paragraph,
+        canvas::{Canvas, Line},
     },
 };
 
@@ -17,7 +18,7 @@ use crate::{
     ui::state::UiState,
 };
 
-const AREA_BANDS: usize = 6;
+const TRACE_SAMPLES_PER_COLUMN: usize = 2;
 
 pub fn render_price_volume(
     frame: &mut Frame<'_>,
@@ -39,9 +40,10 @@ pub fn render_price_volume(
         );
         return;
     }
+    let volume_height = volume_section_height(area.height);
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(4), Constraint::Length(3)])
+        .constraints([Constraint::Min(4), Constraint::Length(volume_height)])
         .split(area);
     let chart_area = sections[0];
     let previous_close = state
@@ -142,100 +144,59 @@ pub fn render_price_volume(
             .style(Style::default().bg(PANEL)),
         chart_area,
     );
-    let x_max = (sampled.len().saturating_sub(1)).max(1) as f64;
     let hover = state
         .detail_hover
         .and_then(|index| sampled.get(index))
         .unwrap_or_else(|| sampled.last().expect("sampled data is non-empty"));
     let (_, hovered_bar) = hover;
-    let mut points: Vec<(f64, f64)> = sampled
-        .iter()
-        .enumerate()
-        .map(|(index, (_, bar))| (index as f64, bar.close))
-        .collect();
-    if points.len() == 1 {
-        points.push((1.0, points[0].1));
-    }
-    let crosshair = hover_index.map(|index| index as f64);
-    let sampled_len = sampled.len();
+    let trace_sampled = trace_bars(bars, usable_width.saturating_mul(TRACE_SAMPLES_PER_COLUMN));
+    let points = normalized_price_points(&trace_sampled);
+    let canvas_points = points.clone();
+    let crosshair = hover_index.map(|index| normalized_position(index, sampled.len()));
     let hovered_close = hovered_bar.close;
-    let band_colors = area_band_colors(accent);
     let grid_values = price_axis_values(bounds, y_labels.len());
     let canvas = Canvas::default()
-        .marker(Marker::HalfBlock)
+        .marker(Marker::Braille)
         .background_color(PANEL)
-        .x_bounds([0.0, x_max])
+        .x_bounds([0.0, 1.0])
         .y_bounds(bounds)
         .paint(move |context| {
-            let span = bounds[1] - bounds[0];
-            for (band, color) in band_colors.into_iter().enumerate() {
-                let band_low = bounds[0] + span * band as f64 / AREA_BANDS as f64;
-                let band_high = bounds[0] + span * (band + 1) as f64 / AREA_BANDS as f64;
-                for pair in points.windows(2) {
-                    if pair[0].1 <= band_low && pair[1].1 <= band_low {
-                        continue;
-                    }
-                    context.draw(&FilledLine::new(
-                        pair[0].0,
-                        pair[0].1.clamp(band_low, band_high),
-                        pair[1].0,
-                        pair[1].1.clamp(band_low, band_high),
-                        band_low,
-                        color,
-                    ));
-                }
-            }
             for value in &grid_values {
-                context.draw(&Line::new(
-                    0.0,
-                    *value,
-                    x_max,
-                    *value,
-                    Color::Rgb(55, 64, 74),
-                ));
-            }
-            for pair in points.windows(2) {
-                context.draw(&Line::new(
-                    pair[0].0, pair[0].1, pair[1].0, pair[1].1, accent,
-                ));
+                context.draw(&Line::new(0.0, *value, 1.0, *value, Color::Rgb(55, 64, 74)));
             }
             if let Some(previous) = previous_close {
-                for segment in (0..sampled_len.saturating_sub(1)).step_by(4) {
-                    let end = (segment + 2).min(sampled_len.saturating_sub(1));
+                let dash_count = usize::from(plot_area.width)
+                    .saturating_mul(TRACE_SAMPLES_PER_COLUMN)
+                    .max(2);
+                for segment in (0..dash_count).step_by(8) {
+                    let end = (segment + 4).min(dash_count - 1);
                     context.draw(&Line::new(
-                        segment as f64,
+                        normalized_position(segment, dash_count),
                         previous,
-                        end as f64,
+                        normalized_position(end, dash_count),
                         previous,
                         MUTED,
                     ));
                 }
             }
+            context.layer();
             if let Some(x) = crosshair {
                 context.draw(&Line::new(x, bounds[0], x, bounds[1], CYAN));
-                context.draw(&Line::new(0.0, hovered_close, x_max, hovered_close, CYAN));
+                context.draw(&Line::new(0.0, hovered_close, 1.0, hovered_close, CYAN));
+                context.layer();
+            }
+            for pair in canvas_points.windows(2) {
+                context.draw(&Line::new(
+                    pair[0].0, pair[0].1, pair[1].0, pair[1].1, accent,
+                ));
             }
         });
     frame.render_widget(canvas, plot_area);
+    render_area_gradient(frame.buffer_mut(), plot_area, &points, bounds, accent);
     render_price_axis(frame, y_axis_area, bounds, &y_labels);
     render_time_axis(frame, x_axis_area, &sampled, state.date_range);
 
-    let volume_width = usize::from(sections[1].width.saturating_sub(2)).max(1);
-    let volumes = stretch_volumes(&sampled, volume_width);
-    let volume = Sparkline::default()
-        .data(&volumes)
-        .style(
-            Style::default()
-                .fg(blend_color(PANEL, accent, 0.55))
-                .bg(PANEL),
-        )
-        .block(
-            Block::default()
-                .title(TextLine::styled(" VOLUME ", Style::default().fg(MUTED)))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(BORDER)),
-        );
-    frame.render_widget(volume, sections[1]);
+    render_volume(frame, sections[1], plot_area, bars, accent, crosshair);
 }
 
 fn price_axis_values(bounds: [f64; 2], count: usize) -> Vec<f64> {
@@ -363,11 +324,180 @@ fn format_axis_time(timestamp: DateTime<Utc>, range: DateRange, width: u16) -> S
     }
 }
 
-fn area_band_colors(accent: Color) -> [Color; AREA_BANDS] {
-    std::array::from_fn(|index| {
-        let amount = 0.16 + index as f64 * 0.085;
-        blend_color(PANEL, accent, amount)
-    })
+fn volume_section_height(chart_height: u16) -> u16 {
+    if chart_height < 10 {
+        3
+    } else {
+        (chart_height / 5).clamp(4, 7)
+    }
+}
+
+fn normalized_position(index: usize, count: usize) -> f64 {
+    if count <= 1 {
+        0.0
+    } else {
+        index.min(count - 1) as f64 / (count - 1) as f64
+    }
+}
+
+fn normalized_price_points(sampled: &[(usize, &Bar)]) -> Vec<(f64, f64)> {
+    let mut points: Vec<_> = sampled
+        .iter()
+        .enumerate()
+        .map(|(index, (_, bar))| (normalized_position(index, sampled.len()), bar.close))
+        .collect();
+    if points.len() == 1 {
+        points.push((1.0, points[0].1));
+    }
+    points
+}
+
+fn interpolated_price(points: &[(f64, f64)], position: f64) -> Option<f64> {
+    let first = *points.first()?;
+    if points.len() == 1 || position <= first.0 {
+        return Some(first.1);
+    }
+    let last = *points.last().expect("points is non-empty");
+    if position >= last.0 {
+        return Some(last.1);
+    }
+    let upper = points.partition_point(|point| point.0 < position);
+    let left = points[upper.saturating_sub(1)];
+    let right = points[upper];
+    let span = right.0 - left.0;
+    if span <= f64::EPSILON {
+        Some(right.1)
+    } else {
+        let amount = (position - left.0) / span;
+        Some(left.1 + (right.1 - left.1) * amount)
+    }
+}
+
+fn render_area_gradient(
+    buffer: &mut Buffer,
+    area: Rect,
+    points: &[(f64, f64)],
+    bounds: [f64; 2],
+    accent: Color,
+) {
+    if area.is_empty() || points.is_empty() {
+        return;
+    }
+    let span = bounds[1] - bounds[0];
+    if !span.is_finite() || span <= 0.0 {
+        return;
+    }
+    for column in 0..area.width {
+        let position = if area.width <= 1 {
+            0.0
+        } else {
+            f64::from(column) / f64::from(area.width - 1)
+        };
+        let Some(price) = interpolated_price(points, position) else {
+            continue;
+        };
+        let fill_span = (price - bounds[0]).max(f64::EPSILON);
+        for row in 0..area.height {
+            let cell_bottom = bounds[1] - span * f64::from(row + 1) / f64::from(area.height);
+            if cell_bottom > price {
+                continue;
+            }
+            let cell_center = bounds[1] - span * (f64::from(row) + 0.5) / f64::from(area.height);
+            let depth = ((price - cell_center) / fill_span).clamp(0.0, 1.0);
+            let amount = 0.06 + 0.30 * (1.0 - depth).powf(1.4);
+            buffer[(area.x + column, area.y + row)].set_bg(blend_color(PANEL, accent, amount));
+        }
+    }
+}
+
+fn render_volume(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    price_plot: Rect,
+    bars: &[Bar],
+    accent: Color,
+    crosshair: Option<f64>,
+) {
+    let max_volume = bars
+        .iter()
+        .map(|bar| bar.volume)
+        .filter(|volume| volume.is_finite() && *volume >= 0.0)
+        .fold(0.0_f64, f64::max);
+    let title = if max_volume > 0.0 {
+        format!(" VOLUME  max {} ", format_compact_volume(max_volume))
+    } else {
+        " VOLUME ".to_owned()
+    };
+    frame.render_widget(
+        Block::default()
+            .title(TextLine::styled(title, Style::default().fg(MUTED)))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(BORDER))
+            .style(Style::default().bg(PANEL)),
+        area,
+    );
+    let inner = area.inner(Margin::new(1, 1));
+    if inner.is_empty() || max_volume <= 0.0 {
+        return;
+    }
+    let left = price_plot.x.max(inner.x);
+    let right = price_plot.right().min(inner.right());
+    if right <= left {
+        return;
+    }
+    let plot = Rect::new(left, inner.y, right - left, inner.height);
+    let sampled = trace_bars(
+        bars,
+        usize::from(plot.width).saturating_mul(TRACE_SAMPLES_PER_COLUMN),
+    );
+    let count = sampled.len();
+    let dot_columns = usize::from(plot.width)
+        .saturating_mul(TRACE_SAMPLES_PER_COLUMN)
+        .max(1);
+    let bar_width = volume_bar_dot_width(dot_columns, count);
+    let canvas = Canvas::default()
+        .marker(Marker::Braille)
+        .background_color(PANEL)
+        .x_bounds([0.0, 1.0])
+        .y_bounds([0.0, max_volume * 1.04])
+        .paint(move |context| {
+            for (index, (_, bar)) in sampled.iter().enumerate() {
+                let relative = (bar.volume / max_volume).clamp(0.0, 1.0);
+                let color = blend_color(PANEL, accent, 0.45 + relative * 0.4);
+                let center =
+                    normalized_position(index, count) * dot_columns.saturating_sub(1) as f64;
+                let first = center.round() as isize - (bar_width.saturating_sub(1) / 2) as isize;
+                for offset in 0..bar_width {
+                    let dot = (first + offset as isize)
+                        .clamp(0, dot_columns.saturating_sub(1) as isize)
+                        as usize;
+                    let x = normalized_position(dot, dot_columns);
+                    context.draw(&Line::new(x, 0.0, x, bar.volume.max(0.0), color));
+                }
+            }
+            if let Some(x) = crosshair {
+                context.layer();
+                context.draw(&Line::new(x, 0.0, x, max_volume * 1.04, CYAN));
+            }
+        });
+    frame.render_widget(canvas, plot);
+}
+
+fn volume_bar_dot_width(dot_columns: usize, samples: usize) -> usize {
+    let slot_width = dot_columns.max(1) / samples.max(1);
+    slot_width.saturating_mul(3).div_ceil(4).clamp(1, 8)
+}
+
+fn format_compact_volume(value: f64) -> String {
+    if value >= 1_000_000_000.0 {
+        format!("{:.2}B", value / 1_000_000_000.0)
+    } else if value >= 1_000_000.0 {
+        format!("{:.2}M", value / 1_000_000.0)
+    } else if value >= 1_000.0 {
+        format!("{:.1}K", value / 1_000.0)
+    } else {
+        format!("{value:.0}")
+    }
 }
 
 fn blend_color(background: Color, foreground: Color, amount: f64) -> Color {
@@ -388,26 +518,12 @@ fn blend_color(background: Color, foreground: Color, amount: f64) -> Color {
     )
 }
 
-fn stretch_volumes(sampled: &[(usize, &Bar)], width: usize) -> Vec<u64> {
-    if sampled.is_empty() || width == 0 {
-        return Vec::new();
+fn trace_bars(bars: &[Bar], max_points: usize) -> Vec<(usize, &Bar)> {
+    if bars.len() <= max_points {
+        bars.iter().enumerate().collect()
+    } else {
+        sample_bars(bars, max_points)
     }
-    if width == 1 {
-        return vec![
-            sampled
-                .last()
-                .expect("sampled is non-empty")
-                .1
-                .volume
-                .max(0.0) as u64,
-        ];
-    }
-    (0..width)
-        .map(|position| {
-            let index = position * (sampled.len() - 1) / (width - 1);
-            sampled[index].1.volume.max(0.0) as u64
-        })
-        .collect()
 }
 
 fn sample_bars(bars: &[Bar], width: usize) -> Vec<(usize, &Bar)> {
@@ -466,13 +582,41 @@ mod tests {
     }
 
     #[test]
-    fn volume_stretch_fills_the_requested_width() {
+    fn trace_sampling_keeps_sparse_history_without_duplicate_steps() {
         let bars: Vec<_> = (0..4).map(bar).collect();
-        let sampled = sample_bars(&bars, 20);
-        let stretched = stretch_volumes(&sampled, 20);
+        let sampled = trace_bars(&bars, 20);
 
-        assert_eq!(stretched.len(), 20);
-        assert!(stretched.into_iter().all(|volume| volume == 1));
+        assert_eq!(sampled.len(), 4);
+        assert_eq!(
+            sampled.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn normalized_price_points_span_the_full_plot() {
+        let bars: Vec<_> = (0..4).map(bar).collect();
+        let sampled = trace_bars(&bars, 20);
+        let points = normalized_price_points(&sampled);
+
+        assert_eq!(points.first().unwrap().0, 0.0);
+        assert_eq!(points.last().unwrap().0, 1.0);
+        assert_eq!(interpolated_price(&points, 0.5), Some(1.5));
+    }
+
+    #[test]
+    fn volume_panel_grows_without_consuming_the_price_chart() {
+        assert_eq!(volume_section_height(8), 3);
+        assert_eq!(volume_section_height(20), 4);
+        assert_eq!(volume_section_height(35), 7);
+        assert_eq!(volume_section_height(80), 7);
+    }
+
+    #[test]
+    fn sparse_volume_bars_use_the_available_dot_resolution() {
+        assert_eq!(volume_bar_dot_width(200, 100), 2);
+        assert_eq!(volume_bar_dot_width(200, 20), 8);
+        assert_eq!(volume_bar_dot_width(200, 400), 1);
     }
 
     #[test]

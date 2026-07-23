@@ -22,8 +22,9 @@ read-only: it displays market information and does not place orders.
 - Colors each ticker from bright red through neutral gray to bright green from
   its return over `1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, or `5Y`.
 - Reorders tickers by market capitalization, gain, volume, or symbol.
-- Provides responsive sector grids and a ticker detail screen with a filled
-  price plot, price/time axes, volume, statistics, company context, and news.
+- Provides responsive sector grids and a ticker detail screen with a
+  Braille-resolution price trace, smooth filled tint, price/time axes,
+  high-resolution volume, statistics, company context, and news.
 - Supports mouse hover, clicking, wheel input, keyboard navigation, and
   terminal resize events.
 - Searches the local issuer catalog by symbol or company name.
@@ -58,7 +59,14 @@ cache paths explicit.
 - True-color support for the intended palette (256-color terminals still run,
   but color reproduction depends on the terminal)
 
-Run the offline demo:
+With both Alpaca variables present in `.env` or the process environment, start
+the live client:
+
+```bash
+cargo run --release
+```
+
+Use the offline simulated market only when testing without provider data:
 
 ```bash
 cargo run --release -- --demo
@@ -168,12 +176,12 @@ news row can be clicked with the left mouse button.
 
 | Input | Action |
 | --- | --- |
-| Mouse move | Inspect a ticker; move the chart crosshair |
+| Mouse move | Select a sector, ticker, or news row; move the chart crosshair |
 | Left click | Activate the control, sector, ticker, tab, or news item |
 | Wheel on overview/sector | Move to the previous or next date range |
 | Wheel on ticker chart | Move the selected chart sample |
-| Arrow keys or `h` `j` `k` `l` | Move sector, ticker, sort, or chart selection |
-| `Enter` | Open the selected sector/ticker or accept an overlay choice |
+| Arrow keys or `h` `j` `k` `l` | Move sector, ticker, sort, chart, or news selection |
+| `Enter` | Open the selected sector, ticker, news item, or overlay choice |
 | `Esc` or `Backspace` | Close an overlay or go back |
 | `/` | Search cached companies by ticker or name |
 | `s` | Open ticker ordering |
@@ -189,8 +197,10 @@ news row can be clicked with the left mouse button.
 
 In search, type or paste a query, use Up/Down to select a result, `Enter` to
 open it, `Ctrl-U` to clear the query, and `Esc` to close. Search is local and
-returns at most 20 catalog matches. Clicking a headline asks the operating
-system to open its provider URL in the default browser.
+returns at most 20 catalog matches. Activating a headline asks the operating
+system to open its provider URL in the default browser. If no browser can be
+launched, the URL is copied through the terminal's OSC 52 clipboard protocol
+instead.
 
 On ANSI terminals, `stock-tui` explicitly requests all-motion tracking with
 SGR mouse encoding (`1003` + `1006`). Its click, hover, drag, and wheel reports
@@ -212,9 +222,9 @@ transport.
   Any indivisible rows or columns become balanced outer padding instead of
   stretching selected tiles.
 
-Terminals differ in their handling of mouse motion, half-block glyphs, and RGB
-color. `NO_COLOR=1 stock-tui` selects the monochrome palette when color is not
-usable.
+Terminals differ in their handling of mouse motion, Braille/half-block glyphs,
+OSC 52 clipboard access, and RGB color. `NO_COLOR=1 stock-tui` selects the
+monochrome palette when color is not usable.
 
 ## Data And Cache
 

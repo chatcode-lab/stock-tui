@@ -80,7 +80,9 @@ pub struct UiState {
     pub selected_sector: usize,
     pub selected_ticker: usize,
     pub sector_columns: usize,
+    pub detail_return_route: Option<Route>,
     pub detail_tab: DetailTab,
+    pub selected_news: usize,
     pub detail_hover: Option<usize>,
     pub chart_rect: Option<Rect>,
     pub chart_sample_indices: Vec<usize>,
@@ -108,7 +110,9 @@ impl Default for UiState {
             selected_sector: 0,
             selected_ticker: 0,
             sector_columns: 10,
+            detail_return_route: None,
             detail_tab: DetailTab::Chart,
+            selected_news: 0,
             detail_hover: None,
             chart_rect: None,
             chart_sample_indices: Vec::new(),
@@ -150,12 +154,38 @@ impl UiState {
     }
 
     pub fn hover_at(&mut self, position: Position) {
-        self.hovered_symbol = self
+        let target = self
             .hit_targets
             .iter()
             .rev()
             .find(|target| target.contains(position))
-            .and_then(|target| target.hover_symbol.clone());
+            .map(|target| (target.action.clone(), target.hover_symbol.clone()));
+
+        if self.overlay.is_none() {
+            match target.as_ref().map(|(action, _)| action) {
+                Some(UiAction::OpenSector(sector)) if matches!(self.route, Route::Overview) => {
+                    self.selected_sector = Sector::ALL
+                        .iter()
+                        .position(|candidate| candidate == sector)
+                        .unwrap_or(self.selected_sector);
+                }
+                Some(UiAction::OpenTicker(symbol))
+                    if matches!(self.route, Route::Sector(_) | Route::Favorites) =>
+                {
+                    self.select_visible_symbol(symbol);
+                }
+                Some(UiAction::OpenNews(index)) if matches!(self.route, Route::Ticker(_)) => {
+                    self.selected_news = *index;
+                }
+                _ => {}
+            }
+        }
+
+        self.hovered_symbol = if matches!(self.route, Route::Overview) && self.overlay.is_none() {
+            None
+        } else {
+            target.and_then(|(_, symbol)| symbol)
+        };
     }
 
     #[must_use]
@@ -173,16 +203,24 @@ impl UiState {
 
     #[must_use]
     pub fn focused_symbol(&self) -> Option<&str> {
-        if let Some(symbol) = self.hovered_symbol.as_deref() {
-            return Some(symbol);
-        }
         match &self.route {
             Route::Ticker(symbol) => Some(symbol),
-            Route::Sector(_) | Route::Favorites => self
-                .visible_tiles()
-                .get(self.selected_ticker)
-                .map(|tile| tile.company.symbol.as_str()),
             Route::Overview => None,
+            Route::Sector(_) | Route::Favorites => self.hovered_symbol.as_deref().or_else(|| {
+                self.visible_tiles()
+                    .get(self.selected_ticker)
+                    .map(|tile| tile.company.symbol.as_str())
+            }),
+        }
+    }
+
+    pub fn select_visible_symbol(&mut self, symbol: &str) {
+        if let Some(index) = self
+            .visible_tiles()
+            .iter()
+            .position(|tile| tile.company.symbol == symbol)
+        {
+            self.selected_ticker = index;
         }
     }
 }

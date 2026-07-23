@@ -19,9 +19,10 @@ pre-1.0 releases.
   paste-aware search, and terminal restoration on exit or panic.
 - Responsive compact/full layouts, centered equal-cell heatmaps, half-block
   overview compression, true-color heat scales, monochrome `NO_COLOR` mode,
-  and filled price charts with labeled axes and volume sparklines.
+  and smooth filled Braille price/volume charts with labeled axes.
 - Ticker detail with price, return, OHLC, volume, market cap, sector context,
-  company description, related news, and browser opening.
+  company description, related news, persistent selection, and browser opening
+  with OSC 52 clipboard fallback.
 - Persistent favorites, dedicated Starred view, and local ticker/company-name
   search.
 - Deterministic offline demo market values for 900 real SEC-catalog identities,

@@ -80,9 +80,11 @@ fn render_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
             .style(Style::default().fg(MUTED).bg(PANEL)),
         Rect::new(area.x + split, area.y, area.width - split, 1),
     );
-    let inspector = state
-        .hovered_symbol
-        .as_deref()
+    let inspector_symbol = match state.route {
+        Route::Sector(_) | Route::Favorites => state.focused_symbol(),
+        Route::Overview | Route::Ticker(_) => state.hovered_symbol.as_deref(),
+    };
+    let inspector = inspector_symbol
         .and_then(|symbol| {
             state
                 .tiles
@@ -317,7 +319,7 @@ fn render_full_detail(
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(6), Constraint::Min(10)])
         .split(area);
-    render_detail_header(frame, detail, rows[0], tint);
+    render_detail_header(frame, state, detail, rows[0], tint);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
@@ -352,7 +354,7 @@ fn render_compact_detail(
             Constraint::Min(8),
         ])
         .split(area);
-    render_detail_header(frame, detail, rows[0], tint);
+    render_detail_header(frame, state, detail, rows[0], tint);
     render_detail_tabs(frame, state, rows[1], tint);
     match state.detail_tab {
         DetailTab::Chart => render_price_volume(
@@ -367,7 +369,13 @@ fn render_compact_detail(
     }
 }
 
-fn render_detail_header(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, tint: Color) {
+fn render_detail_header(
+    frame: &mut Frame<'_>,
+    state: &mut UiState,
+    detail: &TickerDetail,
+    area: Rect,
+    tint: Color,
+) {
     let price = detail
         .snapshot
         .as_ref()
@@ -384,10 +392,12 @@ fn render_detail_header(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect
         .company
         .sector
         .map_or("Unclassified", |sector| sector.label());
+    let favorite = if detail.starred { "★" } else { "☆" };
+    let favorite_offset = detail.company.symbol.width() as u16 + 2;
     let lines = vec![
         Line::from(vec![
             Span::styled(
-                format!(" {} ", detail.company.symbol),
+                format!(" {} {favorite} ", detail.company.symbol),
                 Style::default()
                     .fg(CANVAS)
                     .bg(performance_accent(detail.period_return))
@@ -417,6 +427,13 @@ fn render_detail_header(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect
             ),
         area,
     );
+    if favorite_offset < area.width {
+        state.register(
+            Rect::new(area.x + favorite_offset, area.y, 1, 1),
+            UiAction::ToggleFavorite(detail.company.symbol.clone()),
+            Some(detail.company.symbol.clone()),
+        );
+    }
 }
 
 fn render_detail_tabs(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, tint: Color) {
@@ -539,12 +556,14 @@ fn render_news(
         area,
     );
     if news.is_empty() {
+        state.selected_news = 0;
         frame.render_widget(
             Paragraph::new("No cached headlines").style(Style::default().fg(MUTED).bg(tint)),
             inner,
         );
         return;
     }
+    state.selected_news = state.selected_news.min(news.len() - 1);
     let row_height = if inner.height >= 12 { 3 } else { 2 };
     for (index, item) in news.iter().enumerate() {
         let y = inner.y + index as u16 * row_height;
@@ -554,17 +573,25 @@ fn render_news(
         let height = row_height.min(inner.bottom() - y);
         let rect = Rect::new(inner.x, y, inner.width, height);
         let published = item.published_at.with_timezone(&Local).format("%b %d");
+        let selected = index == state.selected_news;
+        let row_tint = if selected { PANEL_ALT } else { tint };
+        let marker = if selected { "›" } else { " " };
         let text = vec![
-            Line::styled(item.headline.clone(), Style::default().fg(TEXT).bold()),
             Line::styled(
-                format!("{published}  ·  {}", item.source),
+                format!("{marker}{}", item.headline),
+                Style::default()
+                    .fg(if selected { CYAN } else { TEXT })
+                    .bold(),
+            ),
+            Line::styled(
+                format!(" {published}  ·  {}", item.source),
                 Style::default().fg(MUTED),
             ),
         ];
         frame.render_widget(
             Paragraph::new(text)
                 .wrap(Wrap { trim: true })
-                .style(Style::default().bg(tint)),
+                .style(Style::default().bg(row_tint)),
             rect,
         );
         state.register(rect, UiAction::OpenNews(index), None);

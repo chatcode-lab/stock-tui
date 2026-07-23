@@ -35,6 +35,7 @@ include = [
 [dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1.89"
+base64 = "0.22.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }

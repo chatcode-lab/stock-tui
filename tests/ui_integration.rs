@@ -6,6 +6,7 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
 use stock_tui::{
     app::{AppCommand, handle_event},
     domain::{Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, TickerDetail},
+    palette::PANEL,
     ui::{
         layout::AppLayout,
         render,
@@ -111,11 +112,19 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
     }
     assert!(full.chart_rect.is_some());
     assert!(!full.chart_sample_indices.is_empty());
+    assert!(full_screen.contains('★'));
+    assert!(full.hit_targets.iter().any(|target| {
+        target.action == UiAction::ToggleFavorite("ACME".to_owned()) && target.rect.width == 1
+    }));
     assert!(
         full.hit_targets
             .iter()
             .any(|target| target.action == UiAction::OpenNews(0))
     );
+
+    let mut unstarred = detail_state();
+    unstarred.detail.as_mut().expect("fixture detail").starred = false;
+    assert!(screen_text(&render_at(&mut unstarred, 160, 48)).contains('☆'));
 
     let mut compact = detail_state();
     let chart_buffer = render_at(&mut compact, 80, 24);
@@ -144,6 +153,36 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
             .iter()
             .any(|target| target.action == UiAction::OpenNews(0))
     );
+
+    let second_news = compact
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenNews(1))
+        .cloned()
+        .expect("second news row has a mouse target");
+    assert!(
+        handle_event(
+            &mut compact,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: second_news.rect.x,
+                row: second_news.rect.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    assert_eq!(compact.selected_news, 1);
+
+    assert!(press(&mut compact, KeyCode::Up, KeyModifiers::NONE).is_empty());
+    assert_eq!(compact.selected_news, 0);
+    assert!(press(&mut compact, KeyCode::Down, KeyModifiers::NONE).is_empty());
+    assert_eq!(
+        press(&mut compact, KeyCode::Enter, KeyModifiers::NONE),
+        vec![AppCommand::OpenUrl(
+            "https://example.invalid/acme/results".to_owned()
+        )]
+    );
 }
 
 #[test]
@@ -154,14 +193,30 @@ fn detail_chart_fills_the_plot_and_exposes_aligned_axes_and_hover() {
         .chart_rect
         .expect("detail chart exposes its plot area");
 
-    let filled_cells = plot
+    let gradient_cells = plot
         .rows()
         .flat_map(|row| row.columns())
-        .filter(|position| matches!(buffer[*position].symbol(), "█" | "▀" | "▄"))
+        .filter(|position| buffer[*position].bg != PANEL)
         .count();
     assert!(
-        filled_cells > usize::from(plot.width),
-        "area chart should contain more than a one-cell outline"
+        gradient_cells > usize::from(plot.width),
+        "area chart should shade multiple rows beneath the price trace"
+    );
+
+    let braille_cells = plot
+        .rows()
+        .flat_map(|row| row.columns())
+        .filter(|position| {
+            buffer[*position]
+                .symbol()
+                .chars()
+                .next()
+                .is_some_and(|symbol| ('\u{2801}'..='\u{28ff}').contains(&symbol))
+        })
+        .count();
+    assert!(
+        braille_cells >= usize::from(plot.width),
+        "price trace and guides should use high-resolution Braille cells"
     );
 
     let mut y_axis = String::new();
@@ -252,9 +307,9 @@ fn rendered_mouse_target_hovers_and_opens_ticker() {
     let target = state
         .hit_targets
         .iter()
-        .find(|target| target.action == UiAction::OpenTicker("ACME".to_owned()))
+        .find(|target| target.action == UiAction::OpenTicker("BETA".to_owned()))
         .cloned()
-        .expect("sector render registers the ACME tile");
+        .expect("sector render registers the BETA tile");
     let column = target.rect.x + target.rect.width / 2;
     let row = target.rect.y + target.rect.height / 2;
 
@@ -268,7 +323,44 @@ fn rendered_mouse_target_hovers_and_opens_ticker() {
         }),
     );
     assert!(hover_commands.is_empty());
-    assert_eq!(state.hovered_symbol.as_deref(), Some("ACME"));
+    assert_eq!(state.hovered_symbol.as_deref(), Some("BETA"));
+    assert_eq!(state.selected_ticker, 1);
+    assert_eq!(state.focused_symbol(), Some("BETA"));
+
+    assert!(press(&mut state, KeyCode::Left, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.hovered_symbol, None);
+    assert_eq!(state.selected_ticker, 0);
+    assert_eq!(state.focused_symbol(), Some("ACME"));
+    assert!(
+        screen_text(&render_at(&mut state, 80, 24)).contains("ACME  Acme Systems  $108.00  -0.50%"),
+        "keyboard ticker selection should update the header inspector"
+    );
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+
+    let leave_commands = handle_event(
+        &mut state,
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+    assert!(leave_commands.is_empty());
+    assert_eq!(state.hovered_symbol, None);
+    assert_eq!(state.selected_ticker, 1);
+    assert_eq!(state.focused_symbol(), Some("BETA"));
 
     let click_commands = handle_event(
         &mut state,
@@ -281,9 +373,53 @@ fn rendered_mouse_target_hovers_and_opens_ticker() {
     );
     assert_eq!(
         click_commands,
-        vec![AppCommand::LoadTicker("ACME".to_owned())]
+        vec![AppCommand::LoadTicker("BETA".to_owned())]
     );
-    assert_eq!(state.route, Route::Ticker("ACME".to_owned()));
+    assert_eq!(state.route, Route::Ticker("BETA".to_owned()));
+
+    assert!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.route, Route::Sector(Sector::Technology));
+    assert_eq!(state.selected_ticker, 1);
+    assert_eq!(state.focused_symbol(), Some("BETA"));
+}
+
+#[test]
+fn overview_hover_selects_only_the_enclosing_sector() {
+    let mut state = fixture_state();
+    render_at(&mut state, 120, 40);
+
+    let target = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenSector(Sector::Technology))
+        .cloned()
+        .expect("overview render registers the technology panel");
+    let hover_commands = handle_event(
+        &mut state,
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: target.rect.x + target.rect.width / 2,
+            row: target.rect.y + target.rect.height / 2,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+
+    assert!(hover_commands.is_empty());
+    assert_eq!(
+        state.selected_sector,
+        Sector::ALL
+            .iter()
+            .position(|sector| *sector == Sector::Technology)
+            .unwrap()
+    );
+    assert_eq!(state.hovered_symbol, None);
+    assert_eq!(state.focused_symbol(), None);
+
+    let buffer = render_at(&mut state, 120, 40);
+    assert!(
+        (target.rect.y..target.rect.bottom()).all(|y| buffer[(target.rect.x, y)].symbol() == "▌"),
+        "selected sector should have one continuous panel-level marker"
+    );
 }
 
 #[test]

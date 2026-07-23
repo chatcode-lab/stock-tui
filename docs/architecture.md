@@ -110,7 +110,10 @@ keeps the underlying market context intact while an overlay is open.
 Each frame clears and rebuilds a list of rectangular hit targets. Mouse input
 is resolved against that list in reverse paint order, so modal controls win
 over content beneath them. The same target actions feed the same state
-transitions used by keyboard input.
+transitions used by keyboard input. Overview hit targets cover whole sector
+panels; sector and news-row hover moves the persistent selection used by the
+keyboard. Returning from ticker detail restores the originating sector or
+Favorites selection.
 
 ## Responsive Rendering
 
@@ -130,11 +133,11 @@ upper-half block character, retaining all 100 signals in five rows. Sector
 detail uses ten columns when possible and otherwise selects between three and
 ten columns from the available width.
 
-Charts sample cached bars to terminal width while preserving the first and
-last point. A half-block canvas renders a banded filled area, price trace,
-guides, previous close, price scale, and range-aware date scale; a sparkline
-renders volume. Hover or keyboard selection adds a crosshair and updates the
-price/time label.
+Charts sample cached bars to terminal resolution while preserving the first
+and last point. A Braille canvas renders thin price, guide, previous-close, and
+crosshair lines over a per-cell RGB area gradient, with price and range-aware
+date scales. A responsive 4-7-row Braille histogram renders volume. Hover or
+keyboard selection adds a crosshair and updates the price/time label.
 
 ## Heatmap Semantics
 
@@ -198,9 +201,11 @@ to contain credentials, but provider errors and user activity can still be
 sensitive and should not be posted without review.
 
 News URLs are untrusted remote content. They are handed to the operating
-system's default browser only after explicit activation. The local cache may
-still reveal a user's searches indirectly through retained companies, news,
-and favorites; protect it like other personal application data.
+system's default browser only after explicit activation. If browser launch
+fails, the same URL is Base64-encoded into an OSC 52 terminal clipboard
+sequence; no shell command interpolates it. The local cache may still reveal a
+user's searches indirectly through retained companies, news, and favorites;
+protect it like other personal application data.
 
 ## Planned Backend Boundary
 
