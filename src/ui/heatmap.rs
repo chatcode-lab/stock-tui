@@ -23,18 +23,27 @@ pub fn render(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     } else {
         0.01
     };
-    let scale = HeatScale::from_values(
-        state.tiles.iter().map(|tile| tile.period_return),
-        floor,
-        state.theme,
-    );
+    let values = if matches!(state.route, Route::Favorites) {
+        state
+            .favorite_tiles
+            .iter()
+            .map(|tile| tile.period_return)
+            .collect::<Vec<_>>()
+    } else {
+        state
+            .tiles
+            .iter()
+            .map(|tile| tile.period_return)
+            .collect::<Vec<_>>()
+    };
+    let scale = HeatScale::from_values(values.into_iter(), floor, state.theme);
     frame
         .buffer_mut()
         .set_style(area, Style::default().bg(CANVAS));
     match state.route {
         Route::Overview => render_overview(frame, state, area, scale),
-        Route::Sector(sector) => render_sector(frame, state, area, scale, Some(sector), false),
-        Route::Favorites => render_sector(frame, state, area, scale, None, true),
+        Route::Sector(_) => render_sector(frame, state, area, scale, false),
+        Route::Favorites => render_sector(frame, state, area, scale, true),
         Route::Ticker(_) => {}
     }
 }
@@ -97,17 +106,9 @@ fn render_sector(
     state: &mut UiState,
     area: Rect,
     scale: HeatScale,
-    sector: Option<Sector>,
     favorites_only: bool,
 ) {
-    let tiles: Vec<MarketTile> = state
-        .tiles
-        .iter()
-        .filter(|tile| sector.is_none_or(|sector| tile.company.sector == Some(sector)))
-        .filter(|tile| !favorites_only || tile.starred)
-        .take(100)
-        .cloned()
-        .collect();
+    let tiles: Vec<MarketTile> = state.visible_tiles().into_iter().cloned().collect();
     let columns = if area.width >= 70 {
         10
     } else {

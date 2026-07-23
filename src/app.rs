@@ -71,6 +71,10 @@ fn handle_key(state: &mut UiState, key: KeyEvent) -> Vec<AppCommand> {
         KeyCode::Char('g') if key.modifiers.is_empty() => {
             apply_action(state, UiAction::BeginSectorShortcut)
         }
+        KeyCode::Char('p') if key.modifiers.is_empty() => {
+            apply_action(state, UiAction::PreviousView)
+        }
+        KeyCode::Char('n') if key.modifiers.is_empty() => apply_action(state, UiAction::NextView),
         KeyCode::Char('q') if key.modifiers.is_empty() => vec![AppCommand::Quit],
         KeyCode::Esc | KeyCode::Backspace => apply_action(state, UiAction::Back),
         KeyCode::Char('/') => apply_action(state, UiAction::OpenSearch),
@@ -393,6 +397,8 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
             state.sector_shortcut_pending = true;
             Vec::new()
         }
+        UiAction::PreviousView => switch_view(state, -1),
+        UiAction::NextView => switch_view(state, 1),
         UiAction::CloseOverlay => {
             state.overlay = None;
             Vec::new()
@@ -461,6 +467,62 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
             state.detail_tab = tab;
             Vec::new()
         }
+    }
+}
+
+fn switch_view(state: &mut UiState, direction: isize) -> Vec<AppCommand> {
+    match state.route.clone() {
+        Route::Sector(sector) => {
+            let current = Sector::ALL
+                .iter()
+                .position(|candidate| *candidate == sector)
+                .unwrap_or(0);
+            let next = cycle_index(current, direction, Sector::ALL.len());
+            state.route = Route::Sector(Sector::ALL[next]);
+            state.selected_sector = next;
+            state.selected_ticker = state
+                .selected_ticker
+                .min(state.visible_tiles().len().saturating_sub(1));
+            state.selected_benchmark = None;
+            state.hovered_symbol = None;
+            state.detail_return_route = None;
+            Vec::new()
+        }
+        Route::Ticker(symbol) => {
+            let context = state.detail_context_route();
+            let symbols = state
+                .detail_navigation_symbols()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let Some(current) = symbols.iter().position(|candidate| *candidate == symbol) else {
+                return Vec::new();
+            };
+            if symbols.len() < 2 {
+                return Vec::new();
+            }
+            let next = cycle_index(current, direction, symbols.len());
+            let next_symbol = symbols[next].clone();
+            if context.is_none() && MarketBenchmark::for_symbol(&symbol).is_some() {
+                state.selected_benchmark = Some(next);
+            } else {
+                state.detail_return_route = state.detail_return_route.clone().or(context);
+                state.selected_ticker = next;
+            }
+            apply_action(state, UiAction::OpenTicker(next_symbol))
+        }
+        Route::Overview | Route::Favorites => Vec::new(),
+    }
+}
+
+fn cycle_index(value: usize, direction: isize, length: usize) -> usize {
+    if length == 0 {
+        return 0;
+    }
+    if direction < 0 {
+        value.checked_sub(1).unwrap_or(length - 1)
+    } else {
+        (value + 1) % length
     }
 }
 

@@ -283,18 +283,8 @@ fn apply_sync_event(event: SyncEvent, storage: &Storage, state: &mut UiState) ->
 
 fn reload_tiles(storage: &Storage, state: &mut UiState) -> Result<()> {
     let now = Utc::now();
-    let mut tiles = storage.heatmap_tiles(state.date_range, state.sort, None, false, now)?;
-    let existing: HashSet<String> = tiles
-        .iter()
-        .map(|tile| tile.company.symbol.clone())
-        .collect();
-    tiles.extend(
-        storage
-            .favorite_tiles(state.date_range, state.sort, now)?
-            .into_iter()
-            .filter(|tile| !existing.contains(&tile.company.symbol)),
-    );
-    state.tiles = tiles;
+    state.tiles = storage.heatmap_tiles(state.date_range, state.sort, None, false, now)?;
+    state.favorite_tiles = storage.favorite_tiles(state.date_range, state.sort, now)?;
     state.benchmarks = storage.benchmark_tiles(state.date_range, now)?;
     Ok(())
 }

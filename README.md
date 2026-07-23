@@ -27,7 +27,8 @@ read-only: it displays market information and does not place orders.
 - Reorders tickers by market capitalization, gain, volume, or symbol.
 - Provides responsive sector grids and a ticker detail screen with a
   Braille-resolution price trace, softly filled tint, price/time axes,
-  fine-grained volume histogram, statistics, company context, and news.
+  fine-grained volume histogram, current-order rank, statistics, company
+  context, and news.
 - Supports mouse hover, clicking, wheel input, keyboard navigation, and
   terminal resize events.
 - Searches the local issuer catalog by symbol or company name.
@@ -142,11 +143,18 @@ populate a live cache, or use `--demo` for a self-contained experience.
 
 ### Prebuilt Binaries
 
-When a release has attached artifacts, download the archive for your operating
-system and CPU from
+Download the archive for your operating system and CPU from
 [GitHub Releases](https://github.com/chatcode-lab/stock-tui/releases), verify
 the archive against the attached `SHA256SUMS`, extract it, and place `stock-tui`
 (or `stock-tui.exe`) on `PATH`.
+
+| Platform | Release asset |
+| --- | --- |
+| Linux x86_64 | `stock-tui-v<VERSION>-x86_64-unknown-linux-musl.tar.gz` |
+| Linux ARM64 | `stock-tui-v<VERSION>-aarch64-unknown-linux-musl.tar.gz` |
+| macOS Apple Silicon | `stock-tui-v<VERSION>-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `stock-tui-v<VERSION>-x86_64-apple-darwin.tar.gz` |
+| Windows x86_64 | `stock-tui-v<VERSION>-x86_64-pc-windows-msvc.zip` |
 
 The GitHub CLI can display and download the latest available assets:
 
@@ -154,9 +162,6 @@ The GitHub CLI can display and download the latest available assets:
 gh release view --repo chatcode-lab/stock-tui
 gh release download --repo chatcode-lab/stock-tui
 ```
-
-Source builds remain the canonical installation path until a release lists a
-binary for your platform.
 
 ### Build From Source
 
@@ -197,6 +202,7 @@ news row can be clicked with the left mouse button.
 | `0` | Select all available history |
 | `g`, then `c s h e t f i m u` | Open Consumer, Services, Healthcare, Energy, Technology, Financial, Industrial, Materials, or Utilities |
 | `Alt`/`Meta` + sector letter | Optional direct form of the same sector shortcut |
+| `p` / `n` | Previous / next sector or ticker, wrapping at either end |
 | `Tab` | Cycle Chart, Statistics, and News in compact ticker view |
 | `r` | Request an immediate broad-market snapshot refresh |
 | `S` | Open read-only data status |
@@ -204,7 +210,9 @@ news row can be clicked with the left mouse button.
 | `q` or `Ctrl-C` | Quit and restore the terminal |
 
 On ticker detail, Left/Right (or `h`/`l`) moves the chart cursor while
-Up/Down (or `k`/`j`) selects the related-news row; `Enter` opens it.
+Up/Down (or `k`/`j`) selects the related-news row; `Enter` opens it. `p` and
+`n` open the previous or next ticker in the originating sector, starred list,
+or benchmark order while preserving the selected range and ordering.
 
 The `g` sector prefix applies only to the immediately following key. `Esc` or
 `Backspace` cancels it; any other non-sector key cancels the prefix and keeps

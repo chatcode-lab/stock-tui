@@ -42,6 +42,8 @@ pub enum UiAction {
     OpenSync,
     OpenSort,
     BeginSectorShortcut,
+    PreviousView,
+    NextView,
     CloseOverlay,
     SelectRange(DateRange),
     SelectSort(SortMode),
@@ -77,6 +79,7 @@ pub struct UiState {
     pub date_range: DateRange,
     pub sort: SortMode,
     pub tiles: Vec<MarketTile>,
+    pub favorite_tiles: Vec<MarketTile>,
     pub benchmarks: Vec<MarketTile>,
     pub selected_benchmark: Option<usize>,
     pub sector_shortcut_pending: bool,
@@ -111,6 +114,7 @@ impl Default for UiState {
             date_range: DateRange::Day,
             sort: SortMode::MarketCap,
             tiles: Vec::new(),
+            favorite_tiles: Vec::new(),
             benchmarks: Vec::new(),
             selected_benchmark: None,
             sector_shortcut_pending: false,
@@ -213,10 +217,82 @@ impl UiState {
                 .tiles
                 .iter()
                 .filter(|tile| tile.company.sector == Some(sector))
+                .take(100)
                 .collect(),
-            Route::Favorites => self.tiles.iter().filter(|tile| tile.starred).collect(),
+            Route::Favorites => self.favorite_tiles.iter().take(100).collect(),
             _ => self.tiles.iter().collect(),
         }
+    }
+
+    #[must_use]
+    pub fn detail_context_route(&self) -> Option<Route> {
+        if let Some(route @ (Route::Sector(_) | Route::Favorites)) = &self.detail_return_route {
+            return Some(route.clone());
+        }
+        let Route::Ticker(symbol) = &self.route else {
+            return None;
+        };
+        self.detail
+            .as_ref()
+            .and_then(|detail| detail.company.sector)
+            .or_else(|| {
+                self.tiles
+                    .iter()
+                    .find(|tile| tile.company.symbol == *symbol)
+                    .and_then(|tile| tile.company.sector)
+            })
+            .map(Route::Sector)
+    }
+
+    #[must_use]
+    pub fn detail_navigation_symbols(&self) -> Vec<&str> {
+        let Route::Ticker(symbol) = &self.route else {
+            return Vec::new();
+        };
+        let context = self.detail_context_route();
+        if context.is_none() && MarketBenchmark::for_symbol(symbol).is_some() {
+            return MarketBenchmark::ALL
+                .iter()
+                .map(|benchmark| benchmark.symbol)
+                .collect();
+        }
+        match context {
+            Some(Route::Sector(sector)) => self
+                .tiles
+                .iter()
+                .filter(|tile| tile.company.sector == Some(sector))
+                .take(100)
+                .map(|tile| tile.company.symbol.as_str())
+                .collect(),
+            Some(Route::Favorites) => self
+                .favorite_tiles
+                .iter()
+                .take(100)
+                .map(|tile| tile.company.symbol.as_str())
+                .collect(),
+            Some(Route::Overview) | Some(Route::Ticker(_)) | None => Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn detail_rank(&self) -> Option<(usize, usize)> {
+        let Route::Ticker(symbol) = &self.route else {
+            return None;
+        };
+        let symbols = self.detail_navigation_symbols();
+        symbols
+            .iter()
+            .position(|candidate| *candidate == symbol)
+            .map(|index| (index + 1, symbols.len()))
+    }
+
+    #[must_use]
+    pub fn tile(&self, symbol: &str) -> Option<&MarketTile> {
+        self.tiles
+            .iter()
+            .chain(&self.favorite_tiles)
+            .chain(&self.benchmarks)
+            .find(|tile| tile.company.symbol == symbol)
     }
 
     #[must_use]

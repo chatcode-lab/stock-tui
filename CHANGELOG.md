@@ -7,6 +7,8 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-23
+
 ### Added
 
 - Initial Rust terminal application using Ratatui, Crossterm, Tokio, and
@@ -19,6 +21,8 @@ pre-1.0 releases.
   and market-cap, gain, volume, and alphabetical ordering.
 - SGR-only mouse hover/click/drag/wheel input, keyboard navigation,
   paste-aware search, and terminal restoration on exit or panic.
+- Context-sensitive `p`/`n` navigation across sectors, ordered ticker details,
+  starred tickers, and benchmark charts, with current-order rank display.
 - Responsive compact/full layouts, centered equal-cell heatmaps, half-block
   overview compression, true-color heat scales with contrast-aware focus,
   monochrome `NO_COLOR` mode, and a thin Braille price trace with softened area
@@ -57,5 +61,8 @@ pre-1.0 releases.
   block caps for eighth-cell height precision.
 - Replaced repeated full-history timeframe discovery during range changes with
   indexed per-symbol availability probes.
+- Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
+  same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/commits/main
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0

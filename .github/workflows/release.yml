@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,8 +20,9 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: stable
+          toolchain: "1.95"
       - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
         shell: bash
         run: |
           package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
@@ -33,15 +35,23 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: stock-tui-linux-x86_64
+            artifact: stock-tui-x86_64-unknown-linux-musl
             binary: stock-tui
             target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            artifact: stock-tui-aarch64-unknown-linux-musl
+            binary: stock-tui
+            target: aarch64-unknown-linux-musl
           - os: macos-latest
-            artifact: stock-tui-macos-aarch64
+            artifact: stock-tui-aarch64-apple-darwin
             binary: stock-tui
             target: aarch64-apple-darwin
+          - os: macos-15-intel
+            artifact: stock-tui-x86_64-apple-darwin
+            binary: stock-tui
+            target: x86_64-apple-darwin
           - os: windows-latest
-            artifact: stock-tui-windows-x86_64
+            artifact: stock-tui-x86_64-pc-windows-msvc
             binary: stock-tui.exe
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
@@ -51,39 +61,54 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: stable
+          toolchain: "1.95"
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Install musl tools
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - name: Configure musl compiler
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          target_key="${{ matrix.target }}"
+          target_key="${target_key//-/_}"
+          target_upper="${target_key^^}"
+          echo "CC_${target_key}=musl-gcc" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_${target_upper}_LINKER=musl-gcc" >> "$GITHUB_ENV"
       - run: cargo build --locked --release --target "${{ matrix.target }}"
       - name: Stage Unix artifact
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/
-          cp README.md LICENSE CHANGELOG.md dist/
-          tar -C dist -czf "${{ matrix.artifact }}.tar.gz" .
+          cp README.md LICENSE CHANGELOG.md config.example.toml .env.example dist/
+          "./dist/${{ matrix.binary }}" --version
+          tar -C dist -czf "stock-tui-v${package_version}-${{ matrix.target }}.tar.gz" .
       - name: Stage Windows artifact
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $metadata = cargo metadata --no-deps --format-version=1 | ConvertFrom-Json
+          $packageVersion = ($metadata.packages | Where-Object name -eq "stock-tui" | Select-Object -First 1).version
           New-Item -ItemType Directory -Force dist
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" dist/
-          Copy-Item README.md,LICENSE,CHANGELOG.md dist/
-          Compress-Archive -Path dist/* -DestinationPath "${{ matrix.artifact }}.zip"
+          Copy-Item README.md,LICENSE,CHANGELOG.md,config.example.toml,.env.example dist/
+          & "./dist/${{ matrix.binary }}" --version
+          Compress-Archive -Path dist/* -DestinationPath "stock-tui-v${packageVersion}-${{ matrix.target }}.zip"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
           path: |
-            ${{ matrix.artifact }}.tar.gz
-            ${{ matrix.artifact }}.zip
+            stock-tui-v*-${{ matrix.target }}.tar.gz
+            stock-tui-v*-${{ matrix.target }}.zip
           if-no-files-found: error
 
   publish:
     needs: build
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write

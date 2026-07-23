@@ -166,6 +166,18 @@ to an official source and a date-sensitive formulation such as "currently".
 Do not paste credentials or real secret-looking examples; use clearly fake
 placeholders.
 
+## Releases
+
+The `Release` workflow can be dispatched manually from `main` to build and
+smoke-test every platform archive without publishing a GitHub release. Before
+tagging, update the package version and changelog, run that packaging check,
+and wait for normal `main` CI.
+
+An annotated `v<package-version>` tag triggers the same build matrix and then
+publishes the archives plus `SHA256SUMS`. The workflow rejects a tag that does
+not exactly match `Cargo.toml`. Never attach a populated database, provider
+cache, API credential, or provider-derived data export to a release.
+
 ## Pull Requests
 
 Keep pull requests focused. The description should state:

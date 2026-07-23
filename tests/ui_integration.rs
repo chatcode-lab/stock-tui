@@ -6,7 +6,9 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect, styl
 use stock_tui::{
     app::{AppCommand, handle_event},
     benchmarks::MarketBenchmark,
-    domain::{Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, TickerDetail},
+    domain::{
+        Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, SortMode, TickerDetail,
+    },
     palette::{CANVAS, CYAN, HeatScale, MUTED, PANEL, Theme},
     ui::{
         layout::AppLayout,
@@ -91,6 +93,113 @@ fn keyboard_drills_from_overview_through_sector_to_ticker() {
 }
 
 #[test]
+fn previous_and_next_cycle_sectors_and_tickers_in_display_order() {
+    let mut sectors = fixture_state();
+    sectors.route = Route::Sector(Sector::Consumer);
+    sectors.selected_ticker = 1;
+
+    assert!(press(&mut sectors, KeyCode::Char('p'), KeyModifiers::NONE).is_empty());
+    assert_eq!(sectors.route, Route::Sector(Sector::Utilities));
+    assert_eq!(sectors.selected_ticker, 1);
+    assert!(press(&mut sectors, KeyCode::Char('n'), KeyModifiers::NONE).is_empty());
+    assert_eq!(sectors.route, Route::Sector(Sector::Consumer));
+
+    let mut detail = fixture_state();
+    detail.sort = SortMode::Gainers;
+    let acme = detail
+        .tiles
+        .iter()
+        .position(|tile| tile.company.symbol == "ACME")
+        .expect("fixture contains ACME");
+    let beta = detail
+        .tiles
+        .iter()
+        .position(|tile| tile.company.symbol == "BETA")
+        .expect("fixture contains BETA");
+    detail.tiles.swap(acme, beta);
+    detail.route = Route::Sector(Sector::Technology);
+
+    assert_eq!(
+        press(&mut detail, KeyCode::Enter, KeyModifiers::NONE),
+        vec![AppCommand::LoadTicker("BETA".to_owned())]
+    );
+    assert_eq!(
+        detail.detail_return_route,
+        Some(Route::Sector(Sector::Technology))
+    );
+    assert_eq!(
+        press(&mut detail, KeyCode::Char('n'), KeyModifiers::NONE),
+        vec![AppCommand::LoadTicker("ACME".to_owned())]
+    );
+    assert_eq!(detail.selected_ticker, 1);
+    assert_eq!(
+        press(&mut detail, KeyCode::Char('n'), KeyModifiers::NONE),
+        vec![AppCommand::LoadTicker("BETA".to_owned())]
+    );
+    assert_eq!(detail.selected_ticker, 0);
+    assert_eq!(
+        press(&mut detail, KeyCode::Char('p'), KeyModifiers::NONE),
+        vec![AppCommand::LoadTicker("ACME".to_owned())]
+    );
+
+    assert!(press(&mut detail, KeyCode::Esc, KeyModifiers::NONE).is_empty());
+    assert_eq!(detail.route, Route::Sector(Sector::Technology));
+    assert_eq!(detail.selected_ticker, 1);
+    assert_eq!(detail.focused_symbol(), Some("ACME"));
+
+    let mut favorites = fixture_state();
+    favorites.favorite_tiles.reverse();
+    let first = favorites.favorite_tiles[0].company.symbol.clone();
+    let second = favorites.favorite_tiles[1].company.symbol.clone();
+    favorites.route = Route::Favorites;
+    assert_eq!(
+        press(&mut favorites, KeyCode::Enter, KeyModifiers::NONE),
+        vec![AppCommand::LoadTicker(first)]
+    );
+    assert_eq!(
+        press(&mut favorites, KeyCode::Char('n'), KeyModifiers::NONE),
+        vec![AppCommand::LoadTicker(second.clone())]
+    );
+    assert!(press(&mut favorites, KeyCode::Esc, KeyModifiers::NONE).is_empty());
+    assert_eq!(favorites.route, Route::Favorites);
+    assert_eq!(favorites.focused_symbol(), Some(second.as_str()));
+}
+
+#[test]
+fn previous_and_next_rail_targets_match_keyboard_navigation() {
+    let mut state = fixture_state();
+    state.route = Route::Sector(Sector::Technology);
+    render_at(&mut state, 60, 20);
+
+    let next = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::NextView)
+        .expect("minimum layout exposes the next-view target")
+        .rect;
+    assert!(
+        state
+            .hit_targets
+            .iter()
+            .any(|target| target.action == UiAction::PreviousView),
+        "minimum layout exposes the previous-view target"
+    );
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: next.x,
+                row: next.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    assert_eq!(state.route, Route::Sector(Sector::Financial));
+}
+
+#[test]
 fn detail_renders_combined_full_view_and_each_compact_tab() {
     let mut full = detail_state();
     let full_buffer = render_at(&mut full, 160, 48);
@@ -101,6 +210,8 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
         "$103.75",
         "+$7.01",
         "+7.25%",
+        "Rank 1/2",
+        "Market cap",
         "PRICE",
         "VOLUME",
         "STATISTICS",
@@ -124,6 +235,23 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
             .iter()
             .any(|target| target.action == UiAction::OpenNews(0))
     );
+
+    let mut reordered = detail_state();
+    reordered.sort = SortMode::Gainers;
+    let acme = reordered
+        .tiles
+        .iter()
+        .position(|tile| tile.company.symbol == "ACME")
+        .expect("fixture contains ACME");
+    let beta = reordered
+        .tiles
+        .iter()
+        .position(|tile| tile.company.symbol == "BETA")
+        .expect("fixture contains BETA");
+    reordered.tiles.swap(acme, beta);
+    let reordered_screen = screen_text(&render_at(&mut reordered, 160, 48));
+    assert!(reordered_screen.contains("Rank 2/2"));
+    assert!(reordered_screen.contains("Gainers"));
 
     let mut unstarred = detail_state();
     unstarred.detail.as_mut().expect("fixture detail").starred = false;
@@ -899,6 +1027,7 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         "Starred      F",
         "Ranges       1..9, 0 or [ ]",
         "Sectors      g then c s h e t f i m u",
+        "Prev / next  p / n (sector or ticker)",
         "Detail       Left/Right chart, Up/Down news",
         "Quit         q",
     ] {
@@ -1002,9 +1131,11 @@ fn fixture_state() -> UiState {
             updated_at: Some(fixture_time()),
         })
         .collect();
+    let favorite_tiles = tiles.iter().filter(|tile| tile.starred).cloned().collect();
 
     UiState {
         tiles,
+        favorite_tiles,
         benchmarks,
         status: "Fixture cache ready".to_owned(),
         snapshot_checkpoint: Some(fixture_time()),

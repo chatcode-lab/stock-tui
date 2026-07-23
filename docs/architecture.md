@@ -121,6 +121,13 @@ panels; sector and news-row hover moves the persistent selection used by the
 keyboard. Returning from ticker detail restores the originating sector or
 Favorites selection.
 
+`p` and `n` cycle through sibling views with wraparound. A sector route follows
+the fixed `Sector::ALL` order and retains the selected tile position when the
+destination has that many entries. Ticker detail follows the exact displayed
+order saved by its originating sector or Favorites route; benchmark details
+follow `SPY`, `DIA`, then `QQQ`. The header derives its one-based position and
+total from that same list, so its rank always matches the active sort.
+
 Sector shortcuts use a terminal-safe two-key chord: `g` arms the chord and the
 next `c/s/h/e/t/f/i/m/u` selects the corresponding sector. Escape, Backspace,
 mouse input, overlays, or one non-sector key cancel the pending prefix; a

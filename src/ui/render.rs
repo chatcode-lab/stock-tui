@@ -86,12 +86,7 @@ fn render_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
         Route::Overview | Route::Ticker(_) => state.hovered_symbol.as_deref(),
     };
     let inspector = inspector_symbol
-        .and_then(|symbol| {
-            state
-                .tiles
-                .iter()
-                .find(|tile| tile.company.symbol == symbol)
-        })
+        .and_then(|symbol| state.tile(symbol))
         .map_or_else(
             || state.status.clone(),
             |tile| {
@@ -163,12 +158,30 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         UiAction::BeginSectorShortcut,
         sector_shortcut_pending,
     );
+    if matches!(state.route, Route::Sector(_) | Route::Ticker(_)) {
+        y = rail_button(
+            frame,
+            state,
+            area,
+            y,
+            "p",
+            "Previous",
+            UiAction::PreviousView,
+            false,
+        );
+        y = rail_button(
+            frame,
+            state,
+            area,
+            y,
+            "n",
+            "Next",
+            UiAction::NextView,
+            false,
+        );
+    }
     if let Some(symbol) = state.focused_symbol().map(str::to_owned) {
-        let starred = state
-            .tiles
-            .iter()
-            .find(|tile| tile.company.symbol == symbol)
-            .is_some_and(|tile| tile.starred);
+        let starred = state.tile(&symbol).is_some_and(|tile| tile.starred);
         y = rail_button(
             frame,
             state,
@@ -557,14 +570,22 @@ fn render_detail_header(
         .map_or_else(|| "--".to_owned(), format_signed_price);
     let classification = MarketBenchmark::for_symbol(&detail.company.symbol).map_or_else(
         || {
-            let rank = detail
-                .sector_rank
-                .map_or_else(|| "--".to_owned(), |value| format!("#{value}"));
+            let rank = state
+                .detail_rank()
+                .map(|(position, total)| {
+                    format!("Rank {position}/{total}  ·  {}", state.sort.label())
+                })
+                .or_else(|| {
+                    detail
+                        .sector_rank
+                        .map(|position| format!("Gain rank #{position}"))
+                })
+                .unwrap_or_else(|| "Outside current order".to_owned());
             let sector = detail
                 .company
                 .sector
                 .map_or("Unclassified", |sector| sector.label());
-            format!("{sector}  ·  {rank} in sector")
+            format!("{sector}  ·  {rank}")
         },
         |benchmark| format!("{} benchmark  ·  ETF proxy", benchmark.label),
     );
@@ -864,7 +885,7 @@ fn render_sort(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 }
 
 fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
-    let modal = centered(area, 58.min(area.width.saturating_sub(4)), 19);
+    let modal = centered(area, 58.min(area.width.saturating_sub(4)), 20);
     frame.render_widget(Clear, modal);
     let content = vec![
         Line::styled("Keyboard", Style::default().fg(CYAN).bold()),
@@ -879,6 +900,7 @@ fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
         Line::from("Data status  S"),
         Line::from("Ranges       1..9, 0 or [ ]"),
         Line::from("Sectors      g then c s h e t f i m u"),
+        Line::from("Prev / next  p / n (sector or ticker)"),
         Line::from("Detail tabs  Tab"),
         Line::from("Detail       Left/Right chart, Up/Down news"),
         Line::from("Quit         q"),
