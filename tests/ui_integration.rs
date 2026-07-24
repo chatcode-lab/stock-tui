@@ -448,16 +448,11 @@ fn detail_chart_fills_the_plot_and_exposes_aligned_axes_and_hover() {
     let hovered_plot = state.chart_rect.expect("hovered chart keeps its plot area");
     let cursor_x = hovered_plot.right() - 1;
     let cursor_symbol = hovered[(cursor_x, hovered_plot.y)].symbol().to_owned();
-    assert!(
-        cursor_symbol
-            .chars()
-            .next()
-            .is_some_and(|symbol| ('\u{2801}'..='\u{28ff}').contains(&symbol))
-    );
+    assert_eq!(cursor_symbol, "·");
     assert!(
         (hovered_plot.y..hovered_plot.bottom())
             .all(|y| hovered[(cursor_x, y)].symbol() == cursor_symbol),
-        "hover cursor should use one fixed Braille subcolumn through grid and label rows"
+        "hover cursor should use one centered dot through grid and label rows"
     );
     assert_eq!(
         (hovered_plot.y..hovered_plot.bottom())

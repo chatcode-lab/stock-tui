@@ -15,6 +15,24 @@ read-only: it displays market information and does not place orders.
 > behavior may change between minor releases. All market information may be
 > delayed, incomplete, or wrong. `stock-tui` is not investment advice.
 
+## Screenshots
+
+These captures use the deterministic offline demo. Company identities are real
+SEC-catalog entries; all displayed prices, returns, volumes, rankings, and news
+are simulated.
+
+### Market Overview
+
+[![Nine-sector stock market heatmap in stock-tui](docs/screenshots/market-overview.png)](docs/screenshots/market-overview.png)
+
+### Sector View
+
+[![Technology sector top-100 heatmap in stock-tui](docs/screenshots/technology-sector.png)](docs/screenshots/technology-sector.png)
+
+### Ticker Detail
+
+[![NVDA detail view with price and volume charts in stock-tui](docs/screenshots/ticker-detail.png)](docs/screenshots/ticker-detail.png)
+
 ## What It Does
 
 - Displays nine economic sectors in a 3x3 overview, with up to 100 companies

@@ -4,7 +4,7 @@ use ratatui::{
     buffer::{Buffer, Cell},
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
-    symbols::{Marker, braille::BRAILLE},
+    symbols::Marker,
     text::Line as TextLine,
     widgets::{
         Block, Borders, Paragraph,
@@ -19,9 +19,8 @@ use crate::{
 };
 
 const TRACE_SAMPLES_PER_COLUMN: usize = 2;
-const BRAILLE_LEFT_COLUMN: u8 = 0x55;
-const BRAILLE_RIGHT_COLUMN: u8 = 0xaa;
 const GRID_DOT: char = '·';
+const CURSOR_DOT: char = '·';
 const GRID_COLOR: Color = Color::Rgb(55, 64, 74);
 
 pub fn render_price_volume(
@@ -429,27 +428,27 @@ fn render_hover_indicator(
     if area.is_empty() || bounds[1] <= bounds[0] {
         return;
     }
-    let (x, subcolumn) = braille_subcell_offset(position, area.width, 2);
-    let pattern = if subcolumn == 0 {
-        BRAILLE_LEFT_COLUMN
-    } else {
-        BRAILLE_RIGHT_COLUMN
-    };
-    let symbol = BRAILLE[usize::from(pattern)];
+    let x = terminal_cell_offset(position, area.width);
     for row in area.top()..area.bottom() {
         buffer[(area.x + x, row)]
-            .set_char(symbol)
+            .set_char(CURSOR_DOT)
             .set_fg(CYAN)
             .set_style(Style::default().remove_modifier(Modifier::all()));
     }
     let y_position = ((bounds[1] - price) / (bounds[1] - bounds[0])).clamp(0.0, 1.0);
     let y = braille_cell_offset(y_position, area.height, 4);
-    buffer[(area.x + x, area.y + y)].set_char(symbol).set_style(
-        Style::default()
-            .fg(CANVAS)
-            .bg(CYAN)
-            .remove_modifier(Modifier::all()),
-    );
+    buffer[(area.x + x, area.y + y)]
+        .set_char(CURSOR_DOT)
+        .set_style(
+            Style::default()
+                .fg(CANVAS)
+                .bg(CYAN)
+                .remove_modifier(Modifier::all()),
+        );
+}
+
+fn terminal_cell_offset(position: f64, cells: u16) -> u16 {
+    (position.clamp(0.0, 1.0) * f64::from(cells.saturating_sub(1))).round() as u16
 }
 
 fn braille_cell_offset(position: f64, cells: u16, dots_per_cell: usize) -> u16 {
@@ -645,7 +644,7 @@ fn sample_bars(bars: &[Bar], width: usize) -> Vec<(usize, &Bar)> {
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
-    use ratatui::widgets::Widget;
+    use ratatui::{symbols::braille::BRAILLE, widgets::Widget};
 
     fn bar(index: i64) -> Bar {
         Bar {
@@ -817,17 +816,14 @@ mod tests {
         render_hover_indicator(&mut buffer, area, (0.5, 75.0), [50.0, 100.0]);
 
         let cell = &buffer[(9, 6)];
-        assert_eq!(
-            cell.symbol(),
-            BRAILLE[usize::from(BRAILLE_RIGHT_COLUMN)].to_string()
-        );
+        assert_eq!(cell.symbol(), CURSOR_DOT.to_string());
         assert_eq!(cell.fg, CANVAS);
         assert_eq!(cell.bg, CYAN);
         assert!(cell.modifier.is_empty());
     }
 
     #[test]
-    fn hover_indicator_replaces_every_row_with_one_fixed_braille_subcolumn() {
+    fn hover_indicator_replaces_every_row_with_one_centered_dot() {
         let area = Rect::new(3, 2, 8, 5);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 16, 10));
         for row in area.top()..area.bottom() {
@@ -840,18 +836,11 @@ mod tests {
 
         render_hover_indicator(&mut buffer, area, (0.6, 15.0), [10.0, 20.0]);
 
-        let (offset, subcolumn) = braille_subcell_offset(0.6, area.width, 2);
-        let x = area.x + offset;
-        let pattern = if subcolumn == 0 {
-            BRAILLE_LEFT_COLUMN
-        } else {
-            BRAILLE_RIGHT_COLUMN
-        };
-        let symbol = BRAILLE[usize::from(pattern)].to_string();
+        let x = area.x + terminal_cell_offset(0.6, area.width);
         let marker_y = area.y + braille_cell_offset(0.5, area.height, 4);
         for row in area.top()..area.bottom() {
             let cell = &buffer[(x, row)];
-            assert_eq!(cell.symbol(), symbol);
+            assert_eq!(cell.symbol(), CURSOR_DOT.to_string());
             if row == marker_y {
                 assert_eq!(cell.fg, CANVAS);
                 assert_eq!(cell.bg, CYAN);
@@ -873,6 +862,9 @@ mod tests {
         assert_eq!(braille_cell_offset(0.10, 6, 4), 0);
         assert_eq!(braille_cell_offset(0.50, 11, 2), 5);
         assert_eq!(braille_cell_offset(1.00, 11, 2), 10);
+        assert_eq!(terminal_cell_offset(0.00, 8), 0);
+        assert_eq!(terminal_cell_offset(0.50, 8), 4);
+        assert_eq!(terminal_cell_offset(1.00, 8), 7);
         assert_eq!(braille_subcell_offset(0.00, 8, 2).1, 0);
         assert_eq!(braille_subcell_offset(1.00, 8, 2).1, 1);
     }

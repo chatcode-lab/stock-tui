@@ -164,8 +164,8 @@ Braille runs, preventing fallback-font advance errors from accumulating across
 browser-hosted terminal rows. The trace replaces guide dots at intersections.
 Price labels are painted over the plot after the chart, using an opaque panel
 background for legibility. Hover or keyboard selection then replaces one fixed
-left or right Braille subcolumn; its price intersection uses one cyan cell with
-a dark version of the same cursor glyph.
+terminal column with centered middle dots; its price intersection uses one
+inverse cyan cell with the same cursor glyph.
 
 A responsive 4-7-row volume histogram uses uniform-color lower-block caps for
 eighth-cell height precision. Fully occupied cells use background color instead

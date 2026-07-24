@@ -7,6 +7,23 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-24
+
+### Changed
+
+- Updated the compatible Rust dependency lockfile, including correctness fixes
+  in `futures-util`, Tokio, and TOML.
+
+### Fixed
+
+- Render the chart cursor with one centered middle dot per terminal cell instead
+  of alternating between left- and right-aligned Braille subcolumns.
+
+### Documentation
+
+- Added current deterministic-demo captures of the market overview, Technology
+  sector, and ticker detail screens to the README.
+
 ## [0.1.0] - 2026-07-23
 
 ### Added
@@ -64,5 +81,6 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
