@@ -11,6 +11,9 @@ endorsed by, or a continuation of StockTouch or its creators.
 The client is written in Rust with Ratatui, Crossterm, Tokio, and SQLite. It is
 read-only: it displays market information and does not place orders.
 
+The iterative Codex work performed through chatcode.dev is documented in the
+[prompt-to-commit build log](PROMPTS.md).
+
 > **Project status:** early, pre-1.0 software. The cache format and provider
 > behavior may change between minor releases. All market information may be
 > delayed, incomplete, or wrong. `stock-tui` is not investment advice.
@@ -315,6 +318,7 @@ documented in [Data Providers](docs/data-providers.md).
 
 ## Documentation
 
+- [Prompt-to-Commit Build Log](PROMPTS.md)
 - [Architecture](docs/architecture.md)
 - [Data Providers and Licensing](docs/data-providers.md)
 - [Cache and Synchronization](docs/cache-and-sync.md)
