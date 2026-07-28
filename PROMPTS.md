@@ -10,11 +10,14 @@ The prompts below are lightly edited and abridged for grammar, clarity, and
 readability while preserving their technical intent. Secrets, machine-local
 paths, system instructions, raw tool output, and private provider data are
 omitted. Attached StockTouch and work-in-progress screenshots are described
-but not republished here. Every commit link is immutable.
+but not republished here. Every commit link is immutable; links into private
+infrastructure repositories require collaborator access.
 
 The chronology covers product-development prompts through the `v0.1.1`
-release. It excludes session-management instructions and this document's own
-editorial request.
+release and the first post-release provider, onboarding, market-cap, and SEC
+catalog pipeline, plus the first private development-provider prototype. It
+excludes session-management instructions and this document's own editorial
+requests.
 
 ## 1. Build a StockTouch-Inspired Market TUI
 
@@ -452,6 +455,423 @@ and `SHA256SUMS`. The public assets were downloaded again, their checksums and
 archive contents were verified, and the Linux x86_64 binary reported
 `stock-tui 0.1.1`.
 
+## 16. Replace Previous/Next Keys and Explain Production Credentials
+
+> Change the sibling-navigation controls: use `Space` for next instead of `n`,
+> `Backspace` for previous instead of `p`, and keep `Esc` as the command for
+> going up one level.
+>
+> Also explain how a production installation should set its API key. Can it
+> use the same `.env` file?
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+The event handling, visible hints, and tests moved ordered navigation to
+`Space` and `Backspace`, leaving `Esc` as the only route-up action. Installed
+binaries can still read a private `.env` from the launch directory or its
+parents, or receive credentials through exported environment variables.
+First-run onboarding later added a platform configuration-directory
+`credentials.env`; `--print-config` reports the resolved non-secret paths.
+
+## 17. Locate Application Data on macOS
+
+> Where does the application store its data on macOS?
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+The cache documentation now lists the platform paths and recommends
+`stock-tui --print-config` as the authoritative answer. The default macOS live
+database is
+`~/Library/Application Support/com.chatcode-lab.stock-tui/market.sqlite3`;
+configuration, downloaded catalog, and logs use the platform-specific config
+and cache directories instead of being mixed into the data directory.
+
+## 18. Diagnose Broken macOS Charts and Separate Demo Data
+
+> The chart looks broken on my Mac even though it renders correctly in the
+> Linux xterm environment.
+>
+> I may have launched once without an API key and then restarted with the key
+> configured, causing simulated and live observations to mix. We should clear
+> test data in that situation.
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+The investigation identified cache provenance as a separate risk from terminal
+glyph rendering. Demo and live runs now default to different databases,
+`demo.sqlite3` and `market.sqlite3`. On upgrade, a legacy demo-to-live
+transition removes simulated bars, snapshots, news, memberships, and demo
+checkpoints while preserving favorites and already fetched live-provider
+records. Demo generation remains explicitly resettable with `--reset-demo`.
+
+## 19. Consider a Shared Cloudflare Market-Data API
+
+> Build a thin Cloudflare API that periodically fetches the required Alpaca
+> data, stores it in D1, caches responses, and lets clients run without demo
+> mode or personal keys. Keep personal Alpaca credentials as a compatibility
+> option and expose the service below a `chatcode.dev` domain.
+>
+> Prepare the Wrangler configuration and I will authorize it. D1 is the intended
+> database. Before proceeding, determine whether Alpaca permits this for a
+> non-commercial open-source application or offers a free allowance.
+
+**Committed changes**
+
+- No shared-key market-data service was committed from this proposal.
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+  records the resulting licensing boundary and limits Cloudflare publication
+  to SEC-derived catalog data.
+
+**Summary**
+
+Review of Alpaca's published terms and support guidance found that an ordinary
+personal plan does not grant redistribution rights. Free access, low request
+volume, and non-commercial intent do not by themselves authorize serving the
+same market observations to arbitrary clients. The project therefore did not
+put a maintainer key behind a public proxy. The later Cloudflare work publishes
+only the independently derived SEC issuer catalog, not provider prices, bars,
+volume, news, or credentials.
+
+## 20. Cancel the Proxy and Document Bring-Your-Own-Key Licensing
+
+> Cancel the shared API layer; I do not want a legal conflict. Document how a
+> user can obtain a personal free key instead.
+>
+> How should we ask Alpaca whether a free or sponsored license is available
+> for this open-source application?
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+Bring-your-own-key became the documented live-data model. The setup guide
+covers a free Paper Trading account, the Basic/IEX feed, one-time secret
+handling, local dotenv use, and credential redaction. The provider document
+adds a public-display and redistribution inquiry checklist plus a concise
+request template covering fields, derived displays, caching, retention,
+audience, attribution, extraction controls, and separate news rights. It also
+states that a plan upgrade, rate-limit increase, marketing reply, or OAuth
+approval is not a redistribution license.
+
+## 21. Add Interactive Credential Onboarding
+
+> If no valid API key is configured, show a registration link, try to open it
+> or copy it to the clipboard if opening fails, then accept the key and secret
+> without displaying them. Store the credentials locally and start the normal
+> application.
+>
+> Keep storage simple: a private raw `.env`-style file in the user's home or
+> application directory is sufficient.
+>
+> Do not open the registration page automatically. Wait for input:
+> `Enter` opens it, `c` copies it, and `Esc` skips opening and continues to key
+> entry. Also provide `d` so the user can explicitly start the demo.
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+A pre-TUI onboarding flow now appears only for an online Alpaca launch without
+a complete credential pair. It waits for an explicit open, copy, demo, or
+continue action; uses OSC 52 as the terminal clipboard path; reads both
+credential fields with echo disabled; validates them against the provider; and
+writes a mode-restricted `credentials.env` below the platform config
+directory. Existing process or working-directory dotenv credentials retain
+precedence, and partial pairs are never combined with stored values.
+
+## 22. Polish Onboarding Links, Startup Status, and CLI Help
+
+> Encode the registration URL so terminals render it as a highlighted,
+> clickable link.
+>
+> Credential validation and initial cache work can take noticeable time after
+> the values are saved, so print status before the main UI starts.
+>
+> Remove the old `--demo` hint from the onboarding text now that `d` is
+> available there, but keep `--demo` as a command-line option. Add `-h` and
+> `--help`.
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+The signup destination is emitted as an OSC 8 hyperlink with readable fallback
+text. Onboarding and pre-TUI startup report validation, persistence, catalog,
+database, and synchronization progress instead of appearing frozen.
+Credential prompts advertise the direct `d` choice without redundant launch
+instructions, while the Clap CLI exposes standard `-h`/`--help`,
+`-V`/`--version`, provider, catalog, database, feed, demo, offline, and
+redacted configuration options.
+
+## 23. Investigate Alphabet's Missing GOOG Ticker
+
+> Why is `GOOG` absent from the Technology sector? How are companies assigned
+> to sectors and ordered?
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+The investigation documented that the catalog is issuer-based: SEC CIK
+identity is mapped from the newest eligible SIC observation into one of the
+nine legacy sectors, and one canonical exchange ticker represents each issuer.
+The original source-order rule selected Alphabet's `GOOGL`. Canonical selection
+now safely prefers a concise common-equity base such as `GOOG`, while rejecting
+preferred, warrant, unit, right, note, and economically incompatible explicit
+class substitutions. Sector membership initially uses SEC public float as a
+numeric size proxy and is recomputed from estimated market cap when valid share
+and price data become available.
+
+## 24. Fill the Market-Capitalization Gap
+
+> Why is market capitalization unavailable? Can another free source supply it,
+> or can we calculate it? Missing market cap may exclude major companies such
+> as Alphabet and is probably not isolated to one issuer.
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+Alpaca's basic asset response does not provide a complete market-cap field, and
+SEC `EntityPublicFloat` is a ranking proxy rather than market capitalization.
+The catalog builder now extracts common-share estimates from SEC Frames and
+Financial Statement Data Sets with source, date, method, confidence, and
+component provenance. Runtime calculates an estimated ordinary-equity market
+cap only when it can multiply that reviewed share estimate by a current
+provider price. Proxy-only companies remain eligible for sector ranking, but
+the UI does not mislabel public float as market cap.
+
+## 25. Model and Validate the Market-Cap Calculation
+
+> Model the calculation first and compare its results with public reference
+> values such as Yahoo Finance.
+>
+> You may try parsing Yahoo's key-statistics pages using the supplied browser
+> session cookie, in full or in part.
+>
+> Agreed: proceed with the auditable model instead of making the client depend
+> on that scrape.
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+The supplied session data was not stored or committed, and authenticated page
+scraping was rejected as a brittle client dependency. The implemented model
+uses official SEC facts and a contemporaneous provider price. It distinguishes
+point-in-time totals from lower-confidence weighted-average fallbacks,
+excludes diluted and preferred securities, records all assumptions, and fails
+closed on unknown multi-class structures. Reviewed policies cover equal
+economic classes, explicit conversions, and filer-reported equivalents where a
+naive share sum or canonical-price multiplication would be misleading.
+
+## 26. Estimate How Quickly a New IPO Appears
+
+> If a company such as OpenAI completes an IPO, how quickly can the current
+> model discover, rank, and display it correctly?
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+Discovery depends on upstream publication rather than a hard-coded company
+list. A new issuer must appear in the SEC ticker association data, receive an
+eligible SIC and ranking/share facts, and be active in the selected market-data
+provider. The daily catalog job can publish it after those inputs exist, and
+clients recheck the compact catalog every 12 hours by default. A newly listed
+company can remain search-only or proxy-ranked until sufficient fundamentals
+and price data exist; the builder does not invent missing market cap or
+silently guess an unreviewed share structure.
+
+## 27. Keep the Python Catalog Builder Off Client Machines
+
+> How does the Python catalog-builder flow work? Is it run while building a
+> release? Could the catalog be supplied through an API? I do not want Python
+> to become a client-side dependency.
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+`tools/build_sec_catalog.py` is a maintainer and CI tool, never a runtime
+dependency. It downloads official SEC inputs, creates a verbose audit catalog,
+and projects only the Rust-consumed fields into canonical gzip JSON with a
+checksum manifest. Release jobs download one validated compact catalog before
+building all platform binaries, while the Rust client can refresh a newer copy
+from the catalog endpoint and cache it locally. Source builds and outages still
+have a checked-in, validated fallback.
+
+## 28. Measure Catalog Automation on GitHub Actions
+
+> How expensive is a catalog update? Can it run on GitHub Actions for free?
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+A measured warm build took roughly 72 seconds and about 205 MB of peak memory;
+the cold SEC source cache was about 154 MB. That cache contains quarterly bulk
+archives and is not shipped to users. The public repository can run the job on
+standard GitHub-hosted Actions. The committed workflow restores immutable SEC
+downloads, explicitly invalidates mutable ticker and Frame inputs, validates
+fixtures and catalog invariants, packages the compact artifact, and supports
+both a daily off-peak schedule and manual dispatch.
+
+## 29. Generalize Providers and Automate a Compact Catalog
+
+> Make these broader architectural changes:
+>
+> 1. Keep releases independent of the 150-200 MB builder cache. Use a compact
+>    15-20 MB fallback catalog at most, or download it on demand.
+> 2. Put a provider-neutral abstraction in front of market APIs. Alpaca should
+>    become one configurable adapter selected by command-line arguments or a
+>    config file.
+> 3. Build the SEC catalog daily, perhaps twice daily, in GitHub Actions.
+>    Avoid requiring Python on client machines.
+> 4. Reconsider a private default API backed by Alpaca, D1, and edge caching,
+>    hiding the upstream provider and serving enriched catalog data to
+>    `stock-tui` clients.
+>
+> What are the tradeoffs?
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+The size premise was corrected: approximately 154 MB belonged to the
+maintainer's SEC download cache, while the checked-in audit JSON was about
+3.2 MB and its compact runtime projection was below 1 MB before transport
+compression and roughly 86 KB as deterministic gzip. The project keeps that
+small embedded fallback and obtains freshness remotely.
+
+The runtime now exposes provider-neutral asset, market-data, and optional-news
+capabilities with provider-specific configuration namespaces; Alpaca is one
+adapter rather than a type embedded throughout synchronization and UI code. A
+versioned HTTP adapter and public contract define how a separately authorized
+service could integrate, but no shared-key service is claimed as deployed or
+licensed. The request to conceal Alpaca provenance and redistribute its data
+was rejected: transport indirection and removed attribution would not create
+redistribution rights.
+
+The catalog job was set to daily rather than twice daily because SEC
+fundamental inputs do not benefit materially from a twelve-hour build cadence.
+It publishes only independently derived SEC metadata and keeps the large source
+cache inside CI.
+
+## 30. Publish Fresh Catalogs Through Cloudflare R2
+
+> Forget the market-data proxy and implement the remaining architecture.
+> Do not commit every freshly generated catalog to the repository; publish it
+> to Cloudflare R2 instead. Configure the infrastructure with Wrangler and
+> expose a stable static URL such as
+> `lab.chatcode.dev/stock/sec-catalog.tar.gz`.
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+
+**Summary**
+
+The committed Cloudflare tooling provisions a dedicated `stock-tui-catalog` R2
+bucket and custom-domain layout under `stock.chatcode.dev`. A gated daily
+workflow builds and validates the audit catalog, packages deterministic
+single-file gzip JSON instead of adding an unnecessary tar layer, writes
+compressed and uncompressed SHA-256 metadata, uploads immutable versioned
+objects, and updates short-cache stable catalog and manifest keys. Fresh audit
+catalogs remain ephemeral CI artifacts rather than creating repository commit
+churn.
+
+At startup, Rust renders from the newest valid embedded or cached catalog and
+checks the R2 object in the background, so first paint is not network-bound.
+Release builds fetch one validated current catalog for every target, keeping
+binary contents consistent while preserving the repository snapshot for source
+builds and outages. Wrangler provisioning and publication are documented and
+opt-in; the workflow requires explicitly configured Cloudflare credentials,
+SEC contact identity, and enablement variable.
+
+## 31. Prototype a Private Development Provider and Prefer Concise Tickers
+
+> Provide the Wrangler authentication commands when Cloudflare access is
+> needed.
+>
+> Implement the proxy API as a private, development-only alternative provider.
+> Reserve a base such as `stock.chatcode.dev/api`, require no client
+> authentication, and keep the implementation in a separate private
+> `chatcode-lab/stock-api` repository. Enrich its normalized responses with
+> proper market-cap estimates.
+>
+> Document the provider boundary so users can implement compatible services or
+> adapt other market-data providers.
+>
+> Prefer `GOOG` over `GOOGL` as Alphabet's canonical ticker, and favor symbols
+> of four characters or fewer wherever that substitution is economically safe
+> because overview tiles have limited space.
+
+**Committed changes**
+
+- [`3e89a7f` - Add live data onboarding and provider catalog pipeline][commit-3e89a7f]
+- [`a67e660` - Add private stock data worker][private-commit-a67e660]
+
+**Summary**
+
+The Rust client gained a credential-free, provider-neutral `stock-api` adapter
+selected independently from Alpaca. Its versioned HTTP contract covers active
+assets, snapshots, adjusted bars, optional news, pagination, errors, limits,
+and cache semantics; user-defined or third-party services can implement that
+contract without changing the TUI. Snapshot market caps are accepted only as
+positive finite values and fill companies lacking a stronger local SEC
+share-based estimate.
+
+The separate private Worker implements the same contract, an internal
+`MarketDataProvider` interface, strict upstream normalization, exact-response
+R2 caching, bounded D1 observations and opaque page tokens, and market-cap
+estimates carrying price, share, calculation, method, and confidence
+provenance. Local development needs no downstream authentication. Committed
+configuration disables upstream fetching, deployment, preview URLs,
+`workers.dev`, schedules, and public-distribution acknowledgement; no Worker,
+D1 database, API route, or market-data cache was deployed because a private
+Git repository does not make an unauthenticated internet endpoint private or
+grant redistribution rights.
+
+The SEC catalog canonicalizer now selects `GOOG` for Alphabet and applies a
+conservative concise-symbol rule across issuers. It rejects derivatives and
+does not collapse explicit share classes with different economics merely to
+save tile width. Cloudflare catalog provisioning uses a temporary token
+supplied only through the operator's environment; credentials and account
+identifiers are never copied into the repositories or session transcript.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -473,6 +893,12 @@ implementation work.
   query latency.
 - Product decisions can remain explicit about data provenance, simulation,
   provider limits, licensing, cache safety, and unimplemented future work.
+- A licensing review can stop an unsafe backend design before deployment while
+  still producing reusable provider boundaries and independently distributable
+  catalog infrastructure.
+- Maintainer-only Python and Cloudflare tooling can update a versioned,
+  checksummed data artifact without adding a language runtime or large source
+  cache to the Rust client.
 - The same session can carry changes through implementation, review, CI,
   cross-platform packaging, public release, and post-release artifact
   verification.
@@ -492,6 +918,8 @@ implementation work.
 [commit-d046cb9]: https://github.com/chatcode-lab/stock-tui/commit/d046cb90955396830a8a072fc2058fd7e5612354
 [commit-65c194a]: https://github.com/chatcode-lab/stock-tui/commit/65c194a0e67c146c7d44fdbb89f5865dbadd565e
 [commit-95f20b6]: https://github.com/chatcode-lab/stock-tui/commit/95f20b631921053ee84a47a41b6b0ceefd416b57
+[commit-3e89a7f]: https://github.com/chatcode-lab/stock-tui/commit/3e89a7f9134f2e7246f8bb9a55a30cff4c74d936
+[private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
