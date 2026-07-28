@@ -242,7 +242,9 @@ assumptions.
 The `stock-api` adapter demonstrates an isolated optional-authentication path.
 It maps the versioned [Stock API HTTP Contract](stock-api-contract.md) into the
 same domain types, validates HTTPS/loopback transport and bounded responses,
-can omit the news capability, and owns its environment-only bearer header.
+can omit the news capability, and owns its bearer header. The token may come
+from the environment or private TOML configuration, but it never enters the
+provider-neutral interfaces.
 Alpaca and other adapters never receive that token. Its separately operated
 service remains responsible for data provenance and redistribution rights.
 

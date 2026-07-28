@@ -9,7 +9,7 @@ use directories::ProjectDirs;
 use secrecy::SecretString;
 use serde::Deserialize;
 
-use crate::cli::Cli;
+use crate::{cli::Cli, providers::stock_api::validated_bearer_token};
 
 const DEFAULT_DATA_URL: &str = "https://data.alpaca.markets";
 const DEFAULT_TRADING_URL: &str = "https://paper-api.alpaca.markets";
@@ -151,7 +151,7 @@ impl fmt::Debug for Settings {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct FileConfig {
     provider: Option<String>,
@@ -167,14 +167,14 @@ struct FileConfig {
     providers: ProviderConfigs,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct ProviderConfigs {
     alpaca: AlpacaFileConfig,
     stock_api: StockApiFileConfig,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct AlpacaFileConfig {
     feed: Option<String>,
@@ -185,11 +185,12 @@ struct AlpacaFileConfig {
     trading_url: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct StockApiFileConfig {
     base_url: Option<String>,
     news: Option<bool>,
+    token: Option<String>,
 }
 
 impl Settings {
@@ -318,7 +319,13 @@ impl Settings {
                 .or_else(|| env_bool("STOCK_TUI_STOCK_API_NEWS"))
                 .or(file.providers.stock_api.news)
                 .unwrap_or(true),
-            stock_api_token: stock_api_token_from_env(provider, demo, cli.offline),
+            stock_api_token: select_stock_api_token(
+                provider,
+                demo,
+                cli.offline,
+                env::var("STOCK_TUI_STOCK_API_TOKEN").ok(),
+                file.providers.stock_api.token,
+            )?,
             data_url: env::var("STOCK_TUI_DATA_URL")
                 .ok()
                 .or(file.providers.alpaca.data_url)
@@ -388,8 +395,43 @@ fn read_file_config(path: &Path) -> Result<FileConfig> {
     }
     let contents = fs::read_to_string(path)
         .with_context(|| format!("could not read configuration at {}", path.display()))?;
-    toml::from_str(&contents)
-        .with_context(|| format!("invalid configuration at {}", path.display()))
+    toml::from_str(&contents).map_err(|error| {
+        let category = config_error_category(&error);
+        if let Some(span) = error.span() {
+            let (line, column) = line_and_column(&contents, span.start);
+            anyhow::anyhow!(
+                "invalid configuration at {}:{line}:{column} ({category})",
+                path.display(),
+            )
+        } else {
+            anyhow::anyhow!("invalid configuration at {} ({category})", path.display())
+        }
+    })
+}
+
+fn config_error_category(error: &toml::de::Error) -> &'static str {
+    let message = error.message();
+    if message.starts_with("unknown field") {
+        "unknown configuration key"
+    } else if message.starts_with("invalid type") {
+        "wrong configuration value type"
+    } else if message.starts_with("duplicate field") || message.starts_with("duplicate key") {
+        "duplicate configuration key"
+    } else {
+        "invalid TOML syntax or value"
+    }
+}
+
+fn line_and_column(contents: &str, offset: usize) -> (usize, usize) {
+    let prefix = &contents.as_bytes()[..offset.min(contents.len())];
+    let line = prefix.iter().filter(|byte| **byte == b'\n').count() + 1;
+    let column = prefix
+        .iter()
+        .rev()
+        .take_while(|byte| **byte != b'\n')
+        .count()
+        + 1;
+    (line, column)
 }
 
 struct EnvironmentCredentials {
@@ -435,18 +477,28 @@ fn env_bool(key: &str) -> Option<bool> {
     }
 }
 
-fn stock_api_token_from_env(
+fn select_stock_api_token(
     provider: ProviderKind,
     demo: bool,
     offline: bool,
-) -> Option<SecretString> {
+    environment: Option<String>,
+    file: Option<String>,
+) -> Result<Option<SecretString>> {
     if !should_resolve_stock_api_token(provider, demo, offline) {
-        return None;
+        return Ok(None);
     }
-    env::var("STOCK_TUI_STOCK_API_TOKEN")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(SecretString::from)
+    let environment = environment.filter(|value| !value.trim().is_empty());
+    let file = file.filter(|value| !value.trim().is_empty());
+    let selected = environment
+        .map(|token| (token, "STOCK_TUI_STOCK_API_TOKEN"))
+        .or_else(|| file.map(|token| (token, "providers.stock_api.token")));
+    let Some((token, source)) = selected else {
+        return Ok(None);
+    };
+    let Some(token) = validated_bearer_token(&token) else {
+        bail!("invalid stock-api bearer token in {source}");
+    };
+    Ok(Some(SecretString::from(token.to_owned())))
 }
 
 fn should_resolve_stock_api_token(provider: ProviderKind, demo: bool, offline: bool) -> bool {
@@ -515,6 +567,8 @@ mod tests {
 
     #[test]
     fn provider_specific_toml_is_namespaced() {
+        use secrecy::ExposeSecret;
+
         let file: FileConfig = toml::from_str(
             r#"
 provider = "alpaca"
@@ -527,6 +581,7 @@ history_batch_size = 75
 [providers.stock_api]
 base_url = "http://127.0.0.1:8787"
 news = false
+token = "private-development-token"
 "#,
         )
         .expect("provider configuration");
@@ -540,17 +595,144 @@ news = false
             Some("http://127.0.0.1:8787")
         );
         assert_eq!(file.providers.stock_api.news, Some(false));
+        let token = select_stock_api_token(
+            ProviderKind::StockApi,
+            false,
+            false,
+            None,
+            file.providers.stock_api.token,
+        )
+        .expect("valid token");
+        assert_eq!(
+            token.as_ref().map(ExposeSecret::expose_secret),
+            Some("private-development-token")
+        );
     }
 
     #[test]
-    fn stock_api_token_cannot_be_configured_in_toml() {
-        let parsed = toml::from_str::<FileConfig>(
-            r#"
+    fn example_configuration_matches_the_strict_schema() {
+        toml::from_str::<FileConfig>(include_str!("../config.example.toml"))
+            .expect("config.example.toml");
+    }
+
+    #[test]
+    fn stock_api_token_precedence_and_inactive_modes_are_explicit() {
+        use secrecy::ExposeSecret;
+
+        let selected = select_stock_api_token(
+            ProviderKind::StockApi,
+            false,
+            false,
+            Some("environment-token".to_owned()),
+            Some("file-token".to_owned()),
+        )
+        .expect("valid selection")
+        .expect("environment token");
+        assert_eq!(selected.expose_secret(), "environment-token");
+
+        let selected = select_stock_api_token(
+            ProviderKind::StockApi,
+            false,
+            false,
+            Some("  ".to_owned()),
+            Some("  file-token  ".to_owned()),
+        )
+        .expect("valid selection")
+        .expect("file token");
+        assert_eq!(selected.expose_secret(), "file-token");
+
+        let invalid_environment = "invalid environment token";
+        let error = select_stock_api_token(
+            ProviderKind::StockApi,
+            false,
+            false,
+            Some(invalid_environment.to_owned()),
+            Some("valid-file-token".to_owned()),
+        )
+        .expect_err("an invalid higher-precedence token must not fall back");
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("STOCK_TUI_STOCK_API_TOKEN"));
+        assert!(!rendered.contains(invalid_environment));
+
+        for (provider, demo, offline) in [
+            (ProviderKind::Alpaca, false, false),
+            (ProviderKind::StockApi, true, false),
+            (ProviderKind::StockApi, false, true),
+        ] {
+            assert!(
+                select_stock_api_token(
+                    provider,
+                    demo,
+                    offline,
+                    Some("environment-token".to_owned()),
+                    Some("file-token".to_owned()),
+                )
+                .expect("inactive modes ignore tokens")
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_configuration_and_invalid_tokens_never_leak_secrets() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = temp.path().join("config.toml");
+        let secret = "do-not-echo-this-private-token";
+        fs::write(
+            &path,
+            format!(
+                r#"
+provider = "stock-api"
 [providers.stock_api]
-token = "must-remain-environment-only"
-"#,
-        );
-        assert!(parsed.is_err());
+token = "{secret}
+"#
+            ),
+        )
+        .expect("malformed configuration");
+
+        let error = match read_file_config(&path) {
+            Ok(_) => panic!("malformed TOML must fail"),
+            Err(error) => error,
+        };
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("invalid configuration at"));
+        assert!(rendered.contains("config.toml:"));
+        assert!(rendered.contains("invalid TOML syntax or value"));
+        assert!(!rendered.contains(secret));
+
+        for (contents, category) in [
+            (
+                "unexpected_private_key = \"secret\"\n",
+                "unknown configuration key",
+            ),
+            (
+                "refresh_seconds = \"secret\"\n",
+                "wrong configuration value type",
+            ),
+        ] {
+            fs::write(&path, contents).expect("invalid configuration fixture");
+            let error = match read_file_config(&path) {
+                Ok(_) => panic!("configuration must fail"),
+                Err(error) => error,
+            };
+            let rendered = format!("{error:#}");
+            assert!(rendered.contains(category));
+            assert!(!rendered.contains("secret"));
+            assert!(!rendered.contains("unexpected_private_key"));
+        }
+
+        for invalid in [
+            format!("{secret}\nnext-line"),
+            "x".repeat(crate::providers::stock_api::MAX_BEARER_TOKEN_LENGTH + 1),
+            format!("{secret} internal-space"),
+        ] {
+            let error =
+                select_stock_api_token(ProviderKind::StockApi, false, false, None, Some(invalid))
+                    .expect_err("invalid token");
+            let rendered = format!("{error:#}");
+            assert!(rendered.contains("providers.stock_api.token"));
+            assert!(!rendered.contains(secret));
+        }
     }
 
     #[test]

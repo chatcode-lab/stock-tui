@@ -15,11 +15,12 @@ history_batch_size = 50
 # trading_url = "https://paper-api.alpaca.markets"
 
 # Normalized HTTP adapter. Select with provider = "stock-api".
-# Its optional bearer token is environment-only; never put it in this file.
 # The private project endpoint is not a licensed public market-data service.
 [providers.stock_api]
 base_url = "https://stock.chatcode.dev/api"
 news = true
+# Optional bearer token for a trusted compatible service. Keep this file private.
+# token = "replace-with-an-out-of-band-token"
 
 # Local Cloudflare Worker development:
 # base_url = "http://127.0.0.1:8787"

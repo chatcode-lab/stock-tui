@@ -31,7 +31,7 @@ const MAX_ERROR_LENGTH: usize = 240;
 const MAX_NAME_LENGTH: usize = 512;
 const MAX_HEADLINE_LENGTH: usize = 2_048;
 const MAX_SUMMARY_LENGTH: usize = 16_384;
-const MAX_BEARER_TOKEN_LENGTH: usize = 4_096;
+pub(crate) const MAX_BEARER_TOKEN_LENGTH: usize = 4_096;
 
 #[derive(Debug, Clone, Copy)]
 struct RetryPolicy {
@@ -800,16 +800,28 @@ fn bearer_header(token: Option<&SecretString>) -> Result<Option<HeaderValue>, Pr
     let Some(token) = token else {
         return Ok(None);
     };
-    let token = token.expose_secret();
-    if token.trim().is_empty() || token.len() > MAX_BEARER_TOKEN_LENGTH {
+    let Some(token) = validated_bearer_token(token.expose_secret()) else {
         return Err(ProviderError::InvalidRequest(
             "invalid stock API bearer token".to_owned(),
         ));
-    }
+    };
     let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
         .map_err(|_| ProviderError::InvalidRequest("invalid stock API bearer token".to_owned()))?;
     value.set_sensitive(true);
     Ok(Some(value))
+}
+
+pub(crate) fn validated_bearer_token(token: &str) -> Option<&str> {
+    let token = token.trim();
+    let unpadded = token.trim_end_matches('=');
+    (!token.is_empty()
+        && token.len() <= MAX_BEARER_TOKEN_LENGTH
+        && !unpadded.is_empty()
+        && !unpadded.contains('=')
+        && unpadded.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'+' | b'/')
+        }))
+    .then_some(token)
 }
 
 fn parse_retry_after(value: &str) -> Option<Duration> {
@@ -1022,7 +1034,7 @@ mod tests {
         let (base_url, requests, server) = fixture_server(vec![response(
             r#"{"schema_version":1,"data":[],"next_page_token":null}"#,
         )]);
-        let token = "private-stock-api-test-token";
+        let token = "  private-stock-api-test-token\t";
         let provider = authenticated_provider(&base_url, false, token);
 
         provider.fetch_assets().await.expect("authenticated assets");
@@ -1043,6 +1055,9 @@ mod tests {
     fn rejects_invalid_bearer_tokens_without_echoing_them() {
         for token in [
             "line-one\r\nX-Leaked: value".to_owned(),
+            "token with whitespace".to_owned(),
+            "token=with-padding-in-the-middle".to_owned(),
+            "=".to_owned(),
             "x".repeat(MAX_BEARER_TOKEN_LENGTH + 1),
         ] {
             let error = StockApiProvider::new_authenticated(
@@ -1054,6 +1069,10 @@ mod tests {
             let rendered = error.to_string();
             assert!(!rendered.contains(&token));
             assert!(rendered.contains("invalid stock API bearer token"));
+        }
+
+        for token in ["opaque.token-_/+~", "base64-padding=="] {
+            assert_eq!(validated_bearer_token(token), Some(token));
         }
     }
 

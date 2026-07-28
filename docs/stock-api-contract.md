@@ -7,8 +7,9 @@ rights to collect, cache, display, or redistribute any underlying data.
 
 The client does not send Alpaca credentials, cookies, or generic API-key
 headers to this service. It optionally sends a service-specific bearer token
-from the environment-only `STOCK_TUI_STOCK_API_TOKEN`; when unset, no
-authorization header is sent.
+from `STOCK_TUI_STOCK_API_TOKEN` or the lower-precedence
+`providers.stock_api.token` TOML setting; when unset, no authorization header
+is sent.
 
 ## Base URL And Versioning
 
@@ -61,19 +62,22 @@ Accept: application/json
 User-Agent: stock-tui/<version>
 ```
 
-When `STOCK_TUI_STOCK_API_TOKEN` is set, it additionally sends:
+When either supported token source is configured, the client additionally
+sends:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-There is deliberately no CLI or TOML token setting. The token and even its
-presence are excluded from `--print-config`, debug output, and logs. It is used
-only by `StockApiProvider`, never by Alpaca or another adapter. Redirects are
-disabled so a configured endpoint cannot forward the header to another URL.
-When the variable is unset, the header is absent and unauthenticated compatible
-services continue to work. Responses should use `Content-Type:
-application/json`.
+There is deliberately no CLI token flag. The token and even its presence are
+excluded from `--print-config`, debug output, and logs. It is used only by
+`StockApiProvider`, never by Alpaca or another adapter. Redirects are disabled
+so a configured endpoint cannot forward the header to another URL. When both
+sources are unset, the header is absent and unauthenticated compatible services
+continue to work. Keep a token-bearing `.env` or `config.toml` private.
+Tokens are limited to 4,096 ASCII token68 bytes after trimming surrounding
+whitespace: alphanumerics and `-._~+/`, followed by optional `=` padding.
+Responses should use `Content-Type: application/json`.
 
 ## Active Assets
 

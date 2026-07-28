@@ -30,7 +30,9 @@ Credential lookup is narrower and applies only when `provider = "alpaca"`:
 
 Values from different sources are never combined. `--demo`, `--offline`,
 `--print-config`, and the non-interactive `stock-api` adapter do not launch
-Alpaca onboarding or read its managed credential file.
+Alpaca onboarding or read its managed credential file. A `stock-api` bearer
+token has its own narrower precedence: `STOCK_TUI_STOCK_API_TOKEN`, then
+`providers.stock_api.token` in `config.toml`.
 
 ## Credentials
 
@@ -142,7 +144,7 @@ selected database is intentionally a demo cache.
 | `STOCK_TUI_PROVIDER` | `alpaca` | Selects `alpaca` or `stock-api`. |
 | `STOCK_TUI_STOCK_API_URL` | `https://stock.chatcode.dev/api` | Provider-neutral HTTP service base; HTTPS except for loopback development. |
 | `STOCK_TUI_STOCK_API_NEWS` | `true` | Registers and requests the optional `/v1/news` capability. |
-| `STOCK_TUI_STOCK_API_TOKEN` | Unset | Optional bearer token sent only to the selected `stock-api` base URL; environment or private untracked `.env` only. |
+| `STOCK_TUI_STOCK_API_TOKEN` | Unset | Optional bearer token sent only to the selected `stock-api` base URL; overrides the TOML token. |
 | `STOCK_TUI_FEED` | `iex` | `iex`, `delayed_sip`, or `sip`; entitlement remains provider-controlled. |
 | `STOCK_TUI_REFRESH_SECONDS` | `300` | Equivalent to `--refresh-seconds`; clamped to 30..86,400. |
 | `STOCK_TUI_CATALOG_URL` | `https://stock.chatcode.dev/catalog/sec-catalog.json` | Compact SEC-derived catalog; HTTPS is required except for loopback tests. |
@@ -157,12 +159,14 @@ provider URLs must use HTTPS; plain HTTP is accepted only for local fixture
 servers. Only point a live build at infrastructure you trust and control. URL
 overrides do not waive provider terms or create redistribution rights.
 
-The `stock-api` adapter never sends Alpaca credentials. When
-`STOCK_TUI_STOCK_API_TOKEN` is set, it sends only
+The `stock-api` adapter never sends Alpaca credentials. When its token is
+configured through either supported source, it sends only
 `Authorization: Bearer <token>` to the configured `stock-api` base URL and
-refuses HTTP redirects. When unset, it sends no authorization header, preserving
-compatibility with unauthenticated services. The token has no CLI or TOML
-setting and is omitted entirely from `--print-config`, debug output, and logs.
+refuses HTTP redirects. When neither source is set, it sends no authorization
+header, preserving compatibility with unauthenticated services. The token has
+no CLI setting and is omitted entirely from `--print-config`, debug output, and
+logs. It may be kept in a private `.env` or the platform `config.toml`; restrict
+either file to the local user when it contains a token.
 The service base still needs to be trusted because it receives that token and
 controls the observations written to the local cache.
 
@@ -190,6 +194,7 @@ history_batch_size = 50
 [providers.stock_api]
 base_url = "https://stock.chatcode.dev/api"
 news = true
+# token = "replace-with-an-out-of-band-token"
 
 # Local Worker:
 # base_url = "http://127.0.0.1:8787"
@@ -211,18 +216,36 @@ Supported keys and validation:
 | `providers.alpaca.trading_url` | Alpaca paper trading URL | HTTPS base URL, or loopback HTTP for tests |
 | `providers.stock_api.base_url` | `https://stock.chatcode.dev/api` | HTTPS base URL without `/v1`, or loopback HTTP for local development |
 | `providers.stock_api.news` | `true` | Boolean; omit the news capability and requests when false |
+| `providers.stock_api.token` | Unset | Optional bearer token: at most 4,096 ASCII token68 bytes (`A-Z`, `a-z`, `0-9`, `-._~+/`, then optional `=` padding); surrounding whitespace is trimmed |
 
-Credentials and the database path are intentionally absent from TOML. Use
-onboarding or the environment for credentials, and `--db` /
-`STOCK_TUI_DB_PATH` for the database path.
+Alpaca credentials and the database path are intentionally absent from TOML.
+Use onboarding or the environment for Alpaca credentials, and `--db` /
+`STOCK_TUI_DB_PATH` for the database path. A `stock-api` token is accepted
+because this adapter has no interactive onboarding; the environment remains
+the higher-precedence option. Never commit a populated token.
+
+On Unix-like systems, find `config_dir` with `--print-config`, then protect the
+file at the reported path:
+
+```bash
+chmod 600 /path/reported/as/config_dir/config.toml
+```
 
 The flat Alpaca keys accepted by earlier releases remain compatible, but the
 `[providers.alpaca]` namespace is preferred so future adapters can have
 independent settings.
 
-`https://stock.chatcode.dev/api` is reserved configuration, not a currently
-deployed or licensed public market-data service. Use a compatible service that
-you are authorized to operate, or point local Worker development at
+`https://stock.chatcode.dev/api` is the default for the compiled `stock-api`
+adapter, but it is not hardcoded as the only endpoint:
+`providers.stock_api.base_url`, `STOCK_TUI_STOCK_API_URL`, or
+`--stock-api-url` can select any compatible service. Provider IDs and adapters
+are compiled into the binary; adding a different wire protocol requires a Rust
+adapter, while another implementation of the documented stock-api contract
+requires configuration only.
+
+The project endpoint is a private development service, not a licensed public
+market-data service. Use it only when authorized, use another compatible
+service that you are authorized to operate, or point local Worker development at
 `http://127.0.0.1:8787`. The complete versioned JSON contract is documented in
 [Stock API HTTP Contract](stock-api-contract.md).
 

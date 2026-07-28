@@ -195,10 +195,12 @@ while demo data is active.
 
 The `stock-api` adapter is an optionally bearer-authenticated HTTP client for
 assets, snapshots, adjusted bars, and optional news. It is selected explicitly
-with `--provider stock-api` and a provider-specific base URL. It never sends
-Alpaca keys, cookies, or generic API-key headers. When
-`STOCK_TUI_STOCK_API_TOKEN` is set it sends that secret only as a bearer token
-through `StockApiProvider`; when unset it sends no authorization header.
+with `--provider stock-api` or `provider = "stock-api"` and a
+provider-specific base URL. It never sends Alpaca keys, cookies, or generic
+API-key headers. When `STOCK_TUI_STOCK_API_TOKEN` or the lower-precedence
+`providers.stock_api.token` setting is present, it sends that secret only as a
+bearer token through `StockApiProvider`; when both are unset it sends no
+authorization header.
 
 The routes and payloads do not name or assume an upstream vendor. They include
 generic `source` fields where provenance must survive normalization. The full
