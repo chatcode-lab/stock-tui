@@ -1030,6 +1030,7 @@ also ignored defensively so credential setup cannot accidentally stage them.
 **Committed changes**
 
 - [`8660af2` - Prefer configured providers and macOS archives][commit-8660af2]
+- [`d7e2290` - Verify standalone macOS notarization correctly][commit-d7e2290]
 
 **Summary**
 
@@ -1037,12 +1038,20 @@ macOS releases now use the conventional `tar.gz` CLI artifact only. The
 workflow signs the standalone executable with Developer ID and the hardened
 runtime, places it in a temporary ZIP accepted by Apple's notarization service,
 and deletes that upload container with the ephemeral keychain material. It
-requires accepted submit and log responses, then waits for Gatekeeper to report
-the exact `source=Notarized Developer ID` result. The published tarball is
-extracted again, and its executable is byte-compared, signature-verified, and
-Gatekeeper-assessed before upload. This retains online notarization without
-publishing a DMG solely to carry a stapled ticket; standalone executables and
-tar or ZIP transports do not provide offline stapling.
+requires accepted submit and log responses, then uses Apple's documented
+`codesign --check-notarization` path to require an online `notarized`
+assessment. The published tarball is extracted again, and its executable is
+byte-compared, signature-verified, and checked against the same requirement
+before upload. This retains online notarization without publishing a DMG solely
+to carry a stapled ticket; standalone executables and tar or ZIP transports do
+not provide offline stapling.
+
+Live GitHub-hosted validation exposed that `spctl --type execute` applies
+app-oriented policy and can reject a valid bare Mach-O because it is not an app
+bundle. After switching to Apple's "other code" verification command, both
+Apple Silicon and Intel submissions returned `Accepted` with zero issues and
+zero errors, and the final extracted archives satisfied the online notarization
+requirement.
 
 Provider choice is now resolved explicitly before any managed credential
 lookup: CLI, then environment or `.env`, then platform `config.toml`, then the
@@ -1110,6 +1119,7 @@ implementation work.
 [commit-9eaf576]: https://github.com/chatcode-lab/stock-tui/commit/9eaf57695ef6061c4e3c28a9b9f072baa9441d4f
 [commit-eba5667]: https://github.com/chatcode-lab/stock-tui/commit/eba566713605468353c9e488e0ffeac634d2ebc6
 [commit-8660af2]: https://github.com/chatcode-lab/stock-tui/commit/8660af2152dca79a804479e1eea36e94d21a9aa8
+[commit-d7e2290]: https://github.com/chatcode-lab/stock-tui/commit/d7e22905ccd0a2236c0779b73c0ecd3330764c81
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
