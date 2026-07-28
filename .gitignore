@@ -4,6 +4,8 @@
 .env-*
 !.env.example
 credentials.env
+*.p12
+AuthKey_*.p8
 
 # Python
 .venv/
