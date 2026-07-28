@@ -894,6 +894,62 @@ credentials now fail immediately in non-interactive runs instead of silently
 falling through to browser OAuth; no token is written to the repository,
 Wrangler OAuth storage, or shell history.
 
+## 33. Secure, Cache, and Route the Private Test Provider
+
+> Complete the Cloudflare setup directly and allow the rotated Wrangler API
+> token to be entered again.
+>
+> Optimize and deploy the Worker on the reserved `/api` route. Confirm whether
+> it has request rate limits and cached responses, make the Rust client usable
+> with this API, and audit the catalog for other ticker symbols longer than four
+> characters.
+
+**Committed changes**
+
+- [`ce13883` - Add private API auth and reviewed ticker alias][commit-ce13883]
+- [`59bd27f` - Deploy the private authenticated stock gateway][private-commit-59bd27f]
+- [`75e605b` - Fix deploy workflow temporary config path][private-commit-75e605b]
+- [`210886a` - Optimize cached response delivery][private-commit-210886a]
+
+**Summary**
+
+The development service changed from the earlier proposed unauthenticated
+shape to a fail-closed private gateway. Every versioned route requires an
+environment-only bearer token outside loopback. Cloudflare's Rate Limit binding
+allows 120 authenticated requests per 60 seconds per SHA-256 token fingerprint;
+cache hits still consume this client quota. Complete responses remain cached in
+R2 for five minutes to 24 hours depending on endpoint, bounded D1 records cover
+fresh snapshots, catalog fundamentals, and pagination state, and stale data is
+served only within endpoint-specific error windows. The deployment workflow
+maintains a 30-day response-object lifecycle without replacing unrelated R2
+rules. Validated cache keys canonicalize ticker order, equivalent timestamps,
+and endpoint defaults; a hit streams the stored JSON body without parsing and
+serializing large historical pages again.
+
+The private repository gained a dispatch-only, idempotent provisioning and
+deployment workflow. It resolves or creates D1 and the response-cache bucket,
+requires the independently published catalog bucket, writes the otherwise
+uncommitted D1 identifier and enabled private gates into a mode-`0600`
+temporary config, migrates D1, uploads secrets through standard input, and
+routes only `stock.chatcode.dev/api/*`. Its smoke test requires anonymous
+rejection, authenticated health, a live SEC-enriched `NVDA` snapshot, and a
+repeat R2 cache hit. Dependency installation and tests do not receive
+production secrets; `workers.dev`, preview URLs, and scheduled warming remain
+disabled.
+
+The Rust adapter accepts the service token only through
+`STOCK_TUI_STOCK_API_TOKEN`, never through CLI or TOML. It marks the header
+sensitive, disables redirects, omits token presence from printed configuration
+and debug output, and never shares it with the Alpaca adapter.
+
+The freshly published catalog initially contained eleven five-character
+canonical symbols. Review found only one sound shorter listing: Molson Coors
+now uses `TAP` instead of `TAP-A`, scoped to that issuer while `TAP` remains
+listed. Its classes share the reviewed economic rights and one-for-one
+conversion but retain different voting rights. The ten remaining long symbols
+are valid listings or explicit share classes and are never truncated into
+nonexistent tickers.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -942,7 +998,11 @@ implementation work.
 [commit-95f20b6]: https://github.com/chatcode-lab/stock-tui/commit/95f20b631921053ee84a47a41b6b0ceefd416b57
 [commit-3e89a7f]: https://github.com/chatcode-lab/stock-tui/commit/3e89a7f9134f2e7246f8bb9a55a30cff4c74d936
 [commit-0b6e198]: https://github.com/chatcode-lab/stock-tui/commit/0b6e1980466415a54e0c64e4395fe7d0684db2b3
+[commit-ce13883]: https://github.com/chatcode-lab/stock-tui/commit/ce13883ecfe36219679e398385dcb0a905002431
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
+[private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
+[private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
+[private-commit-210886a]: https://github.com/chatcode-lab/stock-api/commit/210886afc358d75efec0f1977831cd4ed0d4f6d7
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
