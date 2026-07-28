@@ -981,6 +981,7 @@ market-cap enrichment, and a repeat R2 response-cache hit.
 - [`82ad218` - Configure authenticated Stock API providers][commit-82ad218]
 - [`cf5fc4e` - Use the safe base64 implementation][commit-cf5fc4e]
 - [`685cdd9` - Sign and notarize macOS release builds][commit-685cdd9]
+- [`9eaf576` - Register the macOS signing keychain][commit-9eaf576]
 
 **Summary**
 
@@ -1007,6 +1008,11 @@ and pass Gatekeeper before publication. Manual workflow runs exercise the same
 path without publishing a release. The secret names match the proven private
 Chatcode workflow, while the public project adds mandatory notarization,
 stapled disk images, and fail-closed verification.
+
+The first live GitHub-hosted macOS 26 validation confirmed that certificate
+import alone is insufficient for `codesign` private-key discovery. The
+ephemeral signing keychain is now temporarily added to the user search list,
+then the original search list is restored during cleanup.
 
 ## Maintenance Outside the Prompt Loop
 
@@ -1062,6 +1068,7 @@ implementation work.
 [commit-82ad218]: https://github.com/chatcode-lab/stock-tui/commit/82ad218df44c445db35832434c04e58d5613e1f4
 [commit-cf5fc4e]: https://github.com/chatcode-lab/stock-tui/commit/cf5fc4e23e04d6ab60e6de70729076c423de44a9
 [commit-685cdd9]: https://github.com/chatcode-lab/stock-tui/commit/685cdd9f4dd8d62ce43dbfa66a94d5d4f141b34f
+[commit-9eaf576]: https://github.com/chatcode-lab/stock-tui/commit/9eaf57695ef6061c4e3c28a9b9f072baa9441d4f
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
