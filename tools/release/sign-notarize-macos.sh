@@ -91,8 +91,18 @@ entitlements_path="$work_directory/binary-entitlements.plist"
 entitlements_stderr_path="$work_directory/binary-entitlements.stderr"
 keychain_path="$work_directory/signing.keychain-db"
 keychain_password="$(openssl rand -base64 32)"
+original_keychains=()
+while read -r keychain; do
+  keychain="${keychain#\"}"
+  keychain="${keychain%\"}"
+  if [[ -n "$keychain" ]]; then
+    original_keychains+=("$keychain")
+  fi
+done < <(security list-keychains -d user)
 
 cleanup() {
+  security list-keychains -d user -s "${original_keychains[@]}" \
+    >/dev/null 2>&1 || true
   security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
   rm -rf "$work_directory"
 }
@@ -116,6 +126,10 @@ security set-key-partition-list \
   -s \
   -k "$keychain_password" \
   "$keychain_path" >/dev/null
+security list-keychains -d user -s \
+  "$keychain_path" \
+  "${original_keychains[@]}"
+security unlock-keychain -p "$keychain_password" "$keychain_path"
 
 signing_identity="$(
   security find-identity -v -p codesigning "$keychain_path" \

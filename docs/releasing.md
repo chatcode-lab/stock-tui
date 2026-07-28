@@ -106,14 +106,15 @@ gh secret set APPLE_NOTARY_ISSUER_ID \
 5. Confirm that both macOS jobs report accepted notarization and successful
    stapling before treating the GitHub release as complete.
 
-The workflow imports the signing identity into an ephemeral keychain, signs
-the executable with a stable identifier, secure timestamp, and hardened
-runtime, and rejects a true `com.apple.security.get-task-allow` entitlement.
-It creates and signs the disk image, verifies its UDIF structure, submits it
-with `notarytool`, then downloads the JSON submission log. It requires
-`Accepted` in both responses and rejects any error-level issue before stapling
-and validating the ticket. Temporary key material, response logs, and the
-keychain are removed when the step exits.
+The workflow imports the signing identity into an ephemeral keychain,
+temporarily registers it in the runner's user search list, signs the executable
+with a stable identifier, secure timestamp, and hardened runtime, and rejects a
+true `com.apple.security.get-task-allow` entitlement. It creates and signs the
+disk image, verifies its UDIF structure, submits it with `notarytool`, then
+downloads the JSON submission log. It requires `Accepted` in both responses
+and rejects any error-level issue before stapling and validating the ticket.
+The original search list is restored, and temporary key material, response
+logs, and the keychain are removed when the step exits.
 
 ## Independent Verification
 

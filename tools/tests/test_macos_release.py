@@ -70,6 +70,8 @@ class MacosReleasePolicyTests(unittest.TestCase):
         self.assertIn("plutil", script)
         self.assertIn("/usr/libexec/PlistBuddy", script)
         self.assertIn("com.apple.security.get-task-allow", script)
+        self.assertIn("original_keychains=()", script)
+        self.assertGreaterEqual(script.count("security list-keychains -d user -s"), 2)
         self.assertIn('notary_status" != "Accepted"', script)
         self.assertIn('notary_log_status" != "Accepted"', script)
         self.assertIn('notary_error_count" -ne 0', script)
