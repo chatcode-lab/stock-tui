@@ -1,11 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
-    io::{self, Write},
+    io,
     time::Duration,
 };
 
 use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use crossterm::event::EventStream;
 use futures_util::StreamExt;
@@ -14,23 +13,69 @@ use tokio::{sync::mpsc, time::Instant};
 use crate::{
     app::{AppCommand, handle_event},
     benchmarks,
-    config::Settings,
+    config::{ProviderKind, Settings},
     demo,
     domain::{Company, Sector, SyncPhase, SyncProgress},
+    providers::{AlpacaProvider, ProviderSet, StockApiProvider},
     storage::Storage,
     sync::{self, SyncCommand, SyncEvent},
-    terminal::TerminalSession,
+    terminal::{TerminalSession, copy_to_terminal_clipboard},
     ui::{self, state::Route, state::UiState},
 };
 
 pub async fn run(settings: Settings) -> Result<()> {
     let storage = Storage::open(&settings.db_path)?;
-    if !settings.demo {
-        bootstrap_universe(&storage)?;
-    }
+    let loaded_catalog = if settings.demo {
+        None
+    } else {
+        Some(
+            crate::universe::load_companies(
+                Utc::now(),
+                &settings.cache_dir,
+                None,
+                settings.catalog_refresh_interval,
+            )
+            .await?,
+        )
+    };
+    let catalog_source = loaded_catalog
+        .as_ref()
+        .map_or("embedded", |catalog| catalog.source.label());
+    let removed_simulated_data = if settings.demo {
+        false
+    } else {
+        let removed = storage.purge_demo_data_for_live()?;
+        bootstrap_companies(
+            &storage,
+            loaded_catalog
+                .expect("live mode resolves a catalog")
+                .companies,
+        )?;
+        removed
+    };
 
     let mut state = UiState {
-        status: format!("{} cache · {} feed", settings.mode_label(), settings.feed),
+        status: if removed_simulated_data {
+            format!(
+                "Removed simulated cache data; waiting for {} sync",
+                settings.provider.display_name()
+            )
+        } else {
+            if settings.provider == ProviderKind::Alpaca {
+                format!(
+                    "{} cache · {} feed · {catalog_source} catalog",
+                    settings.mode_label(),
+                    settings.feed
+                )
+            } else {
+                format!("{} cache · {catalog_source} catalog", settings.mode_label())
+            }
+        },
+        data_provider_label: if settings.demo {
+            "Simulated market".to_owned()
+        } else {
+            settings.provider.display_name().to_owned()
+        },
         simulated_data: settings.demo,
         auto_refresh_interval: (!settings.demo && !settings.offline)
             .then_some(settings.refresh_interval),
@@ -38,6 +83,31 @@ pub async fn run(settings: Settings) -> Result<()> {
     };
     reload_tiles(&storage, &mut state)?;
     reload_snapshot_checkpoint(&storage, &mut state)?;
+
+    let (catalog_tx, mut catalog_rx) = mpsc::unbounded_channel();
+    let mut catalog_worker = (!settings.demo && !settings.offline).then(|| {
+        let cache_dir = settings.cache_dir.clone();
+        let remote_url = settings.catalog_url.clone();
+        let refresh_after = settings.catalog_refresh_interval;
+        tokio::spawn(async move {
+            loop {
+                let result = crate::universe::load_companies(
+                    Utc::now(),
+                    &cache_dir,
+                    Some(&remote_url),
+                    refresh_after,
+                )
+                .await;
+                if let Ok(catalog) = result
+                    && catalog.source == crate::universe::CatalogSource::Remote
+                    && catalog_tx.send(catalog).is_err()
+                {
+                    break;
+                }
+                tokio::time::sleep(refresh_after).await;
+            }
+        })
+    });
 
     let (idle_tx, mut event_rx) = mpsc::unbounded_channel();
     let mut event_guard = Some(idle_tx);
@@ -57,11 +127,16 @@ pub async fn run(settings: Settings) -> Result<()> {
         None
     } else {
         event_guard.take();
+        let providers = configured_providers(&settings)?;
         let sync::SyncHandle {
             commands,
             events,
             worker,
-        } = sync::spawn(settings.clone(), storage.clone());
+        } = sync::spawn(
+            providers,
+            storage.clone(),
+            sync::SyncOptions::new(settings.history_batch_size),
+        );
         event_rx = events;
         sync_worker = Some(worker);
         Some(commands)
@@ -115,6 +190,20 @@ pub async fn run(settings: Settings) -> Result<()> {
                 apply_sync_event(event, &storage, &mut state)?;
                 dirty = true;
             }
+            Some(catalog) = catalog_rx.recv() => {
+                let version = catalog
+                    .version
+                    .as_deref()
+                    .unwrap_or("unversioned")
+                    .to_owned();
+                bootstrap_companies(&storage, catalog.companies)?;
+                reload_tiles(&storage, &mut state)?;
+                state.status = format!("SEC catalog updated · {version}");
+                if let Some(commands) = sync_commands.as_ref() {
+                    let _ = commands.send(SyncCommand::ReconcileUniverse);
+                }
+                dirty = true;
+            }
             _ = tick.tick() => {
                 if let Some(commands) = sync_commands.as_ref()
                     && last_auto_refresh.elapsed() >= settings.refresh_interval
@@ -139,22 +228,33 @@ pub async fn run(settings: Settings) -> Result<()> {
         worker.abort();
         let _ = worker.await;
     }
+    if let Some(mut worker) = catalog_worker.take()
+        && tokio::time::timeout(Duration::from_secs(2), &mut worker)
+            .await
+            .is_err()
+    {
+        worker.abort();
+        let _ = worker.await;
+    }
     Ok(())
 }
 
+#[cfg(test)]
 fn bootstrap_universe(storage: &Storage) -> Result<()> {
+    bootstrap_companies(storage, crate::universe::embedded_companies(Utc::now())?)
+}
+
+fn bootstrap_companies(storage: &Storage, mut candidates: Vec<Company>) -> Result<()> {
     let now = Utc::now();
     let existing: HashMap<String, Company> = storage
         .companies(None, false)?
         .into_iter()
         .map(|company| (company.symbol.clone(), company))
         .collect();
-    let mut candidates = crate::universe::embedded_companies(now)?;
     for candidate in &mut candidates {
         if let Some(cached) = existing.get(&candidate.symbol) {
-            candidate.market_cap = cached.market_cap;
-            if candidate.shares_outstanding.is_none() {
-                candidate.shares_outstanding = cached.shares_outstanding;
+            if candidate.shares_outstanding.is_some() && same_share_estimate(candidate, cached) {
+                candidate.market_cap = cached.market_cap;
             }
             candidate.in_universe = cached.in_universe;
             candidate.retained = cached.retained;
@@ -171,6 +271,32 @@ fn bootstrap_universe(storage: &Storage) -> Result<()> {
         storage.replace_memberships(now.date_naive(), sector, &sector_candidates)?;
     }
     Ok(())
+}
+
+fn configured_providers(settings: &Settings) -> Result<ProviderSet> {
+    match settings.provider {
+        ProviderKind::Alpaca => Ok(AlpacaProvider::new(settings)?.into_provider_set()),
+        ProviderKind::StockApi => Ok(StockApiProvider::new(
+            &settings.stock_api_url,
+            settings.stock_api_news,
+        )?
+        .into_provider_set()),
+    }
+}
+
+fn same_share_estimate(left: &Company, right: &Company) -> bool {
+    match (left.shares_outstanding, right.shares_outstanding) {
+        (Some(left_shares), Some(right_shares))
+            if left_shares.to_bits() == right_shares.to_bits() =>
+        {
+            left.shares_source == right.shares_source
+                && left.shares_as_of == right.shares_as_of
+                && left.shares_method == right.shares_method
+                && left.shares_confidence == right.shares_confidence
+        }
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 fn execute_command(
@@ -241,16 +367,6 @@ fn recover_news_url(
             format!("Could not open news URL: {browser_error}; clipboard: {clipboard_error}")
         }
     }
-}
-
-fn copy_to_terminal_clipboard(value: &str) -> io::Result<()> {
-    let mut output = io::stdout().lock();
-    output.write_all(terminal_clipboard_sequence(value).as_bytes())?;
-    output.flush()
-}
-
-fn terminal_clipboard_sequence(value: &str) -> String {
-    format!("\x1b]52;c;{}\x1b\\", STANDARD.encode(value))
 }
 
 fn apply_sync_event(event: SyncEvent, storage: &Storage, state: &mut UiState) -> Result<()> {
@@ -403,7 +519,7 @@ mod tests {
 
     use super::{
         DemoCacheState, bootstrap_universe, classify_demo_cache, recover_news_url,
-        should_reset_auto_refresh, terminal_clipboard_sequence,
+        should_reset_auto_refresh,
     };
     use crate::{app::AppCommand, benchmarks::MarketBenchmark, demo, storage::Storage};
 
@@ -412,14 +528,6 @@ mod tests {
         assert!(should_reset_auto_refresh(&AppCommand::Refresh, true));
         assert!(!should_reset_auto_refresh(&AppCommand::Refresh, false));
         assert!(!should_reset_auto_refresh(&AppCommand::ReloadTiles, true));
-    }
-
-    #[test]
-    fn terminal_clipboard_uses_osc_52_with_a_base64_payload() {
-        assert_eq!(
-            terminal_clipboard_sequence("https://example.test/news?a=1&b=2"),
-            "\u{1b}]52;c;aHR0cHM6Ly9leGFtcGxlLnRlc3QvbmV3cz9hPTEmYj0y\u{1b}\\"
-        );
     }
 
     #[test]
@@ -449,7 +557,12 @@ mod tests {
     #[test]
     fn every_obsolete_demo_checkpoint_requires_migration() {
         assert_eq!(classify_demo_cache(&HashSet::new()), DemoCacheState::Empty);
-        for scope in ["demo", "demo:sec-identities-v2", "demo:sec-identities-v3"] {
+        for scope in [
+            "demo",
+            "demo:sec-identities-v2",
+            "demo:sec-identities-v3",
+            "demo:sec-identities-v4",
+        ] {
             assert_eq!(
                 classify_demo_cache(&HashSet::from([scope.to_owned()])),
                 DemoCacheState::Legacy
@@ -498,6 +611,60 @@ mod tests {
             assert!(stored.retained);
             assert!(stored.in_universe);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn bootstrap_discards_caps_derived_from_changed_share_estimates() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = Utc::now();
+        let catalog_company = crate::universe::embedded_companies(now)?
+            .into_iter()
+            .find(|company| company.shares_outstanding.is_some())
+            .expect("catalog contains a company with a share estimate");
+        let mut stale = catalog_company.clone();
+        stale.market_cap = Some(3_000_000_000_000.0);
+        stale.shares_method = Some("superseded_method".to_owned());
+        storage.upsert_companies(&[stale])?;
+
+        bootstrap_universe(&storage)?;
+
+        let stored = storage
+            .company(&catalog_company.symbol)?
+            .expect("catalog company remains stored");
+        assert_eq!(stored.market_cap, None);
+        assert_eq!(stored.shares_method, catalog_company.shares_method);
+        Ok(())
+    }
+
+    #[test]
+    fn bootstrap_discards_removed_share_estimates_and_their_caps() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = Utc::now();
+        let catalog_company = crate::universe::embedded_companies(now)?
+            .into_iter()
+            .find(|company| company.shares_outstanding.is_none())
+            .expect("catalog contains a company without a share estimate");
+        let mut stale = catalog_company.clone();
+        stale.market_cap = Some(500_000_000_000.0);
+        stale.shares_outstanding = Some(50_000_000.0);
+        stale.shares_source = Some("superseded_source".to_owned());
+        stale.shares_as_of = Some(now.date_naive());
+        stale.shares_method = Some("superseded_method".to_owned());
+        stale.shares_confidence = Some("low".to_owned());
+        storage.upsert_companies(&[stale])?;
+
+        bootstrap_universe(&storage)?;
+
+        let stored = storage
+            .company(&catalog_company.symbol)?
+            .expect("catalog company remains stored");
+        assert_eq!(stored.market_cap, None);
+        assert_eq!(stored.shares_outstanding, None);
+        assert_eq!(stored.shares_source, None);
+        assert_eq!(stored.shares_method, None);
         Ok(())
     }
 }

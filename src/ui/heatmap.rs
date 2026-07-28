@@ -267,12 +267,19 @@ fn aggregate_return(tiles: &[&MarketTile]) -> Option<f64> {
     let mut denominator = 0.0;
     for tile in tiles {
         if let Some(value) = tile.period_return {
-            let weight = tile.company.market_cap.unwrap_or(1.0).max(1.0);
+            let weight = company_size_weight(tile.company.market_cap, tile.company.size_proxy);
             numerator += value * weight;
             denominator += weight;
         }
     }
     (denominator > 0.0).then_some(numerator / denominator)
+}
+
+fn company_size_weight(market_cap: Option<f64>, size_proxy: Option<f64>) -> f64 {
+    market_cap
+        .filter(|weight| weight.is_finite() && *weight > 0.0)
+        .or_else(|| size_proxy.filter(|weight| weight.is_finite() && *weight > 0.0))
+        .unwrap_or(1.0)
 }
 
 fn put_centered(buffer: &mut Buffer, area: Rect, value: &str, style: Style) {
@@ -310,5 +317,13 @@ mod tests {
                 width
             );
         }
+    }
+
+    #[test]
+    fn aggregate_weight_prefers_market_cap_then_screened_size_proxy() {
+        assert_eq!(company_size_weight(Some(20.0), Some(50.0)), 20.0);
+        assert_eq!(company_size_weight(None, Some(50.0)), 50.0);
+        assert_eq!(company_size_weight(None, Some(f64::NAN)), 1.0);
+        assert_eq!(company_size_weight(Some(-1.0), Some(50.0)), 50.0);
     }
 }

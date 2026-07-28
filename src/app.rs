@@ -71,12 +71,12 @@ fn handle_key(state: &mut UiState, key: KeyEvent) -> Vec<AppCommand> {
         KeyCode::Char('g') if key.modifiers.is_empty() => {
             apply_action(state, UiAction::BeginSectorShortcut)
         }
-        KeyCode::Char('p') if key.modifiers.is_empty() => {
+        KeyCode::Backspace if key.modifiers.is_empty() => {
             apply_action(state, UiAction::PreviousView)
         }
-        KeyCode::Char('n') if key.modifiers.is_empty() => apply_action(state, UiAction::NextView),
+        KeyCode::Char(' ') if key.modifiers.is_empty() => apply_action(state, UiAction::NextView),
         KeyCode::Char('q') if key.modifiers.is_empty() => vec![AppCommand::Quit],
-        KeyCode::Esc | KeyCode::Backspace => apply_action(state, UiAction::Back),
+        KeyCode::Esc => apply_action(state, UiAction::Back),
         KeyCode::Char('/') => apply_action(state, UiAction::OpenSearch),
         KeyCode::Char('s') => apply_action(state, UiAction::OpenSort),
         KeyCode::Char('F') => apply_action(state, UiAction::OpenFavorites),
@@ -581,17 +581,75 @@ mod tests {
     }
 
     #[test]
-    fn search_owns_printable_keys() {
+    fn search_owns_space_and_backspace() {
         let mut state = UiState {
+            route: Route::Sector(Sector::Technology),
             overlay: Some(Overlay::Search),
             ..UiState::default()
         };
-        let commands = handle_event(
-            &mut state,
-            Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            ),
+            vec![AppCommand::Search("q".to_owned())]
+        );
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
+            ),
+            vec![AppCommand::Search("q ".to_owned())]
+        );
+        assert_eq!(state.search_query, "q ");
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+            ),
+            vec![AppCommand::Search("q".to_owned())]
         );
         assert_eq!(state.search_query, "q");
-        assert_eq!(commands, vec![AppCommand::Search("q".to_owned())]);
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            )
+            .is_empty()
+        );
+        assert_eq!(state.overlay, None);
+        assert_eq!(state.route, Route::Sector(Sector::Technology));
+    }
+
+    #[test]
+    fn non_search_overlays_isolate_sibling_navigation() {
+        let mut state = UiState {
+            route: Route::Sector(Sector::Technology),
+            overlay: Some(Overlay::Sort),
+            ..UiState::default()
+        };
+
+        for key in [KeyCode::Backspace, KeyCode::Char(' ')] {
+            assert!(
+                handle_event(
+                    &mut state,
+                    Event::Key(KeyEvent::new(key, KeyModifiers::NONE)),
+                )
+                .is_empty()
+            );
+            assert_eq!(state.route, Route::Sector(Sector::Technology));
+            assert_eq!(state.overlay, Some(Overlay::Sort));
+        }
+
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            )
+            .is_empty()
+        );
+        assert_eq!(state.overlay, None);
+        assert_eq!(state.route, Route::Sector(Sector::Technology));
     }
 
     #[test]
@@ -730,6 +788,23 @@ mod tests {
             handle_event(
                 &mut state,
                 Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert_eq!(state.route, Route::Sector(Sector::Technology));
+        assert!(!state.sector_shortcut_pending);
+
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
             )
             .is_empty()
         );

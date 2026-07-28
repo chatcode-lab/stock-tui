@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "stock-tui-catalog-publisher",
+  "compatibility_date": "2026-07-25",
+  "r2_buckets": [
+    {
+      "binding": "CATALOG_BUCKET",
+      "bucket_name": "stock-tui-catalog"
+    }
+  ]
+}

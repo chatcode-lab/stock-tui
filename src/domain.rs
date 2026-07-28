@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr, time::Duration};
 
-use chrono::{DateTime, Days, Utc};
+use chrono::{DateTime, Days, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -259,7 +259,7 @@ impl SortMode {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
-            Self::MarketCap => "Market cap",
+            Self::MarketCap => "Est. cap / float",
             Self::Gainers => "Gainers",
             Self::Volume => "Volume",
             Self::Alphabetical => "A-Z",
@@ -276,7 +276,23 @@ pub struct Company {
     pub exchange: String,
     pub industry: String,
     pub market_cap: Option<f64>,
+    #[serde(default)]
+    pub size_proxy: Option<f64>,
+    #[serde(default)]
+    pub size_proxy_source: Option<String>,
+    #[serde(default)]
+    pub size_proxy_as_of: Option<NaiveDate>,
+    #[serde(default)]
+    pub size_proxy_confidence: Option<String>,
     pub shares_outstanding: Option<f64>,
+    #[serde(default)]
+    pub shares_source: Option<String>,
+    #[serde(default)]
+    pub shares_as_of: Option<NaiveDate>,
+    #[serde(default)]
+    pub shares_method: Option<String>,
+    #[serde(default)]
+    pub shares_confidence: Option<String>,
     pub rank: Option<u16>,
     pub description: String,
     pub in_universe: bool,
@@ -303,6 +319,8 @@ pub struct Bar {
 pub struct Snapshot {
     pub symbol: String,
     pub price: Option<f64>,
+    #[serde(default)]
+    pub market_cap: Option<f64>,
     pub previous_close: Option<f64>,
     pub open: Option<f64>,
     pub high: Option<f64>,

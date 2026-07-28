@@ -11,7 +11,7 @@ and terms change; verify them for your account and use case.
 
 | Data | Current source | Stored locally | Notes |
 | --- | --- | --- | --- |
-| Nine-sector candidates and proxy rank | Versioned catalog generated from SEC identity, SIC, and XBRL facts | Yes | Keeps 100-250 candidates per sector and displays the selected top 100. |
+| Nine-sector candidates, size proxy, and common-share estimates | Versioned catalog generated from SEC identity, SIC, and XBRL facts, published as compact JSON through Cloudflare R2 | Yes | Keeps 100-250 candidates per sector, with a validated embedded release fallback, and displays the selected top 100. |
 | Issuer name, ticker, exchange associations | US SEC EDGAR catalog, supplemented by Alpaca active assets | Yes | Associations are identifiers, not a complete security master. |
 | Overview benchmarks | Alpaca stock data for `SPY`, `DIA`, and `QQQ` ETF proxies | Yes | Labeled as proxies; values are not literal S&P 500, Dow, or Nasdaq index levels. |
 | Current price, previous close, OHLC, volume | Alpaca stock snapshots | Yes | Coverage depends on the selected feed and subscription. |
@@ -19,6 +19,11 @@ and terms change; verify them for your account and use case.
 | News headline, date, source, summary, URL, symbols | Alpaca Historical News API (currently Benzinga content) | Yes | Loaded lazily for an opened ticker. |
 | Demo issuer identities | Embedded SEC-derived catalog | Yes | Real ticker/name associations; not a claim that the security remains active. |
 | Demo prices, rankings, volume, descriptions, news | Built-in deterministic generator | Yes | Entirely simulated and visibly labeled; no provider market data is used. |
+
+The source matrix describes the default Alpaca configuration. The separately
+selectable `stock-api` adapter consumes normalized observations from an
+operator-supplied service; its actual sources, coverage, delays, and rights are
+properties of that deployment.
 
 ## Alpaca
 
@@ -78,7 +83,7 @@ request. Alpaca remains authoritative. The adapter handles pagination, retries
 transient failures, and reports authentication/permission errors without
 falling back to fabricated live values.
 
-At live startup, the client reconciles embedded sector candidates against
+At live startup, the client reconciles resolved sector candidates against
 Alpaca's active-asset response before requesting snapshots. Missing candidates
 are excluded from current memberships and routine snapshot refresh, but their
 company rows, favorites, and cached observations are preserved. A later
@@ -110,11 +115,61 @@ Consequences for this project:
 - Anyone operating a public service must obtain written rights appropriate to
   its display, redistribution, retention, geography, and user classes.
 
-The planned no-key fallback backend cannot launch merely by moving the current
-cache to a server. It requires separately licensed market data and news whose
-agreements explicitly allow the intended redistribution. The service must also
-preserve required attribution and delay labels and prevent extraction beyond
-its licensed scope.
+The project therefore uses a bring-your-own-key model. A no-key backend cannot
+launch merely by moving the current cache to a server. It would require
+separately licensed market data and news whose agreements explicitly allow the
+intended redistribution. The service would also need to preserve required
+attribution and delay labels and prevent extraction beyond its licensed scope.
+
+### Requesting Public-Display Permission
+
+Alpaca documents a
+[partnership inquiry](https://alpaca.markets/support/partner-with-alpaca) for
+applications that need terms beyond ordinary personal API access. Use that
+form, or an authenticated Alpaca support request, and retain the complete
+written response. Thirty days' advance notice under the general terms is not
+the same as redistribution permission.
+
+Ask for explicit written answers for every intended use:
+
+- Whether a free or sponsored open-source license exists, and any user,
+  geography, traffic, or non-commercial limits.
+- Public display and redistribution of IEX snapshots, adjusted historical
+  bars, volumes, and derived returns or heatmap colors.
+- Server-side caching, permitted retention periods, refresh delays, and whether
+  an endpoint may serve arbitrary unauthenticated users.
+- Whether raw downloads must be prevented and which attribution, disclaimer,
+  audit, reporting, or deletion controls are required.
+- Separate permission for news headlines, summaries, URLs, source names, and
+  symbol associations. Alpaca may not be able to grant rights owned by its news
+  supplier.
+
+A concise inquiry can use this structure:
+
+> Subject: Open-source market-data display and redistribution permission for
+> stock-tui
+>
+> I maintain stock-tui, an MIT-licensed, non-commercial terminal application:
+> https://github.com/chatcode-lab/stock-tui. Today each user supplies their own
+> Alpaca key and keeps data in a local SQLite cache. We will not operate a
+> shared-key service without written permission.
+>
+> Is a free, sponsored, or low-cost license available for this open-source
+> project to display and cache Alpaca-provided US equity data for public users?
+> The proposed fields are snapshots, adjusted OHLCV bars, derived percentage
+> changes and heatmap colors, plus date/headline/source/URL news metadata. Please
+> specify whether permission covers IEX and/or SIP data, derived displays,
+> server-side caching and retention, unauthenticated users, global access, and
+> news-provider content; also list required delays, attribution, extraction
+> controls, reporting, and audience limits.
+>
+> If Alpaca cannot grant these rights, please confirm which underlying
+> licensors must be contacted. We would need an agreement that expressly
+> permits public display and redistribution before enabling such a service.
+
+Do not interpret a marketing reply, rate-limit increase, API plan upgrade, or
+OAuth approval as a market-data license. The response must specifically cover
+the contemplated fields and distribution model.
 
 ## News
 
@@ -136,37 +191,71 @@ Demo headlines use invalid example URLs and explicitly identify their headline,
 source, and summary as simulated. The TUI also keeps a `SIMULATED` badge visible
 while demo data is active.
 
+## Provider-Neutral Stock API
+
+The `stock-api` adapter is a credential-free HTTP client for assets,
+snapshots, adjusted bars, and optional news. It is selected explicitly with
+`--provider stock-api` and a provider-specific base URL. It does not send
+Alpaca keys, cookies, generic bearer tokens, or API-key headers.
+
+The routes and payloads do not name or assume an upstream vendor. They include
+generic `source` fields where provenance must survive normalization. The full
+request/response schema, pagination, validation, timeout, body limits, errors,
+and cache semantics are specified in
+[Stock API HTTP Contract](stock-api-contract.md).
+
+`https://stock.chatcode.dev/api` is reserved as the configuration default but
+is not currently deployed as a licensed public market-data service. A local
+Cloudflare Worker can be tested at `http://127.0.0.1:8787`; other non-loopback
+deployments must use HTTPS.
+
+This adapter is an interoperability boundary, not a redistribution loophole.
+The operator must have written rights for every upstream field and intended
+user, display, cache, retention period, geography, and news use. Required
+source attribution must remain accurate. A compatible JSON response does not
+prove that its data was lawfully obtained or may be redistributed.
+
 ## SEC-Derived Issuer Catalog
 
-The embedded [`data/sec_universe.json`](../data/sec_universe.json) is generated
-entirely from official SEC sources:
+The reviewed fallback [`data/sec_universe.json`](../data/sec_universe.json) and
+the compact remote catalog are generated entirely from official SEC sources:
 
 - [`company_tickers_exchange.json`](https://www.sec.gov/files/company_tickers_exchange.json)
   supplies CIK, EDGAR conformed name, ticker, and exchange associations.
 - The SEC's quarterly
   [Financial Statement Data Sets](https://www.sec.gov/data-research/sec-markets-data/financial-statement-data-sets)
-  supply the most recently filed Standard Industrial Classification (SIC) for
-  an issuer.
+  supply the most recently filed Standard Industrial Classification (SIC) and
+  standard-taxonomy common-share facts for an issuer.
 - The SEC XBRL
   [Frames API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
   supplies `dei:EntityPublicFloat` in USD and, when reported,
   `dei:EntityCommonStockSharesOutstanding` in shares.
 
-The JSON records its schema/catalog versions, generation and as-of timestamps,
-selection method, source URLs and retrieval times, and fact-level accession/
-frame provenance. Embedding a reviewed snapshot makes releases reproducible
-and keeps runtime startup independent of SEC availability.
+The audit JSON records its schema/catalog versions, generation and as-of
+timestamps, selection method, source URLs and retrieval times, and fact-level
+accession/frame provenance. Packaging projects it onto the fields consumed by
+the Rust client, serializes canonical JSON, and produces deterministic gzip
+plus a checksum manifest. The current compact catalog is served at
+`https://stock.chatcode.dev/catalog/sec-catalog.json`; it contains SEC-derived
+issuer metadata, not provider prices, bars, volume, or news.
+
+Every release still embeds a validated compact snapshot. At runtime a
+low-frequency background check can replace it with a newer validated R2
+catalog in the local cache, while network, unsupported-schema, unsafe-text,
+duplicate, rank, provenance, size, and downgrade failures fall back to the
+newest valid local or embedded copy. The application never contacts SEC
+directly.
 
 The checked-in JSON preserves the SEC's hyphen notation for share classes.
 When loading the catalog, the client converts those symbols to Alpaca notation
 before validation or provider requests: `BRK-B` becomes `BRK.B`, while an SEC
 preferred-share suffix such as `TRTN-PA` becomes Alpaca's `TRTN.PRA`.
 
-The checked-in schema-v1 catalog contains 1,880 unique CIK/canonical-symbol
-candidates, with 103 to 250 candidates per sector. Those counts describe this
-catalog revision, not a guaranteed future universe size. No Nasdaq data service
-is used to construct it; `Nasdaq` appears only as an exchange label supplied by
-the SEC association file.
+The checked-in schema-v2 catalog contains 1,880 unique
+CIK/canonical-symbol candidates, with 102 to 250 candidates per sector. Those
+counts describe this catalog revision, not a guaranteed future universe size.
+No Nasdaq data service is used to construct it; `Nasdaq` appears only as an
+exchange label supplied by the SEC association file.
 
 ### Selection Pipeline
 
@@ -174,38 +263,81 @@ The catalog builder:
 
 1. Keeps SEC associations on NYSE, Nasdaq, or CBOE with an ASCII ticker.
 2. Chooses one deterministic canonical ticker for each CIK, preferring a symbol
-   that does not look like a preferred, warrant, unit, or right suffix, then
-   preserving SEC file order.
+   that does not look like a preferred, warrant, unit, or right suffix, then a
+   valid base symbol of four or fewer characters when the source-preferred
+   unseparated sibling shares that prefix, then preserving SEC file order.
+   Explicit share-class suffixes remain source-selected because classes can
+   have different per-share economics.
 3. Takes the newest SIC observation from the requested recent Financial
    Statement Data Set quarters.
-4. Searches recent quarterly XBRL frames for positive public float and optional
-   shares outstanding facts.
-5. Rejects non-finite/non-positive facts, extreme absolute float values,
-   implausible float-to-share ratios, and an isolated newest public-float fact
-   more than 100 times above or below prior observations.
-6. Maps SIC to the nine legacy display sectors, ranks each sector by reported
+4. Searches recent quarterly XBRL frames, independently of the newest available
+   bulk-file quarter, for positive public float and unsegmented DEI share
+   totals. It rejects malformed or future-dated frame observations. It also
+   scans Financial Statement Data Set `num` rows for eligible standard-taxonomy
+   share facts from 10-K, 10-Q, 20-F, and 40-F filings.
+5. Selects a common-share estimate using the reviewed hierarchy below and stores
+   its accession, source, fact date, method, confidence, and components.
+6. Rejects non-finite/non-positive facts, extreme absolute float values,
+   grossly inconsistent public-float/filer-status combinations, an unreviewed
+   implied float-per-share above `$2,000`, and an isolated newest public-float
+   fact more than 100 times above prior observations. Downward corrections and
+   reviewed legitimate high-price issuers are retained. A float above
+   `$70 billion` with no accelerated-filer status also requires explicit
+   review.
+7. Maps SIC to the nine legacy display sectors, ranks each sector by reported
    public float descending, deduplicates symbols, and retains between 100 and
    250 eligible candidates per sector.
 
+The share hierarchy is deliberately fail-closed:
+
+1. An unsegmented `dei:EntityCommonStockSharesOutstanding` cover total or a
+   reviewed sum of DEI common classes, high confidence.
+2. An unsegmented `us-gaap:CommonStockSharesOutstanding` issuer total, a
+   reviewed sum of equal-economic classes, or a reviewed class conversion,
+   medium confidence.
+3. A filer-reported equivalent class or unsegmented
+   `us-gaap:WeightedAverageNumberOfSharesOutstandingBasic`, low confidence.
+
+Only point-in-time facts are accepted for the first two levels. Basic weighted
+average is explicitly a lower-quality approximation; diluted and preferred
+shares are excluded. When the newest fact is point-in-time, an older
+higher-confidence point fact can override it only within 45 days. When the
+newest fact is the low-confidence weighted fallback, a point-in-time fact can
+remain preferred for up to 185 days. Duration selection is form-aware and
+deterministic.
+
+Reviewed multi-class policies currently cover equal-economic shares for
+Alphabet, Meta, Mastercard, Nike, and Palantir; Visa's documented Class A
+conversion factors and redundant B-class aggregate; and Berkshire Hathaway's
+filer-reported Class A/Class B equivalent counts. The builder fails closed when
+an expected member is missing, renamed, duplicated inconsistently, or joined by
+an unreviewed class. A newer unreviewed accession or class structure invalidates
+the issuer estimate instead of silently falling back to an older reviewed
+filing. These policies are calculation metadata, not extra sector tiles.
+
 `EntityPublicFloat` is a filer-reported issuer-level value and is **not market
-capitalization**. The build does not write it into `Company.market_cap`; it is
-only the initial ranking proxy. When both SEC-reported shares and an Alpaca
-snapshot price exist, runtime estimates market cap as shares times current
-price. Each successful candidate snapshot refresh then selects 100 companies
-per sector by known estimated market cap, with proxy rank as fallback. Those
-900 companies and the three explicitly configured benchmark ETF proxies
-receive the bulk daily and all-provider-available weekly history backfills.
+capitalization**. The build stores it as a numeric size proxy with provenance;
+it never writes it into `Company.market_cap`. When both a catalog share estimate
+and an Alpaca snapshot price exist, runtime estimates market cap as
+price-equivalent common shares times current price. Each successful candidate
+snapshot refresh then selects 100 companies per sector using estimated market
+cap when available or numeric public float otherwise. Those 900 companies and
+the three explicitly configured benchmark ETF proxies receive the bulk daily
+and all-provider-available weekly history backfills.
 
 This means a company can move into the visible top 100 as prices change if it
-is already in the embedded candidate pool and has usable shares. A new issuer,
-a newly eligible filer, or a company outside that pool requires a catalog
-rebuild and project release. Public-float and shares facts can have different
-as-of dates, and a missing share fact leaves membership dependent on the proxy.
+is already in the resolved candidate pool and has usable shares. A large
+proxy-only issuer no longer loses automatically to every issuer with any known
+cap. A new issuer, newly eligible filer, or company outside that pool requires
+a successful catalog publication, but no longer requires a client release.
+Public-float and share facts can have different as-of dates, and a missing
+share fact leaves membership dependent on the proxy.
 
 Alpaca's active-asset response refreshes names and exchange identifiers for
-symbols it recognizes without overwriting SEC-derived SIC sector, proxy rank,
-shares, or retention state. Alpaca-only active symbols remain searchable and
-can load detail, but do not enter a sector without catalog metadata.
+symbols it recognizes without overwriting SEC-derived SIC sector, numeric
+proxy, share estimate/provenance, or retention state. Alpaca-only active
+symbols remain searchable and can load detail, but do not enter a sector
+without catalog metadata.
 
 ### Quality Limits
 
@@ -226,12 +358,15 @@ Consequently:
   between SEC and market-data systems.
 - SIC is an issuer classification, not a security-level modern sector
   taxonomy, and the project's nine-sector mapping is heuristic.
-- `EntityPublicFloat` and shares outstanding are self-reported point-in-time
-  facts with issuer-specific filing practices; screening catches only obvious
-  anomalies.
-- Shares can be absent or ambiguous for multi-class issuers, and a current SEC
-  ticker identity can temporarily fail to join older facts after a CIK
-  reorganization.
+- `EntityPublicFloat` and share facts use issuer-specific filing practices;
+  screening catches only obvious anomalies.
+- A low-confidence weighted-average count is not a point-in-time count.
+  Price-equivalent multi-class estimates depend on reviewed conversion or
+  economic-equivalence assumptions and can become stale after an amendment or
+  corporate action.
+- Shares can remain absent or ambiguous for multi-class issuers, ADRs, and
+  foreign filers, and a current SEC ticker identity can temporarily fail to
+  join older facts after a CIK reorganization.
 - Depositary receipts, funds, warrants, units, rights, test symbols, and foreign
   issuers can require handling that these general filters do not capture.
 - EDGAR's conformed issuer name is not necessarily the consumer-facing brand.
@@ -248,8 +383,10 @@ runtime dependency. A maintainer supplies a truthful SEC contact identity:
 
 ```bash
 python3 tools/build_sec_catalog.py \
-  --user-agent "stock-tui catalog maintainer@example.invalid" \
-  --through 2026Q1
+  --user-agent "stock-tui catalog support@chatcode.dev" \
+  --through 2026Q2 \
+  --artifact-output build/catalog/sec-catalog.json.gz
+python3 -m unittest discover -s tools/tests
 cargo test universe
 ```
 
@@ -261,14 +398,35 @@ per second, retries transient failures, writes source receipts, validates
 unique CIKs/symbols and consecutive per-sector ranks, and atomically replaces
 the output.
 
-Catalog updates must review the JSON diff, source dates, sector counts, large
-rank movements, and quality labels before commit. Reusing the download cache
-improves reproducibility but maintainers should deliberately choose when a
-fresh SEC retrieval is required.
+`.github/workflows/catalog-publish.yml` runs daily at 06:17 UTC and can be
+dispatched manually. It restores the large SEC source cache, invalidates
+mutable ticker/Frames responses, runs the network-free calculation fixtures,
+builds and validates the complete audit catalog, packages the compact
+deterministic artifact, and publishes it with Wrangler. Immutable versioned
+objects are written before the five-minute-cache stable object and manifest.
+The full audit catalog is retained only as a short-lived private workflow
+artifact; scheduled builds do not commit generated catalogs to the repository.
+
+The R2 bucket is `stock-tui-catalog`, with `stock.chatcode.dev` attached as its
+custom domain. `infra/cloudflare/` contains the idempotent provisioning,
+cache-invalidation, and publication scripts. CI requires a truthful
+`SEC_USER_AGENT`, a Cloudflare account ID, and a bucket-scoped R2 write token as
+GitHub secrets. It never receives market-provider credentials.
+
+Reviewed releases replace their embedded fallback with one R2 catalog
+download before the cross-platform build matrix, ensuring every platform
+binary for that release contains identical catalog data. Local source builds
+retain the reviewed repository snapshot.
+
+Manual changes to selection logic must still review source dates, sector
+counts, large rank movements, share methods/confidence, class policies, and
+quality labels before merge. The automated job executes the reviewed model; it
+does not invent new multi-class policy. Reusing immutable SEC downloads
+improves efficiency, while mutable inputs are deliberately refreshed.
 
 The builder follows the SEC's
 [Developer Resources and Fair Access guidance](https://www.sec.gov/about/developer-resources).
-Runtime market refreshes read the embedded file and do not poll SEC.
+Runtime catalog refreshes read R2 or the local fallback and do not poll SEC.
 
 ## Nine-Sector Legacy Taxonomy
 
@@ -308,14 +466,23 @@ published indexes.
 
 The heatmap can order by market capitalization, but neither Alpaca's basic
 asset payload nor the SEC source set is a complete fundamentals feed. The SEC
-public-float proxy and shares facts are point-in-time metadata and can become
-stale between catalog releases. When shares are available, a new snapshot
-estimates market cap as shares times price; this remains an approximation and
-does not handle every share class, treasury-share treatment, corporate action,
-or float convention.
+public-float proxy and share estimates can become stale between catalog
+releases. When shares are available, a new snapshot estimates market cap as
+price-equivalent common shares times the canonical ticker price. This is
+ordinary common-equity market cap, not fully diluted value: preferred shares,
+RSUs, options, and unexercised convertibles are excluded.
 
-Missing market caps sort after known values. Gain and volume ordering use the
-selected cached period/snapshot. Alphabetical ordering uses ticker symbol.
+Market-cap ordering compares the estimated cap where present and the numeric
+public-float proxy otherwise, then uses catalog rank and symbol for stable
+ties. A proxy-only ticker still shows market cap as unavailable. Gain and
+volume ordering use the selected cached period/snapshot. Alphabetical ordering
+uses ticker symbol.
+
+This remains an approximation. Different traded classes can have different
+prices; treasury-share treatment, ADR ratios, amendments, filing lag, and
+corporate actions can all cause divergence from a commercial fundamentals
+provider. No Yahoo page, cookie, or unofficial scraped feed is used at build or
+runtime.
 
 ## Adding A Provider
 
@@ -330,6 +497,18 @@ A provider contribution must include:
 5. Pagination, timeout, retry, and rate-limit behavior.
 6. Fixture-based tests that never call a paid or credentialed service.
 7. A mapping strategy that leaves unknown sectors and instruments explicit.
+
+At the code boundary, an adapter implements `AssetProvider` and
+`MarketDataProvider`; `NewsProvider` is optional and may be supplied
+independently. It is assembled into `ProviderSet`, selected through
+`--provider`/configuration, and must keep provider payloads and errors out of
+the domain, storage, and rendering layers. A new provider also needs its own
+credential/onboarding branch where applicable.
+
+`StockApiProvider` is the reference for an adapter without credentials. It
+validates a versioned normalized wire schema and omits `NewsProvider` entirely
+when news is disabled. It does not change the licensing review required for a
+concrete service deployment.
 
 Do not add scraping of a website that forbids automated access or data reuse.
 An API being technically reachable does not make its data redistributable.

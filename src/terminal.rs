@@ -1,9 +1,10 @@
 use std::{
     fmt,
-    io::{self, Stdout, stdout},
+    io::{self, Stdout, Write, stdout},
     panic,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crossterm::{
     Command,
     cursor::Show,
@@ -53,6 +54,27 @@ impl Drop for TerminalSession {
     fn drop(&mut self) {
         let _ = restore_terminal();
     }
+}
+
+pub(crate) fn copy_to_terminal_clipboard(value: &str) -> io::Result<()> {
+    let mut output = stdout().lock();
+    output.write_all(terminal_clipboard_sequence(value).as_bytes())?;
+    output.flush()
+}
+
+pub(crate) fn terminal_clipboard_sequence(value: &str) -> String {
+    format!("\x1b]52;c;{}\x1b\\", STANDARD.encode(value))
+}
+
+pub(crate) fn terminal_hyperlink_sequence(value: &str, color: bool) -> Option<String> {
+    if value.chars().any(char::is_control) {
+        return None;
+    }
+    let style = if color { "\x1b[1;4;96m" } else { "\x1b[4m" };
+    Some(format!(
+        "\x1b]8;;{value}\x1b\\{style}{value}\x1b[0m\
+         \x1b]8;;\x1b\\"
+    ))
 }
 
 fn restore_terminal() -> io::Result<()> {
@@ -140,5 +162,32 @@ mod tests {
     #[test]
     fn mouse_capture_cleanup_reverses_enabled_modes() {
         assert_eq!(ansi(DisableSgrMouseCapture), "\x1b[?1006l\x1b[?1003l");
+    }
+
+    #[test]
+    fn terminal_clipboard_uses_osc_52_with_a_base64_payload() {
+        assert_eq!(
+            terminal_clipboard_sequence("https://example.test/news?a=1&b=2"),
+            "\u{1b}]52;c;aHR0cHM6Ly9leGFtcGxlLnRlc3QvbmV3cz9hPTEmYj0y\u{1b}\\"
+        );
+    }
+
+    #[test]
+    fn terminal_hyperlink_uses_osc_8_and_keeps_the_url_visible() {
+        assert_eq!(
+            terminal_hyperlink_sequence("https://example.test/signup", true)
+                .expect("safe hyperlink"),
+            "\u{1b}]8;;https://example.test/signup\u{1b}\\\
+             \u{1b}[1;4;96mhttps://example.test/signup\u{1b}[0m\
+             \u{1b}]8;;\u{1b}\\"
+        );
+        assert_eq!(
+            terminal_hyperlink_sequence("https://example.test/signup", false)
+                .expect("safe hyperlink"),
+            "\u{1b}]8;;https://example.test/signup\u{1b}\\\
+             \u{1b}[4mhttps://example.test/signup\u{1b}[0m\
+             \u{1b}]8;;\u{1b}\\"
+        );
+        assert!(terminal_hyperlink_sequence("https://example.test/\u{1b}]52", true).is_none());
     }
 }

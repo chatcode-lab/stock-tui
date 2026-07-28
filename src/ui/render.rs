@@ -164,8 +164,8 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             state,
             area,
             y,
-            "p",
-            "Previous",
+            "Bksp",
+            "Prev",
             UiAction::PreviousView,
             false,
         );
@@ -174,7 +174,7 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             state,
             area,
             y,
-            "n",
+            "Space",
             "Next",
             UiAction::NextView,
             false,
@@ -682,7 +682,7 @@ fn render_statistics(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, t
             "VOLUME",
             snapshot.and_then(|quote| quote.volume).map(format_compact),
         ),
-        ("MARKET CAP", detail.company.market_cap.map(format_money)),
+        ("EST. CAP", detail.company.market_cap.map(format_money)),
         ("SECTOR", detail.sector_return.map(format_percent)),
     ];
     let lines: Vec<Line<'_>> = rows
@@ -884,14 +884,14 @@ fn render_sort(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     }
 }
 
-fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
+fn render_about(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
     let modal = centered(area, 58.min(area.width.saturating_sub(4)), 20);
     frame.render_widget(Clear, modal);
     let content = vec![
         Line::styled("Keyboard", Style::default().fg(CYAN).bold()),
         Line::from("Navigate     arrows or h j k l"),
         Line::from("Open         Enter"),
-        Line::from("Back         Esc or Backspace"),
+        Line::from("Back         Esc"),
         Line::from("Search       /"),
         Line::from("Sort         s"),
         Line::from("Star         f"),
@@ -900,12 +900,15 @@ fn render_about(frame: &mut Frame<'_>, _state: &mut UiState, area: Rect) {
         Line::from("Data status  S"),
         Line::from("Ranges       1..9, 0 or [ ]"),
         Line::from("Sectors      g then c s h e t f i m u"),
-        Line::from("Prev / next  p / n (sector or ticker)"),
+        Line::from("Prev / next  Backspace / Space"),
         Line::from("Detail tabs  Tab"),
         Line::from("Detail       Left/Right chart, Up/Down news"),
         Line::from("Quit         q"),
         Line::from(""),
-        Line::styled("Market prices and news: Alpaca", Style::default().fg(MUTED)),
+        Line::styled(
+            format!("Market prices and news: {}", state.data_provider_label),
+            Style::default().fg(MUTED),
+        ),
     ];
     frame.render_widget(
         Paragraph::new(content)

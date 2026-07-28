@@ -6,13 +6,14 @@ available offline, and bounds repeated historical requests.
 
 ## Cache Location
 
-The default database is `market.sqlite3` in the platform application-data
-directory selected by the Rust `directories` crate for organization
-`chatcode-lab` and application `stock-tui`.
+Live and offline-cache modes use `market.sqlite3`; demo mode uses
+`demo.sqlite3`. Both live in the platform application-data directory selected
+by the Rust `directories` crate for organization `chatcode-lab` and
+application `stock-tui`.
 
 Typical locations are:
 
-| Platform | Default application data path |
+| Platform | Default live application data path |
 | --- | --- |
 | Linux | `$XDG_DATA_HOME/stock-tui/market.sqlite3`, normally `~/.local/share/stock-tui/market.sqlite3` |
 | macOS | `~/Library/Application Support/com.chatcode-lab.stock-tui/market.sqlite3` |
@@ -21,20 +22,35 @@ Typical locations are:
 Platform conventions can vary. Use `stock-tui --print-config` for the exact
 resolved `db_path`, or override it with `--db` / `STOCK_TUI_DB_PATH`.
 
+Releases before 0.1.2 used `market.sqlite3` for both modes. On the first live
+startup after upgrading, a detected legacy demo checkpoint triggers an
+automatic cleanup of simulated bars, news, snapshots, and memberships before
+the Alpaca sync begins. Favorites and already-fetched Alpaca bars/news are
+preserved.
+
 The application also creates platform config and cache directories. The
 configuration file is `<config_dir>/config.toml`; the SQLite database belongs
 in the data directory, not the disposable cache directory. Daily diagnostic
-logs are written below `<cache_dir>/logs`.
+logs are written below `<cache_dir>/logs`. A successfully downloaded compact
+SEC catalog is stored at `<cache_dir>/catalog/sec_universe.json`. It contains
+issuer metadata only, no credentials or provider observations, and can be
+recreated from the embedded release catalog plus the public catalog endpoint.
 
 ## SQLite Settings
 
 - Schema version is stored in `PRAGMA user_version`.
-- Current schema version: 1.
+- Current schema version: 2.
 - Journal mode: WAL.
 - Foreign keys: enabled on every connection.
 - Busy timeout: 30 seconds.
 - Batch writes use immediate transactions.
 - A binary refuses to open a schema newer than it understands.
+
+Schema 2 is an additive migration. It preserves schema-1 companies, bars,
+snapshots, news, favorites, memberships, and checkpoints while adding SEC
+ranking-proxy and share-estimate metadata. A downgrade to a schema-1 binary
+will refuse to open the upgraded database; it will not attempt a lossy
+downgrade.
 
 WAL creates adjacent `-wal` and `-shm` files while the database is open. For a
 consistent backup, stop `stock-tui` first and copy the database together with
@@ -45,17 +61,20 @@ any SQLite sidecars, or use SQLite's online backup tooling.
 ### `companies`
 
 One normalized row per symbol. It stores name, normalized and raw sector,
-exchange, industry, optional market cap and shares outstanding, catalog rank,
-description, current-universe and retained flags, and metadata update time.
+exchange, industry, optional estimated market cap, the numeric SEC public-float
+ranking proxy with source/date/confidence, the share estimate with
+source/date/method/confidence, catalog rank, description, current-universe and
+retained flags, and metadata update time.
 
 The symbol is the primary key. Symbols are trimmed and uppercased at storage
 boundaries.
 
 ### `sector_memberships`
 
-A dated membership snapshot keyed by `(as_of_date, sector, symbol)`, with rank
-and point-in-time market cap. This separates historical universe composition
-from mutable issuer metadata and caps each sector at 100 members.
+A dated membership snapshot keyed by `(as_of_date, sector, symbol)`, with rank,
+point-in-time estimated market cap, and the ranking proxy used when that cap is
+unavailable. This separates historical universe composition from mutable
+issuer metadata and caps each sector at 100 members.
 
 The current UI reads the latest membership on or before today. Older snapshots
 are retained so future releases can show or audit membership changes.
@@ -94,21 +113,30 @@ versioned demo scope. Checkpoints contain no credentials.
 
 A live database is prepared in stages:
 
-1. Upsert the embedded SEC-derived catalog. It contains between 100 and 250
-   candidates per sector, depending on the number of eligible SEC facts.
-   Previously reconciled retention flags survive this bootstrap.
-2. Select up to 100 retained initial members per sector. With no cached market
-   caps this uses the catalog's descending SEC public-float proxy rank.
+1. Resolve and upsert the newest valid local SEC-derived catalog without
+   waiting for the network. It contains between 100 and 250 candidates per
+   sector, and previously reconciled retention flags survive its upsert. When
+   the local copy exceeds 12 hours by default, a background task checks the
+   compact R2 catalog and keeps that cadence while the app remains open. A
+   valid newer result is cached, applied to SQLite, and queues another provider
+   universe reconciliation; network, schema, size, and downgrade failures keep
+   the local result.
+2. Select up to 100 retained initial members per sector by estimated market cap
+   where available and numeric SEC public float otherwise. With no cached
+   market caps this is equivalent to descending catalog proxy rank.
 3. Fetch Alpaca's active US-equity asset list before requesting snapshots.
    Present catalog candidates are reactivated; missing candidates are removed
    from current membership without deleting their company rows, favorites, or
    cached data. Memberships are then recomputed and current names/exchanges
-   are merged without erasing catalog sector, rank, or market-cap metadata.
+   are merged without erasing catalog sector, proxy, share-estimate, or
+   market-cap metadata.
 4. Request current snapshots for all retained sector candidates and the three
    benchmark ETF proxies in configurable batches (100 by default).
-5. Where SEC-reported shares are available, calculate an estimated market cap
-   from shares times current price. Re-select 100 members per sector by known
-   market cap first and proxy rank as fallback, and store a dated snapshot.
+5. Where a catalog share estimate is available, calculate estimated market cap
+   from price-equivalent common shares times current price. Re-select 100
+   members per sector by that estimate or the numeric public-float proxy, and
+   store a dated snapshot. The proxy affects selection but never populates the
+   market-cap field shown in ticker statistics.
 6. Start adjusted history requests for those selected 900 companies and three
    benchmark ETF proxies in configurable 50-symbol batches: two years of
    `1Day` bars and all provider-available `1Week` bars.
@@ -214,12 +242,13 @@ provider-backed local cache.
 
 Sort modes operate within each sector:
 
-- Market cap: descending known market cap, then catalog rank.
+- Market cap: descending estimated market cap, or numeric SEC public-float
+  proxy when the estimate is unavailable, then catalog rank and symbol.
 - Gainers: descending selected-period return.
 - Volume: descending latest snapshot or period-bar volume.
 - A-Z: ascending ticker symbol.
 
-Missing numeric values sort after present values. Favorites can include
+Rows missing both size values sort after rows with either value. Favorites can include
 retained companies outside the current universe and are not truncated to 100
 by the storage query, although the current grid renders at most 100 at once.
 
@@ -234,24 +263,31 @@ sector candidates reported by Alpaca as active are retained so snapshot refresh
 can move them into or out of the top 100. A catalog candidate missing from the
 active-asset response is marked unretained and removed from current membership,
 but its company row, bars, news, and favorite remain intact. A later active
-response reactivates that candidate. An updated embedded catalog is still
-required to consider an issuer absent from the current candidate set. The
-current release does not run automatic garbage collection for old company
-rows.
+response reactivates that candidate. A newly published remote catalog or a
+newer embedded release catalog is still required to consider an issuer absent
+from the current candidate set. The current release does not run automatic
+garbage collection for old company rows.
 
 ## Offline And Demo Behavior
 
 `--offline` suppresses the provider worker and renders only the selected
-database. It does not update freshness timestamps or fetch a search miss.
+database. It does not request a catalog update, update market-data freshness
+timestamps, or fetch a search miss. The runtime can still seed issuer
+identities from a valid local catalog cache or its embedded release fallback;
+missing market observations remain empty.
 
-Demo mode writes simulated records into the selected database and records a
-versioned demo checkpoint. It reuses a complete cache only when that checkpoint
-matches the current generator. Any recognized older demo checkpoint triggers a
-clean regeneration so incompatible historical rows cannot overlap; favorites
-whose symbols remain in the new universe are restored. `--reset-demo` clears
-every table in the selected database, including favorites and live-provider
-data, before regeneration. Because live and demo data share a schema, use
-separate paths when switching modes or preserving a valuable live cache.
+Demo mode is entered with `--demo` or by explicitly choosing `d` during
+onboarding; missing credentials alone do not select it. A normal online launch
+completes credential onboarding before opening either database. Demo mode
+writes simulated records into the selected database and records a versioned
+demo checkpoint. It reuses a complete cache only when that checkpoint matches
+the current generator. Any recognized older demo checkpoint triggers a clean
+regeneration so incompatible historical rows cannot overlap; favorites whose
+symbols remain in the new universe are restored.
+`--reset-demo` clears every table in the selected database, including favorites
+and live-provider data, before regeneration. Because live and demo data share a
+schema, use separate paths when switching modes or preserving a valuable live
+cache.
 
 ## Operational Guidance
 

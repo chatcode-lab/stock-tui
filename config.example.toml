@@ -1,6 +1,11 @@
 # Copy to the platform config directory shown by `stock-tui --print-config`.
-feed = "iex"
+provider = "alpaca"
 refresh_seconds = 300
+catalog_url = "https://stock.chatcode.dev/catalog/sec-catalog.json"
+catalog_refresh_hours = 12
+
+[providers.alpaca]
+feed = "iex"
 request_limit_per_minute = 180
 snapshot_batch_size = 100
 history_batch_size = 50
@@ -8,3 +13,12 @@ history_batch_size = 50
 # Advanced provider endpoints:
 # data_url = "https://data.alpaca.markets"
 # trading_url = "https://paper-api.alpaca.markets"
+
+# Credential-free normalized HTTP adapter. Select with provider = "stock-api".
+# The public default URL is reserved but is not currently deployed/licensed.
+[providers.stock_api]
+base_url = "https://stock.chatcode.dev/api"
+news = true
+
+# Local Cloudflare Worker development:
+# base_url = "http://127.0.0.1:8787"

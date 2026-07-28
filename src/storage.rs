@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const STALE_AFTER_HOURS: i64 = 72;
 const MAX_MEMBERS_PER_SECTOR: usize = 100;
 const TIMEFRAME_EXISTS_SQL: &str =
@@ -26,7 +26,9 @@ const TIMEFRAME_EXISTS_SQL: &str =
 
 const COMPANY_COLUMNS: &str = "
     symbol, name, sector, raw_sector, exchange, industry, market_cap,
-    shares_outstanding, rank, description, in_universe, retained, updated_at
+    size_proxy, size_proxy_source, size_proxy_as_of, size_proxy_confidence,
+    shares_outstanding, shares_source, shares_as_of, shares_method, shares_confidence,
+    rank, description, in_universe, retained, updated_at
 ";
 
 const MIGRATION_1: &str = r#"
@@ -131,6 +133,18 @@ CREATE TABLE IF NOT EXISTS sync_checkpoints (
 );
 "#;
 
+const MIGRATION_2: &str = r#"
+ALTER TABLE companies ADD COLUMN size_proxy REAL;
+ALTER TABLE companies ADD COLUMN size_proxy_source TEXT;
+ALTER TABLE companies ADD COLUMN size_proxy_as_of TEXT;
+ALTER TABLE companies ADD COLUMN size_proxy_confidence TEXT;
+ALTER TABLE companies ADD COLUMN shares_source TEXT;
+ALTER TABLE companies ADD COLUMN shares_as_of TEXT;
+ALTER TABLE companies ADD COLUMN shares_method TEXT;
+ALTER TABLE companies ADD COLUMN shares_confidence TEXT;
+ALTER TABLE sector_memberships ADD COLUMN size_proxy REAL;
+"#;
+
 #[derive(Debug, Clone)]
 pub struct Storage {
     path: PathBuf,
@@ -219,6 +233,13 @@ impl Storage {
                     "BEGIN IMMEDIATE;\n{MIGRATION_1}\nPRAGMA user_version = 1;\nCOMMIT;"
                 ))
                 .context("could not apply SQLite schema migration 1")?;
+        }
+        if current < 2 {
+            connection
+                .execute_batch(&format!(
+                    "BEGIN IMMEDIATE;\n{MIGRATION_2}\nPRAGMA user_version = 2;\nCOMMIT;"
+                ))
+                .context("could not apply SQLite schema migration 2")?;
         }
         Ok(())
     }
@@ -350,7 +371,10 @@ impl Storage {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
             "SELECT c.symbol, c.name, m.sector, c.raw_sector, c.exchange, c.industry,
-                    COALESCE(m.market_cap, c.market_cap), c.shares_outstanding,
+                    m.market_cap, m.size_proxy, c.size_proxy_source,
+                    c.size_proxy_as_of, c.size_proxy_confidence,
+                    c.shares_outstanding, c.shares_source, c.shares_as_of,
+                    c.shares_method, c.shares_confidence,
                     m.rank, c.description, c.in_universe, c.retained, c.updated_at
              FROM sector_memberships m
              JOIN companies c ON c.symbol = m.symbol
@@ -721,8 +745,8 @@ impl Storage {
                   ELSE 3
                 END,
                 in_universe DESC,
-                market_cap IS NULL,
-                market_cap DESC,
+                COALESCE(market_cap, size_proxy) IS NULL,
+                COALESCE(market_cap, size_proxy) DESC,
                 symbol
               LIMIT ?4"
         ))?;
@@ -1035,6 +1059,78 @@ impl Storage {
         })
     }
 
+    /// Removes simulated records before a legacy shared cache is used in live mode.
+    ///
+    /// Demo and live bars use different provider timestamps, so retaining both
+    /// would make one apparent series alternate between unrelated prices.
+    pub fn purge_demo_data_for_live(&self) -> Result<bool> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("could not begin demo cache cleanup")?;
+        let has_demo_data: bool = transaction.query_row(
+            "SELECT
+                EXISTS(
+                    SELECT 1 FROM sync_checkpoints
+                    WHERE scope = 'demo' OR scope LIKE 'demo:%'
+                )
+                OR EXISTS(SELECT 1 FROM bars WHERE source = 'demo')
+                OR EXISTS(
+                    SELECT 1 FROM news
+                    WHERE id LIKE 'demo-%' OR source LIKE 'SIMULATED%'
+                )",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_demo_data {
+            transaction
+                .commit()
+                .context("could not finish demo cache inspection")?;
+            return Ok(false);
+        }
+
+        transaction.execute(
+            "DELETE FROM sector_memberships
+             WHERE symbol IN (
+                 SELECT symbol FROM companies
+                 WHERE raw_sector LIKE '%SIMULATED DEMO%'
+             )",
+            [],
+        )?;
+        transaction.execute("DELETE FROM bars WHERE source = 'demo'", [])?;
+        transaction.execute(
+            "DELETE FROM news
+             WHERE id LIKE 'demo-%' OR source LIKE 'SIMULATED%'",
+            [],
+        )?;
+        // Snapshots predate source tracking, so their provenance is ambiguous.
+        transaction.execute("DELETE FROM snapshots", [])?;
+        transaction.execute(
+            "UPDATE companies
+             SET market_cap = NULL,
+                 shares_outstanding = NULL,
+                 shares_source = NULL,
+                 shares_as_of = NULL,
+                 shares_method = NULL,
+                 shares_confidence = NULL,
+                 in_universe = 0,
+                 retained = 1
+             WHERE raw_sector LIKE '%SIMULATED DEMO%'",
+            [],
+        )?;
+        transaction.execute(
+            "DELETE FROM sync_checkpoints
+             WHERE scope = 'snapshots'
+                OR scope = 'demo'
+                OR scope LIKE 'demo:%'",
+            [],
+        )?;
+        transaction
+            .commit()
+            .context("could not commit demo cache cleanup")?;
+        Ok(true)
+    }
+
     /// Clears the selected cache before deterministic demo data is regenerated.
     pub fn reset_demo_data(&self) -> Result<()> {
         self.reset()
@@ -1064,8 +1160,13 @@ fn upsert_company(
     transaction.execute(
         "INSERT INTO companies (
             symbol, name, sector, raw_sector, exchange, industry, market_cap,
-            shares_outstanding, rank, description, in_universe, retained, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            size_proxy, size_proxy_source, size_proxy_as_of, size_proxy_confidence,
+            shares_outstanding, shares_source, shares_as_of, shares_method, shares_confidence,
+            rank, description, in_universe, retained, updated_at
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+            ?15, ?16, ?17, ?18, ?19, ?20, ?21
+         )
          ON CONFLICT(symbol) DO UPDATE SET
             name = excluded.name,
             sector = excluded.sector,
@@ -1073,7 +1174,15 @@ fn upsert_company(
             exchange = excluded.exchange,
             industry = excluded.industry,
             market_cap = excluded.market_cap,
+            size_proxy = excluded.size_proxy,
+            size_proxy_source = excluded.size_proxy_source,
+            size_proxy_as_of = excluded.size_proxy_as_of,
+            size_proxy_confidence = excluded.size_proxy_confidence,
             shares_outstanding = excluded.shares_outstanding,
+            shares_source = excluded.shares_source,
+            shares_as_of = excluded.shares_as_of,
+            shares_method = excluded.shares_method,
+            shares_confidence = excluded.shares_confidence,
             rank = excluded.rank,
             description = excluded.description,
             in_universe = excluded.in_universe,
@@ -1087,7 +1196,15 @@ fn upsert_company(
             company.exchange,
             company.industry,
             company.market_cap,
+            company.size_proxy,
+            company.size_proxy_source,
+            company.size_proxy_as_of.map(|date| date.to_string()),
+            company.size_proxy_confidence,
             company.shares_outstanding,
+            company.shares_source,
+            company.shares_as_of.map(|date| date.to_string()),
+            company.shares_method,
+            company.shares_confidence,
             company.rank.map(i64::from),
             company.description,
             force_in_universe.unwrap_or(company.in_universe),
@@ -1118,8 +1235,9 @@ fn insert_sector_memberships(
     companies: &[&Company],
 ) -> Result<()> {
     let mut statement = transaction.prepare_cached(
-        "INSERT INTO sector_memberships (as_of_date, sector, symbol, rank, market_cap)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO sector_memberships (
+            as_of_date, sector, symbol, rank, market_cap, size_proxy
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )?;
     for (position, company) in companies.iter().enumerate() {
         statement.execute(params![
@@ -1128,6 +1246,7 @@ fn insert_sector_memberships(
             normalize_symbol(&company.symbol)?,
             i64::try_from(position + 1).unwrap_or(i64::MAX),
             company.market_cap,
+            company.size_proxy,
         ])?;
     }
     Ok(())
@@ -1140,7 +1259,7 @@ fn selected_members(companies: &[Company], limit: usize) -> Vec<&Company> {
 fn selected_members_from_refs<'a>(companies: &[&'a Company], limit: usize) -> Vec<&'a Company> {
     let mut selected = companies.to_vec();
     selected.sort_by(|left, right| {
-        compare_optional_f64_desc(left.market_cap, right.market_cap)
+        compare_optional_f64_desc(screened_company_size(left), screened_company_size(right))
             .then_with(|| left.rank.is_none().cmp(&right.rank.is_none()))
             .then_with(|| left.rank.cmp(&right.rank))
             .then_with(|| left.symbol.cmp(&right.symbol))
@@ -1176,7 +1295,10 @@ fn load_heatmap_companies(
             GROUP BY sector
          )
          SELECT c.symbol, c.name, memberships.sector, c.raw_sector, c.exchange, c.industry,
-                COALESCE(memberships.market_cap, c.market_cap), c.shares_outstanding,
+                memberships.market_cap, memberships.size_proxy, c.size_proxy_source,
+                c.size_proxy_as_of, c.size_proxy_confidence,
+                c.shares_outstanding, c.shares_source, c.shares_as_of,
+                c.shares_method, c.shares_confidence,
                 memberships.rank, c.description, c.in_universe, c.retained, c.updated_at
          FROM latest
          JOIN sector_memberships memberships
@@ -1329,10 +1451,11 @@ fn sort_and_limit_tiles(
 
 fn compare_tiles(left: &MarketTile, right: &MarketTile, sort: SortMode) -> Ordering {
     match sort {
-        SortMode::MarketCap => {
-            compare_optional_f64_desc(left.company.market_cap, right.company.market_cap)
-                .then_with(|| left.company.rank.cmp(&right.company.rank))
-        }
+        SortMode::MarketCap => compare_optional_f64_desc(
+            screened_company_size(&left.company),
+            screened_company_size(&right.company),
+        )
+        .then_with(|| left.company.rank.cmp(&right.company.rank)),
         SortMode::Gainers => compare_optional_f64_desc(left.period_return, right.period_return),
         SortMode::Volume => compare_optional_f64_desc(left.volume, right.volume),
         SortMode::Alphabetical => left.company.symbol.cmp(&right.company.symbol),
@@ -1348,6 +1471,17 @@ fn compare_optional_f64_desc(left: Option<f64>, right: Option<f64>) -> Ordering 
     }
 }
 
+fn screened_company_size(company: &Company) -> Option<f64> {
+    company
+        .market_cap
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .or_else(|| {
+            company
+                .size_proxy
+                .filter(|value| value.is_finite() && *value > 0.0)
+        })
+}
+
 fn table_count(connection: &Connection, table: &str) -> Result<usize> {
     let count: i64 = connection.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
         row.get(0)
@@ -1357,9 +1491,9 @@ fn table_count(connection: &Connection, table: &str) -> Result<usize> {
 
 fn company_from_row(row: &Row<'_>) -> rusqlite::Result<Company> {
     let rank = row
-        .get::<_, Option<i64>>(8)?
+        .get::<_, Option<i64>>(16)?
         .map(|value| {
-            u16::try_from(value).map_err(|error| conversion_error(8, Type::Integer, error))
+            u16::try_from(value).map_err(|error| conversion_error(16, Type::Integer, error))
         })
         .transpose()?;
     Ok(Company {
@@ -1375,13 +1509,30 @@ fn company_from_row(row: &Row<'_>) -> rusqlite::Result<Company> {
         exchange: row.get(4)?,
         industry: row.get(5)?,
         market_cap: row.get(6)?,
-        shares_outstanding: row.get(7)?,
+        size_proxy: row.get(7)?,
+        size_proxy_source: row.get(8)?,
+        size_proxy_as_of: optional_date_from_row(row, 9)?,
+        size_proxy_confidence: row.get(10)?,
+        shares_outstanding: row.get(11)?,
+        shares_source: row.get(12)?,
+        shares_as_of: optional_date_from_row(row, 13)?,
+        shares_method: row.get(14)?,
+        shares_confidence: row.get(15)?,
         rank,
-        description: row.get(9)?,
-        in_universe: row.get(10)?,
-        retained: row.get(11)?,
-        updated_at: datetime_from_millis(row.get(12)?)?,
+        description: row.get(17)?,
+        in_universe: row.get(18)?,
+        retained: row.get(19)?,
+        updated_at: datetime_from_millis(row.get(20)?)?,
     })
+}
+
+fn optional_date_from_row(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<NaiveDate>> {
+    row.get::<_, Option<String>>(index)?
+        .map(|value| {
+            NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+                .map_err(|error| conversion_error(index, Type::Text, error))
+        })
+        .transpose()
 }
 
 fn bar_from_row(row: &Row<'_>) -> rusqlite::Result<Bar> {
@@ -1410,6 +1561,7 @@ fn snapshot_from_row(row: &Row<'_>) -> rusqlite::Result<Snapshot> {
     Ok(Snapshot {
         symbol: row.get(0)?,
         price: row.get(1)?,
+        market_cap: None,
         previous_close: row.get(2)?,
         open: row.get(3)?,
         high: row.get(4)?,
@@ -1535,7 +1687,15 @@ mod tests {
             exchange: "NASDAQ".to_owned(),
             industry: "Software".to_owned(),
             market_cap: Some(market_cap),
+            size_proxy: None,
+            size_proxy_source: None,
+            size_proxy_as_of: None,
+            size_proxy_confidence: None,
             shares_outstanding: Some(1_000_000.0),
+            shares_source: Some("test".to_owned()),
+            shares_as_of: Some(now.date_naive()),
+            shares_method: Some("test".to_owned()),
+            shares_confidence: Some("high".to_owned()),
             rank,
             description: format!("{name} description"),
             in_universe: true,
@@ -1570,6 +1730,7 @@ mod tests {
         Snapshot {
             symbol: symbol.to_owned(),
             price: Some(price),
+            market_cap: None,
             previous_close: Some(previous_close),
             open: Some(previous_close),
             high: Some(price.max(previous_close) + 1.0),
@@ -1584,7 +1745,7 @@ mod tests {
         let directory = tempdir()?;
         let path = directory.path().join("market.sqlite3");
         let storage = Storage::open(&path)?;
-        assert_eq!(storage.schema_version()?, 1);
+        assert_eq!(storage.schema_version()?, 2);
         assert_eq!(storage.journal_mode()?.to_ascii_lowercase(), "wal");
 
         let now = instant(13);
@@ -1602,19 +1763,25 @@ mod tests {
         let july = NaiveDate::from_ymd_opt(2026, 7, 12).unwrap();
         storage.replace_memberships(june, Sector::Technology, &[apple, microsoft.clone()])?;
         storage.replace_memberships(july, Sector::Technology, &[microsoft, nvidia])?;
+        let mut updated_apple = storage.company("AAPL")?.expect("Apple remains cached");
+        updated_apple.market_cap = Some(9_999.0);
+        updated_apple.size_proxy = Some(8_888.0);
+        storage.upsert_companies(&[updated_apple])?;
 
         assert_eq!(
             storage.latest_membership_date(Some(Sector::Technology))?,
             Some(july)
         );
+        let june_members = storage.memberships(Sector::Technology, Some(june))?;
         assert_eq!(
-            storage
-                .memberships(Sector::Technology, Some(june))?
-                .into_iter()
-                .map(|value| value.symbol)
+            june_members
+                .iter()
+                .map(|value| value.symbol.as_str())
                 .collect::<Vec<_>>(),
-            vec!["AAPL".to_owned(), "MSFT".to_owned()]
+            vec!["AAPL", "MSFT"]
         );
+        assert_eq!(june_members[0].market_cap, Some(3_000.0));
+        assert_eq!(june_members[0].size_proxy, None);
         let current = storage.memberships(Sector::Technology, None)?;
         assert_eq!(
             current
@@ -1629,6 +1796,73 @@ mod tests {
         let reopened = Storage::open(&path)?;
         assert_eq!(reopened.company("msft")?.unwrap().name, "Microsoft");
         assert_eq!(reopened.counts()?.memberships, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn migrates_version_one_databases_without_discarding_company_rows() -> Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("market.sqlite3");
+        let connection = Connection::open(&path)?;
+        connection.execute_batch(&format!("{MIGRATION_1}\nPRAGMA user_version = 1;"))?;
+        connection.execute(
+            "INSERT INTO companies (
+                symbol, name, sector, exchange, updated_at
+             ) VALUES ('LEGACY', 'Legacy Company', 'technology', 'NASDAQ', ?1)",
+            [timestamp_millis(instant(12))],
+        )?;
+        connection.execute(
+            "INSERT INTO favorites (symbol, created_at) VALUES ('LEGACY', ?1)",
+            [timestamp_millis(instant(12))],
+        )?;
+        connection.execute(
+            "INSERT INTO bars (
+                symbol, timeframe, timestamp, open, high, low, close, volume
+             ) VALUES ('LEGACY', '1Day', ?1, 9.0, 11.0, 8.0, 10.0, 100.0)",
+            [timestamp_millis(instant(12))],
+        )?;
+        connection.execute(
+            "INSERT INTO sector_memberships (
+                as_of_date, sector, symbol, rank, market_cap
+             ) VALUES ('2026-07-23', 'technology', 'LEGACY', 1, 1000.0)",
+            [],
+        )?;
+        drop(connection);
+
+        let storage = Storage::open(&path)?;
+        assert_eq!(storage.schema_version()?, 2);
+        let legacy = storage.company("LEGACY")?.expect("legacy company survives");
+        assert_eq!(legacy.name, "Legacy Company");
+        assert_eq!(legacy.size_proxy, None);
+        assert_eq!(legacy.shares_source, None);
+        assert!(storage.is_favorite("LEGACY")?);
+        assert_eq!(
+            storage
+                .bars("LEGACY", Some("1Day"), None, None, None)?
+                .len(),
+            1
+        );
+        assert_eq!(
+            storage
+                .memberships(Sector::Technology, None)?
+                .into_iter()
+                .map(|company| company.symbol)
+                .collect::<Vec<_>>(),
+            ["LEGACY"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_a_database_from_a_newer_schema() -> Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("future.sqlite3");
+        let connection = Connection::open(&path)?;
+        connection.execute_batch("PRAGMA user_version = 3;")?;
+        drop(connection);
+
+        let error = Storage::open(&path).expect_err("future schema must be rejected");
+        assert!(error.to_string().contains("newer than supported version 2"));
         Ok(())
     }
 
@@ -1664,6 +1898,54 @@ mod tests {
         assert_eq!(members[0].rank, Some(1));
         assert_eq!(members[1].symbol, "OLD");
         assert_eq!(members[1].rank, Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn numeric_size_proxy_competes_with_known_caps_without_becoming_market_cap() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        let mut candidates = (0..100)
+            .map(|index| {
+                company(
+                    &format!("K{index:03}"),
+                    &format!("Known {index}"),
+                    Sector::Technology,
+                    1_000.0 - f64::from(index),
+                    Some(u16::try_from(index + 1).unwrap()),
+                    now,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut proxy_leader = company(
+            "PROXY",
+            "Proxy Leader",
+            Sector::Technology,
+            1.0,
+            Some(200),
+            now,
+        );
+        proxy_leader.market_cap = None;
+        proxy_leader.size_proxy = Some(10_000.0);
+        proxy_leader.size_proxy_source = Some("sec_entity_public_float".to_owned());
+        proxy_leader.size_proxy_as_of =
+            Some(NaiveDate::from_ymd_opt(2026, 6, 30).expect("valid date"));
+        proxy_leader.size_proxy_confidence = Some("low".to_owned());
+        candidates.push(proxy_leader);
+
+        storage.replace_memberships(now.date_naive(), Sector::Technology, &candidates)?;
+
+        let members = storage.memberships(Sector::Technology, None)?;
+        assert_eq!(members.len(), MAX_MEMBERS_PER_SECTOR);
+        assert_eq!(members[0].symbol, "PROXY");
+        assert_eq!(members[0].market_cap, None);
+        assert_eq!(members[0].size_proxy, Some(10_000.0));
+        assert_eq!(
+            members[0].size_proxy_source.as_deref(),
+            Some("sec_entity_public_float")
+        );
+        assert!(!members.iter().any(|company| company.symbol == "K099"));
         Ok(())
     }
 
@@ -1813,6 +2095,86 @@ mod tests {
                 .is_some_and(|value| (value - 0.02).abs() < f64::EPSILON * 4.0)
         );
         assert!(!tiles[0].stale);
+        Ok(())
+    }
+
+    #[test]
+    fn live_transition_removes_demo_rows_and_preserves_alpaca_cache_and_favorites() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        let mut simulated = company(
+            "AAA",
+            "Alpha",
+            Sector::Technology,
+            3_000_000.0,
+            Some(1),
+            now,
+        );
+        simulated.raw_sector = Some("Technology · SIMULATED DEMO".to_owned());
+        simulated.in_universe = true;
+        simulated.retained = false;
+        storage.replace_universe(now.date_naive(), &[simulated])?;
+        storage.set_favorite("AAA", true)?;
+
+        let mut demo_bar = bar("AAA", now - chrono::Duration::hours(4), 314.0, 1_000.0);
+        demo_bar.source = "demo".to_owned();
+        let mut live_bar = bar("AAA", now - chrono::Duration::hours(3), 518.0, 2_000.0);
+        live_bar.source = "alpaca".to_owned();
+        storage.upsert_bars(&[demo_bar, live_bar])?;
+        storage.upsert_snapshots(&[snapshot("AAA", 518.0, 516.0, 2_000.0, now)])?;
+        storage.upsert_news(&[
+            NewsItem {
+                id: "demo-AAA-outlook".to_owned(),
+                headline: "[SIMULATED] Alpha outlook".to_owned(),
+                source: "SIMULATED · DemoWire".to_owned(),
+                published_at: now,
+                url: "https://example.invalid/demo".to_owned(),
+                summary: "Simulated".to_owned(),
+                symbols: vec!["AAA".to_owned()],
+            },
+            NewsItem {
+                id: "alpaca-article".to_owned(),
+                headline: "Alpha live headline".to_owned(),
+                source: "Benzinga".to_owned(),
+                published_at: now - chrono::Duration::minutes(1),
+                url: "https://example.test/live".to_owned(),
+                summary: "Live".to_owned(),
+                symbols: vec!["AAA".to_owned()],
+            },
+        ])?;
+        storage.set_sync_checkpoint(crate::demo::CHECKPOINT_SCOPE, now)?;
+        storage.set_sync_checkpoint("snapshots", now)?;
+        storage.set_sync_checkpoint("history:1Day:2Y:symbol:AAA", now)?;
+
+        assert!(storage.purge_demo_data_for_live()?);
+
+        let bars = storage.bars("AAA", Some("1Day"), None, None, None)?;
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0].source, "alpaca");
+        assert_eq!(bars[0].close, 518.0);
+        let news = storage.news(Some("AAA"), 10)?;
+        assert_eq!(news.len(), 1);
+        assert_eq!(news[0].id, "alpaca-article");
+        assert!(storage.snapshot("AAA")?.is_none());
+        assert!(storage.memberships(Sector::Technology, None)?.is_empty());
+        assert!(storage.is_favorite("AAA")?);
+
+        let company = storage.company("AAA")?.expect("company remains cached");
+        assert_eq!(company.market_cap, None);
+        assert_eq!(company.shares_outstanding, None);
+        assert!(!company.in_universe);
+        assert!(company.retained);
+        assert_eq!(
+            storage.sync_checkpoint("history:1Day:2Y:symbol:AAA")?,
+            Some(now)
+        );
+        assert_eq!(storage.sync_checkpoint("snapshots")?, None);
+        assert_eq!(
+            storage.sync_checkpoint(crate::demo::CHECKPOINT_SCOPE)?,
+            None
+        );
+        assert!(!storage.purge_demo_data_for_live()?);
         Ok(())
     }
 

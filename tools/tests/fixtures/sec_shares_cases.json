@@ -1,0 +1,123 @@
+{
+  "cases": [
+    {
+      "issuer": "Alphabet",
+      "cik": 1652044,
+      "symbol": "GOOG",
+      "accession": "0001652044-26-000018",
+      "filed": "20260205",
+      "form": "10-K",
+      "expected_value": 12088000000,
+      "expected_method": "fsds_reviewed_equal_class_sum",
+      "expected_confidence": "medium",
+      "rows": [
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "", "12088000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassA;", "5822000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassB;", "837000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CapitalClassC;", "5429000000"]
+      ]
+    },
+    {
+      "issuer": "Meta",
+      "cik": 1326801,
+      "symbol": "META",
+      "accession": "0001628280-26-003942",
+      "filed": "20260129",
+      "form": "10-K",
+      "expected_value": 2530000000,
+      "expected_method": "fsds_reviewed_equal_class_sum",
+      "expected_confidence": "medium",
+      "rows": [
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "EquityComponents=CommonStock;", "2530000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassA;", "2187000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassB;", "343000000"]
+      ]
+    },
+    {
+      "issuer": "Visa",
+      "cik": 1403161,
+      "symbol": "V",
+      "accession": "0001403161-26-000045",
+      "filed": "20260130",
+      "form": "10-Q",
+      "expected_value": 1907637500,
+      "expected_method": "fsds_reviewed_class_conversion",
+      "expected_confidence": "medium",
+      "rows": [
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "EquityComponents=CommonStockIncludingAdditionalPaidInCapital;", "1817000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassA;", "1683000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassB1;", "5000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassB2;", "120000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassB1AndB2;", "125000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassC;", "9000000"],
+        ["PreferredStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=SeriesBPreferredStock;", "2000000"]
+      ]
+    },
+    {
+      "issuer": "Mastercard",
+      "cik": 1141391,
+      "symbol": "MA",
+      "accession": "0001141391-26-000013",
+      "filed": "20260211",
+      "form": "10-K",
+      "expected_value": 894000000,
+      "expected_method": "fsds_reviewed_equal_class_sum",
+      "expected_confidence": "medium",
+      "rows": [
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassA;", "887000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassB;", "7000000"]
+      ]
+    },
+    {
+      "issuer": "Berkshire Hathaway",
+      "cik": 1067983,
+      "symbol": "BRK-B",
+      "accession": "0001193125-26-083899",
+      "filed": "20260302",
+      "form": "10-K",
+      "expected_value": 2157335139,
+      "expected_method": "fsds_reported_equivalent_class",
+      "expected_confidence": "low",
+      "rows": [
+        ["WeightedAverageNumberOfSharesOutstandingBasic", "us-gaap/2025", "20251231", "4", "ClassOfStock=EquivalentClassA;", "1438223"],
+        ["WeightedAverageNumberOfSharesOutstandingBasic", "us-gaap/2025", "20251231", "4", "ClassOfStock=EquivalentClassB;", "2157335139"],
+        ["WeightedAverageNumberOfDilutedSharesOutstanding", "us-gaap/2025", "20251231", "4", "ClassOfStock=EquivalentClassB;", "2158000000"]
+      ]
+    },
+    {
+      "issuer": "Nike",
+      "cik": 320187,
+      "symbol": "NKE",
+      "accession": "0000320187-25-000151",
+      "filed": "20251230",
+      "form": "10-Q",
+      "expected_value": 1480000000,
+      "expected_method": "fsds_reviewed_equal_class_sum",
+      "expected_confidence": "medium",
+      "rows": [
+        ["CommonStockSharesOutstanding", "us-gaap/2024", "20251130", "0", "ClassOfStock=CommonClassA;", "289000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2024", "20251130", "0", "ClassOfStock=CommonClassA;EquityComponents=CommonStock;", "289000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2024", "20251130", "0", "ClassOfStock=CommonClassB;", "1191000000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2024", "20251130", "0", "ClassOfStock=CommonClassB;EquityComponents=CommonStock;", "1191000000"]
+      ]
+    },
+    {
+      "issuer": "Palantir",
+      "cik": 1321655,
+      "symbol": "PLTR",
+      "accession": "0001321655-26-000011",
+      "filed": "20260217",
+      "form": "10-K",
+      "expected_value": 2391192000,
+      "expected_method": "fsds_reviewed_equal_class_sum",
+      "expected_confidence": "medium",
+      "rows": [
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "", "2391192000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassA;", "2290987000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassB;", "99200000"],
+        ["CommonStockSharesOutstanding", "us-gaap/2025", "20251231", "0", "ClassOfStock=CommonClassF;", "1005000"],
+        ["WeightedAverageNumberOfDilutedSharesOutstanding", "us-gaap/2025", "20251231", "4", "", "2565197000"]
+      ]
+    }
+  ]
+}

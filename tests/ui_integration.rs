@@ -98,9 +98,12 @@ fn previous_and_next_cycle_sectors_and_tickers_in_display_order() {
     sectors.route = Route::Sector(Sector::Consumer);
     sectors.selected_ticker = 1;
 
-    assert!(press(&mut sectors, KeyCode::Char('p'), KeyModifiers::NONE).is_empty());
+    assert!(press(&mut sectors, KeyCode::Backspace, KeyModifiers::NONE).is_empty());
     assert_eq!(sectors.route, Route::Sector(Sector::Utilities));
     assert_eq!(sectors.selected_ticker, 1);
+    assert!(press(&mut sectors, KeyCode::Char(' '), KeyModifiers::NONE).is_empty());
+    assert_eq!(sectors.route, Route::Sector(Sector::Consumer));
+    assert!(press(&mut sectors, KeyCode::Char('p'), KeyModifiers::NONE).is_empty());
     assert!(press(&mut sectors, KeyCode::Char('n'), KeyModifiers::NONE).is_empty());
     assert_eq!(sectors.route, Route::Sector(Sector::Consumer));
 
@@ -128,17 +131,17 @@ fn previous_and_next_cycle_sectors_and_tickers_in_display_order() {
         Some(Route::Sector(Sector::Technology))
     );
     assert_eq!(
-        press(&mut detail, KeyCode::Char('n'), KeyModifiers::NONE),
+        press(&mut detail, KeyCode::Char(' '), KeyModifiers::NONE),
         vec![AppCommand::LoadTicker("ACME".to_owned())]
     );
     assert_eq!(detail.selected_ticker, 1);
     assert_eq!(
-        press(&mut detail, KeyCode::Char('n'), KeyModifiers::NONE),
+        press(&mut detail, KeyCode::Char(' '), KeyModifiers::NONE),
         vec![AppCommand::LoadTicker("BETA".to_owned())]
     );
     assert_eq!(detail.selected_ticker, 0);
     assert_eq!(
-        press(&mut detail, KeyCode::Char('p'), KeyModifiers::NONE),
+        press(&mut detail, KeyCode::Backspace, KeyModifiers::NONE),
         vec![AppCommand::LoadTicker("ACME".to_owned())]
     );
 
@@ -157,7 +160,7 @@ fn previous_and_next_cycle_sectors_and_tickers_in_display_order() {
         vec![AppCommand::LoadTicker(first)]
     );
     assert_eq!(
-        press(&mut favorites, KeyCode::Char('n'), KeyModifiers::NONE),
+        press(&mut favorites, KeyCode::Char(' '), KeyModifiers::NONE),
         vec![AppCommand::LoadTicker(second.clone())]
     );
     assert!(press(&mut favorites, KeyCode::Esc, KeyModifiers::NONE).is_empty());
@@ -169,7 +172,9 @@ fn previous_and_next_cycle_sectors_and_tickers_in_display_order() {
 fn previous_and_next_rail_targets_match_keyboard_navigation() {
     let mut state = fixture_state();
     state.route = Route::Sector(Sector::Technology);
-    render_at(&mut state, 60, 20);
+    let screen = screen_text(&render_at(&mut state, 60, 20));
+    assert!(screen.contains("Bksp Prev"));
+    assert!(screen.contains("Space Next"));
 
     let next = state
         .hit_targets
@@ -211,11 +216,11 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
         "+$7.01",
         "+7.25%",
         "Rank 1/2",
-        "Market cap",
+        "Est. cap / float",
         "PRICE",
         "VOLUME",
         "STATISTICS",
-        "MARKET CAP",
+        "EST. CAP",
         "NEWS",
         "Acme expands terminal analytics coverage",
     ] {
@@ -270,7 +275,7 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
     let statistics_screen = screen_text(&render_at(&mut compact, 80, 24));
     assert!(statistics_screen.contains("STATISTICS"));
     assert!(statistics_screen.contains("OPEN"));
-    assert!(statistics_screen.contains("MARKET CAP"));
+    assert!(statistics_screen.contains("EST. CAP"));
 
     assert!(press(&mut compact, KeyCode::Tab, KeyModifiers::NONE).is_empty());
     assert_eq!(compact.detail_tab, DetailTab::News);
@@ -958,7 +963,7 @@ fn keyboard_changes_ranges_opens_favorites_toggles_star_and_goes_back() {
 
     assert!(press(&mut state, KeyCode::Char('F'), KeyModifiers::SHIFT).is_empty());
     assert_eq!(state.route, Route::Favorites);
-    assert!(press(&mut state, KeyCode::Backspace, KeyModifiers::NONE).is_empty());
+    assert!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE).is_empty());
     assert_eq!(state.route, Route::Overview);
 
     state.route = Route::Ticker("ACME".to_owned());
@@ -1022,7 +1027,8 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         "Starred      F",
         "Ranges       1..9, 0 or [ ]",
         "Sectors      g then c s h e t f i m u",
-        "Prev / next  p / n (sector or ticker)",
+        "Back         Esc",
+        "Prev / next  Backspace / Space",
         "Detail       Left/Right chart, Up/Down news",
         "Quit         q",
     ] {
@@ -1199,6 +1205,7 @@ fn fixture_detail() -> TickerDetail {
         snapshot: Some(Snapshot {
             symbol: "ACME".to_owned(),
             price: Some(103.75),
+            market_cap: None,
             previous_close: Some(101.2),
             open: Some(101.25),
             high: Some(104.4),
@@ -1230,7 +1237,15 @@ fn fixture_company(
         exchange: "NASDAQ".to_owned(),
         industry: "Terminal Software".to_owned(),
         market_cap: Some(market_cap),
+        size_proxy: None,
+        size_proxy_source: None,
+        size_proxy_as_of: None,
+        size_proxy_confidence: None,
         shares_outstanding: Some(4_000_000_000.0),
+        shares_source: Some("test".to_owned()),
+        shares_as_of: Some(fixture_time().date_naive()),
+        shares_method: Some("test".to_owned()),
+        shares_confidence: Some("high".to_owned()),
         rank: Some(rank),
         description: format!("{name} builds market analysis software used by terminal operators."),
         in_universe: true,

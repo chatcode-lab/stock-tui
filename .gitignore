@@ -1,7 +1,9 @@
 # Secrets and local configuration
 .env
 .env.*
+.env-*
 !.env.example
+credentials.env
 
 # Python
 .venv/
@@ -15,6 +17,7 @@ __pycache__/
 htmlcov/
 dist/
 build/
+.wrangler/
 
 # Rust
 /target/

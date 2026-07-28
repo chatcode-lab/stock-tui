@@ -46,7 +46,8 @@ The current application:
 
 - runs as the invoking user and should not be installed or run with elevated
   privileges;
-- reads Alpaca credentials from the process environment or a local `.env`;
+- reads Alpaca credentials from the process environment, a local `.env`, or
+  the onboarding-managed `credentials.env` below the platform config directory;
 - stores market data, news metadata, sync checkpoints, and favorites in a local
   SQLite file;
 - makes HTTPS requests to configured provider/catalog base URLs;
@@ -54,11 +55,13 @@ The current application:
 - does not place orders and does not need brokerage trading authority for its
   intended market-data use.
 
-Credential wrappers, debug redaction, and bounded error bodies reduce
-accidental disclosure, but environment variables remain visible to processes
-with sufficient local privileges. A compromised user account, terminal,
-binary, dynamic loader, certificate store, proxy, or operating system is
-outside the application's trust boundary.
+Onboarding hides both input fields, validates credentials before persistence,
+and forces its Unix credential file to mode `0600`. The file is raw dotenv
+text, not encrypted. Credential wrappers, debug redaction, and bounded error
+bodies reduce accidental disclosure, but the managed file and environment
+variables remain visible to processes with sufficient local privileges. A
+compromised user account, terminal, binary, dynamic loader, certificate store,
+proxy, or operating system is outside the application's trust boundary.
 
 Changing `STOCK_TUI_DATA_URL` or `STOCK_TUI_TRADING_URL` directs authenticated
 requests to that host. Treat those overrides as security-sensitive and use
@@ -70,8 +73,10 @@ must remain bounded.
 
 The database does not intentionally store Alpaca credentials, but it can reveal
 favorite tickers, accessed news, cached companies, and provider-derived market
-history. Protect it with normal per-user filesystem permissions and private
-backups. Do not place it in a public cloud-sync folder or repository.
+history. The separate `<config_dir>/credentials.env` does contain the raw
+Alpaca pair. Protect both with normal per-user filesystem permissions and
+private backups. Do not place either in a public cloud-sync folder or
+repository.
 
 SQLite WAL may leave adjacent `-wal` and `-shm` files while the app is open.
 Secure and dispose of them with the main database. Stop the application before
@@ -121,3 +126,13 @@ Any future fallback backend needs independent redistribution licenses,
 server-side secret management, authentication, tenant isolation, rate limits,
 abuse detection, encrypted transport, audit/retention controls, and a separate
 threat model before production deployment.
+
+The existing R2 endpoint is narrower: it serves only the SEC-derived issuer
+catalog. Its recurring GitHub token must be scoped to catalog-object access and
+must not include market-provider credentials. A compromised publisher could
+still attempt catalog poisoning, so clients enforce HTTPS, a decompressed size
+limit, supported schema versions, unique identifiers, complete sector ranks,
+fact provenance, and monotonic catalog freshness before replacing local data.
+These checks bound malformed input but are not an independent artifact
+signature; suspected publisher compromise requires rotating the token,
+restoring a reviewed immutable object, and publishing a new stable pointer.

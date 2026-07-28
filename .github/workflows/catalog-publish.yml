@@ -1,0 +1,97 @@
+name: Publish SEC catalog
+
+on:
+  schedule:
+    # Daily at 06:17 UTC; avoid top-of-hour scheduler traffic.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sec-catalog-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || vars.CATALOG_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CATALOG_ARTIFACT: build/catalog/sec-catalog.json.gz
+      CATALOG_MANIFEST: build/catalog/sec-catalog.manifest.json
+      CATALOG_OUTPUT: build/catalog/sec_universe.json
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      SEC_CACHE_DIR: .cache/sec-catalog
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      WRANGLER_VERSION: "4.114.0"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check required publishing credentials
+        shell: bash
+        run: |
+          for name in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN SEC_USER_AGENT; do
+            if [[ -z "${!name:-}" ]]; then
+              printf 'required GitHub secret is not configured: %s\n' "$name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Restore SEC source cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ env.SEC_CACHE_DIR }}
+          key: sec-catalog-v2-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            sec-catalog-v2-${{ runner.os }}-
+
+      - name: Refresh mutable SEC inputs
+        run: bash infra/cloudflare/refresh-sec-cache.sh "$SEC_CACHE_DIR"
+
+      - name: Validate catalog model fixtures
+        run: python3 -m unittest discover -s tools/tests
+
+      - name: Build and validate SEC catalog
+        shell: bash
+        run: |
+          mkdir -p "$(dirname "$CATALOG_OUTPUT")"
+          python3 tools/build_sec_catalog.py \
+            --cache-dir "$SEC_CACHE_DIR" \
+            --output "$CATALOG_OUTPUT"
+          jq -e '.schema_version == 2 and (.companies | length >= 900)' \
+            "$CATALOG_OUTPUT" >/dev/null
+
+      - name: Package compact runtime catalog
+        run: |
+          python3 tools/build_sec_catalog.py \
+            --package-only \
+            --output "$CATALOG_OUTPUT" \
+            --artifact-output "$CATALOG_ARTIFACT" \
+            --artifact-manifest-output "$CATALOG_MANIFEST"
+
+      - name: Check Wrangler version
+        run: npx --yes "wrangler@$WRANGLER_VERSION" --version
+
+      - name: Publish catalog to R2
+        run: |
+          bash infra/cloudflare/publish-catalog.sh \
+            "$CATALOG_OUTPUT" \
+            "$CATALOG_ARTIFACT" \
+            "$CATALOG_MANIFEST"
+
+      - name: Retain publication record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sec-catalog-${{ github.run_id }}
+          path: |
+            ${{ env.CATALOG_OUTPUT }}
+            ${{ env.CATALOG_ARTIFACT }}
+            ${{ env.CATALOG_MANIFEST }}
+          if-no-files-found: ignore
+          retention-days: 14

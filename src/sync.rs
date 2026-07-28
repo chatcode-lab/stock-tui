@@ -1,22 +1,19 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Duration as ChronoDuration, Utc};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config::Settings,
     domain::{Company, DateRange, Sector, SyncPhase, SyncProgress},
-    providers::{AlpacaProvider, MarketDataProvider, NewsProvider},
+    providers::ProviderSet,
     storage::Storage,
 };
 
 #[derive(Debug, Clone)]
 pub enum SyncCommand {
     Refresh,
+    ReconcileUniverse,
     LoadTicker { symbol: String, range: DateRange },
     Shutdown,
 }
@@ -33,6 +30,30 @@ pub struct SyncHandle {
     pub commands: mpsc::UnboundedSender<SyncCommand>,
     pub events: mpsc::UnboundedReceiver<SyncEvent>,
     pub worker: JoinHandle<()>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SyncOptions {
+    history_batch_size: usize,
+}
+
+impl SyncOptions {
+    #[must_use]
+    pub const fn new(history_batch_size: usize) -> Self {
+        Self {
+            history_batch_size: if history_batch_size == 0 {
+                1
+            } else {
+                history_batch_size
+            },
+        }
+    }
+}
+
+impl Default for SyncOptions {
+    fn default() -> Self {
+        Self::new(50)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -58,10 +79,12 @@ const HISTORY_PLANS: [HistoryPlan; 2] = [
     },
 ];
 
-pub fn spawn(settings: Settings, storage: Storage) -> SyncHandle {
+pub fn spawn(providers: ProviderSet, storage: Storage, options: SyncOptions) -> SyncHandle {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
-    let worker = tokio::spawn(run_worker(settings, storage, command_rx, event_tx));
+    let worker = tokio::spawn(run_worker(
+        providers, storage, command_rx, event_tx, options,
+    ));
     SyncHandle {
         commands: command_tx,
         events: event_rx,
@@ -70,25 +93,22 @@ pub fn spawn(settings: Settings, storage: Storage) -> SyncHandle {
 }
 
 async fn run_worker(
-    settings: Settings,
+    providers: ProviderSet,
     storage: Storage,
     mut commands: mpsc::UnboundedReceiver<SyncCommand>,
     events: mpsc::UnboundedSender<SyncEvent>,
+    options: SyncOptions,
 ) {
-    let provider = match AlpacaProvider::new(&settings) {
-        Ok(provider) => Arc::new(provider),
-        Err(error) => {
-            tracing::warn!(error = %error, "Alpaca provider initialization failed");
-            let _ = events.send(SyncEvent::Error(error.to_string()));
-            return;
-        }
-    };
+    tracing::debug!(
+        provider = providers.id(),
+        "starting market data synchronization"
+    );
     let cancellation = CancellationToken::new();
-    if let Err(error) = refresh_assets(&storage, provider.as_ref(), &events).await {
+    if let Err(error) = refresh_assets(&storage, &providers, &events).await {
         tracing::warn!(error = %error, "initial active-asset refresh failed");
         let _ = events.send(SyncEvent::Error(error));
     }
-    let snapshots_ready = match refresh_snapshots(&storage, provider.as_ref(), &events).await {
+    let snapshots_ready = match refresh_snapshots(&storage, &providers, &events).await {
         Ok(()) => true,
         Err(error) => {
             tracing::warn!(error = %error, "initial snapshot refresh failed");
@@ -99,39 +119,46 @@ async fn run_worker(
     let mut history_task = snapshots_ready.then(|| {
         tokio::spawn(backfill_history(
             storage.clone(),
-            Arc::clone(&provider),
+            providers.clone(),
             events.clone(),
             cancellation.child_token(),
-            settings.history_batch_size,
+            options.history_batch_size,
         ))
     });
 
     while let Some(command) = commands.recv().await {
         match command {
-            SyncCommand::Refresh => {
-                match refresh_snapshots(&storage, provider.as_ref(), &events).await {
-                    Ok(()) if history_task.as_ref().is_none_or(JoinHandle::is_finished) => {
-                        if let Some(task) = history_task.take() {
-                            let _ = task.await;
-                        }
-                        history_task = Some(tokio::spawn(backfill_history(
-                            storage.clone(),
-                            Arc::clone(&provider),
-                            events.clone(),
-                            cancellation.child_token(),
-                            settings.history_batch_size,
-                        )));
+            SyncCommand::Refresh => match refresh_snapshots(&storage, &providers, &events).await {
+                Ok(()) if history_task.as_ref().is_none_or(JoinHandle::is_finished) => {
+                    if let Some(task) = history_task.take() {
+                        let _ = task.await;
                     }
-                    Ok(()) => {}
-                    Err(error) => {
-                        tracing::warn!(error = %error, "snapshot refresh failed");
-                        let _ = events.send(SyncEvent::Error(error));
-                    }
+                    history_task = Some(tokio::spawn(backfill_history(
+                        storage.clone(),
+                        providers.clone(),
+                        events.clone(),
+                        cancellation.child_token(),
+                        options.history_batch_size,
+                    )));
+                }
+                Ok(()) => {}
+                Err(error) => {
+                    tracing::warn!(error = %error, "snapshot refresh failed");
+                    let _ = events.send(SyncEvent::Error(error));
+                }
+            },
+            SyncCommand::ReconcileUniverse => {
+                if let Err(error) = refresh_assets(&storage, &providers, &events).await {
+                    tracing::warn!(error = %error, "active-asset reconciliation failed");
+                    let _ = events.send(SyncEvent::Error(error));
+                } else if let Err(error) = refresh_snapshots(&storage, &providers, &events).await {
+                    tracing::warn!(error = %error, "post-catalog snapshot refresh failed");
+                    let _ = events.send(SyncEvent::Error(error));
                 }
             }
             SyncCommand::LoadTicker { symbol, range } => {
                 if let Err(error) =
-                    refresh_ticker(&storage, provider.as_ref(), &events, &symbol, range).await
+                    refresh_ticker(&storage, &providers, &events, &symbol, range).await
                 {
                     tracing::warn!(%symbol, error = %error, "ticker refresh failed");
                     let _ = events.send(SyncEvent::Error(error));
@@ -148,7 +175,7 @@ async fn run_worker(
 
 async fn refresh_snapshots(
     storage: &Storage,
-    provider: &AlpacaProvider,
+    providers: &ProviderSet,
     events: &mpsc::UnboundedSender<SyncEvent>,
 ) -> Result<(), String> {
     let companies = storage
@@ -173,38 +200,14 @@ async fn refresh_snapshots(
         "Refreshing current prices",
         None,
     );
-    let snapshots = provider
+    let snapshots = providers
         .fetch_snapshots(&symbols)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{}: {error}", providers.display_name()))?;
     storage
         .upsert_snapshots(&snapshots)
         .map_err(|error| error.to_string())?;
-    let by_symbol: HashMap<&str, f64> = snapshots
-        .iter()
-        .filter_map(|snapshot| {
-            snapshot
-                .price
-                .map(|price| (snapshot.symbol.as_str(), price))
-        })
-        .collect();
-    let updated_companies: Vec<Company> = companies
-        .into_iter()
-        .map(|mut company| {
-            company.market_cap = None;
-            if let (Some(shares), Some(price)) = (
-                company.shares_outstanding,
-                by_symbol.get(company.symbol.as_str()),
-            ) {
-                let market_cap = shares * price;
-                if market_cap.is_finite() && market_cap > 0.0 {
-                    company.market_cap = Some(market_cap);
-                    company.updated_at = Utc::now();
-                }
-            }
-            company
-        })
-        .collect();
+    let updated_companies = update_market_caps(companies, &snapshots, Utc::now());
     storage
         .upsert_companies(&updated_companies)
         .map_err(|error| error.to_string())?;
@@ -233,9 +236,54 @@ async fn refresh_snapshots(
     Ok(())
 }
 
+fn update_market_caps(
+    companies: Vec<Company>,
+    snapshots: &[crate::domain::Snapshot],
+    updated_at: chrono::DateTime<Utc>,
+) -> Vec<Company> {
+    let by_symbol: HashMap<&str, &crate::domain::Snapshot> = snapshots
+        .iter()
+        .map(|snapshot| (snapshot.symbol.as_str(), snapshot))
+        .collect();
+    companies
+        .into_iter()
+        .map(|mut company| {
+            if company.shares_outstanding.is_none() {
+                let provider_cap = by_symbol
+                    .get(company.symbol.as_str())
+                    .and_then(|snapshot| snapshot.market_cap)
+                    .filter(|value| value.is_finite() && *value > 0.0);
+                if provider_cap.is_some() {
+                    company.market_cap = provider_cap;
+                    company.updated_at = updated_at;
+                } else {
+                    company.market_cap = company
+                        .market_cap
+                        .filter(|value| value.is_finite() && *value > 0.0);
+                }
+                return company;
+            }
+            company.market_cap = None;
+            if let (Some(shares), Some(price)) = (
+                company.shares_outstanding,
+                by_symbol
+                    .get(company.symbol.as_str())
+                    .and_then(|snapshot| snapshot.price),
+            ) {
+                let market_cap = shares * price;
+                if market_cap.is_finite() && market_cap > 0.0 {
+                    company.market_cap = Some(market_cap);
+                    company.updated_at = updated_at;
+                }
+            }
+            company
+        })
+        .collect()
+}
+
 async fn backfill_history(
     storage: Storage,
-    provider: Arc<AlpacaProvider>,
+    providers: ProviderSet,
     events: mpsc::UnboundedSender<SyncEvent>,
     cancellation: CancellationToken,
     batch_size: usize,
@@ -248,7 +296,7 @@ async fn backfill_history(
         }
     };
     let total = companies.len().saturating_mul(HISTORY_PLANS.len());
-    let now = provider.latest_historical_end(Utc::now());
+    let now = providers.latest_historical_end(Utc::now());
     let mut failed_batches = 0_usize;
     let mut completed_units = 0_usize;
     for (plan_index, plan) in HISTORY_PLANS.into_iter().enumerate() {
@@ -293,7 +341,7 @@ async fn backfill_history(
                 plan.message,
                 None,
             );
-            match provider
+            match providers
                 .fetch_bars(&symbols, plan.timeframe, start, now)
                 .await
             {
@@ -361,31 +409,32 @@ fn history_batch_start(
 
 async fn refresh_ticker(
     storage: &Storage,
-    provider: &AlpacaProvider,
+    providers: &ProviderSet,
     events: &mpsc::UnboundedSender<SyncEvent>,
     symbol: &str,
     range: DateRange,
 ) -> Result<(), String> {
     let now = Utc::now();
-    let history_end = provider.latest_historical_end(now);
+    let history_end = providers.latest_historical_end(now);
+    let operation_count = 2 + usize::from(providers.supports_news());
     send_progress(
         events,
         SyncPhase::News,
         0,
-        3,
+        operation_count,
         &format!("Updating {symbol}"),
         None,
     );
     let symbols = vec![symbol.to_owned()];
     let (bars, news, snapshots) = tokio::join!(
-        provider.fetch_bars(
+        providers.fetch_bars(
             &symbols,
             range.preferred_timeframe(),
             range.cutoff(history_end),
             history_end,
         ),
-        provider.fetch_news(&symbols, 20),
-        provider.fetch_snapshots(&symbols),
+        providers.fetch_news(&symbols, 20),
+        providers.fetch_snapshots(&symbols),
     );
     let mut errors = Vec::new();
     match bars {
@@ -397,11 +446,12 @@ async fn refresh_ticker(
         Err(error) => errors.push(format!("bars: {error}")),
     }
     match news {
-        Ok(news) => {
+        Ok(Some(news)) => {
             storage
                 .upsert_news(&news)
                 .map_err(|error| error.to_string())?;
         }
+        Ok(None) => {}
         Err(error) => errors.push(format!("news: {error}")),
     }
     match snapshots {
@@ -409,6 +459,13 @@ async fn refresh_ticker(
             storage
                 .upsert_snapshots(&snapshots)
                 .map_err(|error| error.to_string())?;
+            if !snapshots.is_empty()
+                && let Some(company) = storage.company(symbol).map_err(|error| error.to_string())?
+            {
+                storage
+                    .upsert_companies(&update_market_caps(vec![company], &snapshots, now))
+                    .map_err(|error| error.to_string())?;
+            }
         }
         Err(error) => errors.push(format!("snapshot: {error}")),
     }
@@ -422,8 +479,8 @@ async fn refresh_ticker(
     send_progress(
         events,
         SyncPhase::Complete,
-        3,
-        3,
+        operation_count,
+        operation_count,
         &format!("{symbol} detail cached"),
         None,
     );
@@ -432,21 +489,15 @@ async fn refresh_ticker(
 
 async fn refresh_assets(
     storage: &Storage,
-    provider: &AlpacaProvider,
+    providers: &ProviderSet,
     events: &mpsc::UnboundedSender<SyncEvent>,
 ) -> Result<(), String> {
-    send_progress(
-        events,
-        SyncPhase::Universe,
-        0,
-        1,
-        "Checking active Alpaca assets",
-        None,
-    );
-    let assets = provider
+    let message = format!("Checking active {} assets", providers.display_name());
+    send_progress(events, SyncPhase::Universe, 0, 1, &message, None);
+    let assets = providers
         .fetch_assets()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{}: {error}", providers.display_name()))?;
     let existing: HashMap<String, Company> = storage
         .companies(None, false)
         .map_err(|error| error.to_string())?
@@ -496,8 +547,27 @@ fn reconcile_active_assets(
                 asset.sector = current.sector;
                 asset.raw_sector.clone_from(&current.raw_sector);
                 asset.industry.clone_from(&current.industry);
-                asset.market_cap = current.market_cap;
+                asset.market_cap = asset
+                    .market_cap
+                    .filter(|value| value.is_finite() && *value > 0.0)
+                    .or(current
+                        .market_cap
+                        .filter(|value| value.is_finite() && *value > 0.0));
+                asset.size_proxy = current.size_proxy;
+                asset
+                    .size_proxy_source
+                    .clone_from(&current.size_proxy_source);
+                asset.size_proxy_as_of = current.size_proxy_as_of;
+                asset
+                    .size_proxy_confidence
+                    .clone_from(&current.size_proxy_confidence);
                 asset.shares_outstanding = current.shares_outstanding;
+                asset.shares_source.clone_from(&current.shares_source);
+                asset.shares_as_of = current.shares_as_of;
+                asset.shares_method.clone_from(&current.shares_method);
+                asset
+                    .shares_confidence
+                    .clone_from(&current.shares_confidence);
                 asset.rank = current.rank;
                 asset.description.clone_from(&current.description);
                 asset.in_universe = current.in_universe;
@@ -542,9 +612,57 @@ fn send_progress(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
     use chrono::{Duration, TimeZone};
+    use tempfile::TempDir;
 
     use super::*;
+    use crate::{
+        domain::{Bar, Snapshot},
+        providers::{AssetProvider, MarketDataProvider, ProviderError},
+    };
+
+    #[derive(Debug)]
+    struct EmptyAssets;
+
+    #[async_trait]
+    impl AssetProvider for EmptyAssets {
+        async fn fetch_assets(&self) -> Result<Vec<Company>, ProviderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[derive(Debug)]
+    struct SnapshotMarketData {
+        snapshots: Vec<Snapshot>,
+    }
+
+    #[async_trait]
+    impl MarketDataProvider for SnapshotMarketData {
+        async fn fetch_bars(
+            &self,
+            _symbols: &[String],
+            _timeframe: &str,
+            _start: chrono::DateTime<Utc>,
+            _end: chrono::DateTime<Utc>,
+        ) -> Result<Vec<Bar>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn fetch_snapshots(
+            &self,
+            symbols: &[String],
+        ) -> Result<Vec<Snapshot>, ProviderError> {
+            Ok(self
+                .snapshots
+                .iter()
+                .filter(|snapshot| symbols.contains(&snapshot.symbol))
+                .cloned()
+                .collect())
+        }
+    }
 
     fn instant() -> chrono::DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 7, 23, 12, 0, 0)
@@ -561,12 +679,34 @@ mod tests {
             exchange: "TEST".to_owned(),
             industry: "Test industry".to_owned(),
             market_cap: Some(1_000_000.0),
+            size_proxy: None,
+            size_proxy_source: None,
+            size_proxy_as_of: None,
+            size_proxy_confidence: None,
             shares_outstanding: Some(10_000.0),
+            shares_source: Some("test".to_owned()),
+            shares_as_of: Some(instant().date_naive()),
+            shares_method: Some("test".to_owned()),
+            shares_confidence: Some("high".to_owned()),
             rank: Some(1),
             description: "Catalog description".to_owned(),
             in_universe,
             retained,
             updated_at: instant() - Duration::days(1),
+        }
+    }
+
+    fn snapshot(symbol: &str, price: f64, market_cap: Option<f64>) -> Snapshot {
+        Snapshot {
+            symbol: symbol.to_owned(),
+            price: Some(price),
+            market_cap,
+            previous_close: Some(price - 1.0),
+            open: Some(price - 0.5),
+            high: Some(price + 1.0),
+            low: Some(price - 2.0),
+            volume: Some(1_000.0),
+            updated_at: instant(),
         }
     }
 
@@ -583,6 +723,14 @@ mod tests {
         let active = ["LIVE", "SPY", "FUND"]
             .into_iter()
             .map(|symbol| company(symbol, None, false, false))
+            .map(|mut company| {
+                company.market_cap = match company.symbol.as_str() {
+                    "LIVE" => Some(2_000_000.0),
+                    "SPY" => None,
+                    _ => company.market_cap,
+                };
+                company
+            })
             .collect();
 
         let reconciled = reconcile_active_assets(active, &existing, instant());
@@ -596,6 +744,7 @@ mod tests {
         assert!(live.retained);
         assert!(!live.in_universe);
         assert_eq!(live.description, "Catalog description");
+        assert_eq!(live.market_cap, Some(2_000_000.0));
 
         let gone = by_symbol["GONE"];
         assert!(!gone.retained);
@@ -604,6 +753,7 @@ mod tests {
 
         assert!(by_symbol["SPY"].retained);
         assert!(by_symbol["SPY"].in_universe);
+        assert_eq!(by_symbol["SPY"].market_cap, Some(1_000_000.0));
         assert!(!by_symbol["FUND"].retained);
         assert!(!by_symbol["FUND"].in_universe);
     }
@@ -623,6 +773,80 @@ mod tests {
             false,
             false
         )));
+    }
+
+    #[test]
+    fn snapshot_caps_prefer_catalog_shares_and_preserve_provider_enrichment_otherwise() {
+        let mut with_shares = company("SHARES", Some(Sector::Technology), true, true);
+        with_shares.market_cap = Some(9_000_000.0);
+        let mut without_shares = company("ENRICHED", Some(Sector::Technology), true, true);
+        without_shares.shares_outstanding = None;
+        without_shares.market_cap = Some(3_000_000.0);
+        let mut cached = company("CACHED", Some(Sector::Technology), true, true);
+        cached.shares_outstanding = None;
+        cached.market_cap = Some(5_000_000.0);
+        let snapshots = [
+            snapshot("SHARES", 120.0, Some(999_000_000.0)),
+            snapshot("ENRICHED", 42.0, Some(4_000_000.0)),
+            snapshot("CACHED", 80.0, None),
+        ];
+
+        let updated = update_market_caps(
+            vec![with_shares, without_shares, cached],
+            &snapshots,
+            instant(),
+        );
+        let by_symbol = updated
+            .iter()
+            .map(|company| (company.symbol.as_str(), company))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(by_symbol["SHARES"].market_cap, Some(1_200_000.0));
+        assert_eq!(by_symbol["ENRICHED"].market_cap, Some(4_000_000.0));
+        assert_eq!(by_symbol["CACHED"].market_cap, Some(5_000_000.0));
+    }
+
+    #[tokio::test]
+    async fn initial_snapshot_refresh_persists_provider_cap_for_company_without_shares() {
+        let temp = TempDir::new().expect("temp directory");
+        let storage = Storage::open(temp.path().join("market.sqlite3")).expect("storage");
+        let mut enriched = company("ENRICHED", Some(Sector::Technology), true, true);
+        enriched.shares_outstanding = None;
+        enriched.market_cap = None;
+        storage
+            .replace_universe(instant().date_naive(), &[enriched])
+            .expect("seed universe");
+        let providers = ProviderSet::new(
+            "fixture",
+            "Fixture",
+            Arc::new(EmptyAssets),
+            Arc::new(SnapshotMarketData {
+                snapshots: vec![snapshot("ENRICHED", 42.0, Some(4_000_000.0))],
+            }),
+        );
+        let (events, _received) = mpsc::unbounded_channel();
+
+        refresh_snapshots(&storage, &providers, &events)
+            .await
+            .expect("snapshot refresh");
+
+        let stored = storage
+            .company("ENRICHED")
+            .expect("company lookup")
+            .expect("stored company");
+        assert_eq!(stored.market_cap, Some(4_000_000.0));
+        let members = storage
+            .memberships(Sector::Technology, None)
+            .expect("memberships");
+        assert_eq!(members[0].market_cap, Some(4_000_000.0));
+        assert_eq!(
+            storage
+                .snapshot("ENRICHED")
+                .expect("snapshot lookup")
+                .expect("stored snapshot")
+                .market_cap,
+            None
+        );
     }
 
     #[test]
@@ -652,5 +876,59 @@ mod tests {
             history_batch_start(HISTORY_PLANS[1], now, &[Some(second), Some(first)], true),
             first - Duration::days(7)
         );
+    }
+
+    #[tokio::test]
+    async fn ticker_refresh_updates_provider_cap_without_a_news_capability() {
+        let temp = TempDir::new().expect("temp directory");
+        let storage = Storage::open(temp.path().join("market.sqlite3")).expect("storage");
+        let mut enriched = company("TEST", Some(Sector::Technology), true, true);
+        enriched.shares_outstanding = None;
+        enriched.market_cap = None;
+        storage.upsert_companies(&[enriched]).expect("seed company");
+        let providers = ProviderSet::new(
+            "fixture",
+            "Fixture",
+            Arc::new(EmptyAssets),
+            Arc::new(SnapshotMarketData {
+                snapshots: vec![snapshot("TEST", 25.0, Some(2_500_000.0))],
+            }),
+        );
+        let (events, mut received) = mpsc::unbounded_channel();
+
+        refresh_ticker(&storage, &providers, &events, "TEST", DateRange::Month)
+            .await
+            .expect("ticker refresh");
+        assert_eq!(
+            storage
+                .company("TEST")
+                .expect("company lookup")
+                .expect("stored company")
+                .market_cap,
+            Some(2_500_000.0)
+        );
+        drop(events);
+
+        let events = std::iter::from_fn(|| received.try_recv().ok()).collect::<Vec<_>>();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SyncEvent::TickerChanged(symbol) if symbol == "TEST"))
+        );
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                SyncEvent::Progress(progress)
+                    if progress.phase == SyncPhase::Complete
+                        && progress.completed == 2
+                        && progress.total == 2
+            )
+        }));
+    }
+
+    #[test]
+    fn sync_options_never_allow_empty_history_batches() {
+        assert_eq!(SyncOptions::new(0).history_batch_size, 1);
+        assert_eq!(SyncOptions::new(25).history_batch_size, 25);
     }
 }

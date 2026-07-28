@@ -7,6 +7,71 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Added
+
+- Added first-run Alpaca onboarding with a highlighted OSC 8 signup link,
+  explicit open, copy, skip, and demo choices, OSC 52 clipboard fallback,
+  hidden key/secret entry, credential validation, and a managed
+  `credentials.env` below the platform config directory.
+- Added SEC Financial Statement Data Set share extraction with explicit
+  source, as-of date, method, and confidence metadata. The hierarchy supports
+  issuer totals, reviewed equal-economic and converted share classes, and a
+  low-confidence basic weighted-average fallback while excluding preferred
+  and diluted securities.
+- Added provider-neutral asset, market-data, and optional-news capabilities,
+  with adapter selection through CLI, environment, or namespaced TOML.
+- Added the credential-free `stock-api` HTTP adapter, including a versioned
+  interoperability contract, bounded validation/retries, and local-development
+  configuration for compatible operator-supplied services.
+- Added deterministic compact SEC catalog packaging and a daily GitHub Actions
+  publisher for versioned Cloudflare R2 objects and manifests.
+
+### Changed
+
+- Replaced `p`/`n` sibling navigation with `Backspace`/`Space`; `Esc` is now
+  the sole key for going up one route level.
+- Isolated the default demo and live SQLite caches as `demo.sqlite3` and
+  `market.sqlite3`.
+- Made demo mode explicit with `--demo` or the onboarding choice; a normal
+  launch without valid credentials no longer silently shows simulations.
+- Added visible progress before credential checks and pre-TUI cache startup.
+- Rank sector membership and market-cap ordering by the best available numeric
+  size: estimated market cap when available, otherwise SEC-reported public
+  float. Public float remains a labeled ranking proxy and is never displayed
+  as market cap.
+- Upgraded the SQLite cache to schema version 2 to retain ranking-proxy and
+  share-estimate provenance across restarts and dated memberships.
+- Resolve the first screen from local catalog data, then refresh and validate
+  the compact R2 catalog in the background before reconciling provider assets.
+- Build every release platform against one validated R2 catalog download while
+  retaining the repository snapshot as the source-build fallback.
+- Prefer a concise canonical common-stock symbol when the SEC lists a safe
+  sibling choice, including `GOOG` for Alphabet, while preserving explicit
+  classes whose per-share economics differ.
+
+### Fixed
+
+- Clean up simulated observations on a legacy demo-to-live transition so demo
+  and Alpaca bars cannot interleave into corrupted charts.
+- Load `STOCK_TUI_DB_PATH` from `.env` after dotenv initialization.
+- Prevent large proxy-only issuers such as Alphabet from being displaced by
+  every company with any calculated market cap.
+- Invalidate a cached market cap when a catalog update changes the underlying
+  share estimate or its provenance.
+- Search SEC Frames independently of the latest bulk-file quarter while
+  rejecting future-dated observations.
+- Fail closed on unreviewed multi-class filings and gross public-float scale
+  errors instead of retaining an older policy or silently correcting the SEC
+  value.
+
+### Documentation
+
+- Documented the complete free Alpaca Paper Trading key setup, including
+  one-time secret handling and dotenv lookup for installed binaries.
+- Confirmed bring-your-own-key as the project architecture under ordinary
+  Alpaca terms and added a public-display licensing inquiry checklist and
+  ready-to-send request template.
+
 ## [0.1.1] - 2026-07-24
 
 ### Changed

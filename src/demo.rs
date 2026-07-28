@@ -1,4 +1,4 @@
-//! Deterministic offline market data used when Alpaca credentials are absent.
+//! Deterministic offline market data selected explicitly with `--demo`.
 
 use chrono::{DateTime, Datelike, Days, Duration, NaiveDate, NaiveTime, Utc, Weekday};
 
@@ -11,7 +11,7 @@ use crate::{
 pub const COMPANIES_PER_SECTOR: usize = 100;
 pub const TOTAL_COMPANIES: usize =
     Sector::ALL.len() * COMPANIES_PER_SECTOR + MarketBenchmark::ALL.len();
-pub const CHECKPOINT_SCOPE: &str = "demo:sec-identities-v4";
+pub const CHECKPOINT_SCOPE: &str = "demo:sec-identities-v5";
 
 const FIVE_MINUTE_BARS: usize = 78;
 const HOURLY_SESSIONS: usize = 24;
@@ -173,7 +173,15 @@ fn make_company(
         exchange: identity.exchange.clone(),
         industry: industry.clone(),
         market_cap: Some(market_cap),
+        size_proxy: None,
+        size_proxy_source: None,
+        size_proxy_as_of: None,
+        size_proxy_confidence: None,
         shares_outstanding: Some(market_cap / current_price),
+        shares_source: Some("simulated".to_owned()),
+        shares_as_of: Some(as_of.date_naive()),
+        shares_method: Some("simulated".to_owned()),
+        shares_confidence: Some("simulated".to_owned()),
         rank: Some(rank),
         description: format!(
             "{name} is an SEC-catalog identity in the offline demo. Prices, market cap, volume, ranking, chart history, statistics, and news are all simulated."
@@ -242,6 +250,7 @@ fn make_snapshot(model: &PriceModel, as_of: DateTime<Utc>) -> Snapshot {
     Snapshot {
         symbol: model.symbol.clone(),
         price: Some(model.current_price),
+        market_cap: None,
         previous_close: Some(model.previous_close),
         open: Some(open),
         high: Some(open.max(model.current_price) * (1.0 + wick)),
@@ -535,6 +544,10 @@ mod tests {
         assert!(companies.iter().any(|company| company.symbol == "AAPL"));
         assert!(companies.iter().any(|company| company.symbol == "JPM"));
         assert!(companies.iter().any(|company| company.symbol == "CVX"));
+        assert!(companies.iter().any(|company| company.symbol == "GOOG"));
+        assert!(companies.iter().any(|company| company.symbol == "Z"));
+        assert!(companies.iter().all(|company| company.symbol != "GOOGL"));
+        assert!(companies.iter().all(|company| company.symbol != "ZG"));
         assert!(companies.iter().all(|company| {
             company.description.contains("all simulated")
                 && company

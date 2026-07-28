@@ -62,6 +62,7 @@ Run these before opening a pull request:
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
+python3 -m unittest discover -s tools/tests
 cargo build --release --locked
 ```
 
@@ -127,15 +128,29 @@ pull request must document:
 - A plan for delistings, symbol changes, share classes, and malformed data.
 - Fixture-based tests with synthetic responses.
 
+Implement asset discovery through `AssetProvider`, snapshots/bars through
+`MarketDataProvider`, and news through the optional `NewsProvider`. Assemble
+the capabilities into `ProviderSet`; do not add provider-specific branches to
+`sync`, storage, or rendering. Add the adapter ID to configuration/runtime
+selection and provide a distinct credential/onboarding flow when it cannot use
+the existing Alpaca path.
+
 The MIT license does not make third-party data open. Do not commit a populated
 Alpaca cache or provider-derived corpus. Alpaca says ordinary API data cannot
 be redistributed; see [Data Providers](docs/data-providers.md).
 
-Catalog updates must preserve source provenance and generation date, explain
-ranking and sector inputs, and call out manual overrides. The SEC
+Catalog model updates must preserve source provenance and generation date,
+explain ranking and sector inputs, and call out manual overrides. The SEC
 CIK/ticker/exchange association file does not itself contain sector or market
 cap and does not guarantee accuracy or scope. Unknown mappings must remain
 unknown instead of being silently forced into a sector.
+
+Routine generated catalogs are published to R2 by the daily `Publish SEC
+catalog` workflow and are not committed. Before changing that workflow,
+dry-run `infra/cloudflare/publish-catalog.sh`, verify deterministic package
+hashes, and ensure the full audit JSON remains a short-lived workflow artifact
+rather than a release asset. Cloudflare and SEC credentials belong only in
+repository secrets.
 
 The nine-sector model is an intentional StockTouch-era product decision. A
 proposal to adopt another taxonomy needs a migration and compatibility design,
@@ -171,7 +186,10 @@ placeholders.
 The `Release` workflow can be dispatched manually from `main` to build and
 smoke-test every platform archive without publishing a GitHub release. Before
 tagging, update the package version and changelog, run that packaging check,
-and wait for normal `main` CI.
+wait for normal `main` CI, and confirm the stable R2 catalog URL is healthy.
+The workflow downloads that catalog once and feeds the identical validated
+file to every platform build; it fails instead of silently creating
+inconsistent release binaries.
 
 An annotated `v<package-version>` tag triggers the same build matrix and then
 publishes the archives plus `SHA256SUMS`. The workflow rejects a tag that does

@@ -13,7 +13,8 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, de::DeserializeOwned};
 use tokio::{sync::Mutex, time::Instant};
 
-use super::{MarketDataProvider, NewsProvider};
+pub use super::ProviderError;
+use super::{AssetProvider, MarketDataProvider, NewsProvider, ProviderSet};
 use crate::{
     config::Settings,
     domain::{Bar, Company, NewsItem, Snapshot},
@@ -24,46 +25,6 @@ const DEFAULT_MAX_RETRIES: usize = 3;
 const DEFAULT_RETRY_BASE: Duration = Duration::from_millis(250);
 const DEFAULT_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MAX_NEWS_ITEMS: usize = 50;
-
-#[derive(Debug, thiserror::Error)]
-pub enum ProviderError {
-    #[error("Alpaca credentials are required")]
-    MissingCredentials,
-    #[error("Alpaca credentials are invalid")]
-    Authentication,
-    #[error("the Alpaca account is not entitled to this resource: {message}")]
-    Permission { status: u16, message: String },
-    #[error("Alpaca rate limit remained active after bounded retries: {message}")]
-    RateLimited { message: String },
-    #[error("Alpaca request failed with HTTP {status}: {message}")]
-    Api { status: u16, message: String },
-    #[error("could not reach Alpaca after bounded retries ({kind})")]
-    Transport { kind: &'static str },
-    #[error("Alpaca returned invalid {resource} data")]
-    InvalidData { resource: &'static str },
-    #[error("invalid provider request: {0}")]
-    InvalidRequest(String),
-}
-
-impl ProviderError {
-    fn allows_feed_fallback(&self) -> bool {
-        matches!(
-            self,
-            Self::Permission { status: 403, .. } | Self::Api { status: 422, .. }
-        )
-    }
-
-    fn is_invalid_symbol(&self) -> bool {
-        let Self::Api { status, message } = self else {
-            return false;
-        };
-        if !matches!(status, 400 | 422) {
-            return false;
-        }
-        let message = message.to_ascii_lowercase();
-        message.contains("invalid symbol") || message.contains("unknown symbol")
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 struct RetryPolicy {
@@ -180,6 +141,9 @@ impl fmt::Debug for AlpacaProvider {
 }
 
 impl AlpacaProvider {
+    pub const ID: &'static str = "alpaca";
+    pub const DISPLAY_NAME: &'static str = "Alpaca";
+
     pub fn new(settings: &Settings) -> Result<Self, ProviderError> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = Client::builder()
@@ -212,6 +176,12 @@ impl AlpacaProvider {
             limiter: Arc::new(RequestLimiter::new(settings.request_limit_per_minute)),
             retry: RetryPolicy::default(),
         })
+    }
+
+    /// Convert this adapter into the provider-neutral runtime facade.
+    #[must_use]
+    pub fn into_provider_set(self) -> ProviderSet {
+        ProviderSet::from_full_provider(Self::ID, Self::DISPLAY_NAME, Arc::new(self))
     }
 
     async fn get_json<T>(
@@ -322,12 +292,25 @@ impl AlpacaProvider {
         }
     }
 
-    pub(crate) fn latest_historical_end(&self, now: DateTime<Utc>) -> DateTime<Utc> {
+    fn adjusted_historical_end(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         if self.feed == "delayed_sip" {
             now - chrono::Duration::minutes(16)
         } else {
             now
         }
+    }
+
+    /// Verify that the configured key pair belongs to the selected Alpaca
+    /// Trading API environment without retaining any account response fields.
+    pub async fn validate_credentials(&self) -> Result<(), ProviderError> {
+        let _: serde_json::Value = self
+            .get_json(
+                &format!("{}/v2/account", self.trading_url),
+                &[],
+                "credential validation",
+            )
+            .await?;
+        Ok(())
     }
 
     async fn snapshots_for_batch(
@@ -432,7 +415,7 @@ impl AlpacaProvider {
 }
 
 #[async_trait]
-impl MarketDataProvider for AlpacaProvider {
+impl AssetProvider for AlpacaProvider {
     async fn fetch_assets(&self) -> Result<Vec<Company>, ProviderError> {
         let query = vec![
             ("status".to_owned(), "active".to_owned()),
@@ -450,7 +433,10 @@ impl MarketDataProvider for AlpacaProvider {
         companies.sort_unstable_by(|left, right| left.symbol.cmp(&right.symbol));
         Ok(companies)
     }
+}
 
+#[async_trait]
+impl MarketDataProvider for AlpacaProvider {
     async fn fetch_bars(
         &self,
         symbols: &[String],
@@ -534,6 +520,10 @@ impl MarketDataProvider for AlpacaProvider {
         result.sort_unstable_by(|left, right| left.symbol.cmp(&right.symbol));
         Ok(result)
     }
+
+    fn latest_historical_end(&self, now: DateTime<Utc>) -> DateTime<Utc> {
+        self.adjusted_historical_end(now)
+    }
 }
 
 #[async_trait]
@@ -600,7 +590,15 @@ impl AssetDto {
             exchange: self.exchange,
             industry: String::new(),
             market_cap: None,
+            size_proxy: None,
+            size_proxy_source: None,
+            size_proxy_as_of: None,
+            size_proxy_confidence: None,
             shares_outstanding: None,
+            shares_source: None,
+            shares_as_of: None,
+            shares_method: None,
+            shares_confidence: None,
             rank: None,
             description: String::new(),
             in_universe: false,
@@ -695,6 +693,7 @@ impl SnapshotDto {
         Snapshot {
             symbol: symbol.to_ascii_uppercase(),
             price,
+            market_cap: None,
             previous_close: self.prev_daily_bar.as_ref().and_then(|bar| bar.close),
             open: self.daily_bar.as_ref().and_then(|bar| bar.open),
             high: self.daily_bar.as_ref().and_then(|bar| bar.high),
@@ -893,7 +892,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::config::Credentials;
+    use crate::config::{Credentials, DEFAULT_CATALOG_URL, ProviderKind};
 
     #[derive(Debug)]
     struct FixtureResponse {
@@ -966,9 +965,16 @@ mod tests {
                 key: SecretString::from("fixture-key".to_owned()),
                 secret: SecretString::from("fixture-secret".to_owned()),
             }),
+            credential_source: Some(crate::config::CredentialSource::Environment),
+            incomplete_environment_credentials: false,
             db_path: temp.path().join("market.sqlite3"),
             config_dir: temp.path().join("config"),
             cache_dir: temp.path().join("cache"),
+            provider: ProviderKind::Alpaca,
+            catalog_url: DEFAULT_CATALOG_URL.to_owned(),
+            catalog_refresh_interval: Duration::from_secs(24 * 60 * 60),
+            stock_api_url: crate::config::DEFAULT_STOCK_API_URL.to_owned(),
+            stock_api_news: true,
             data_url: base_url.to_owned(),
             trading_url: base_url.to_owned(),
             feed: "iex".to_owned(),
@@ -1025,6 +1031,39 @@ mod tests {
         assert!(requests[0].contains("apca-api-secret-key: fixture-secret"));
         assert!(requests[0].contains("symbols=AAPL%2CMSFT"));
         assert!(requests[1].contains("page_token=next"));
+    }
+
+    #[tokio::test]
+    async fn credential_probe_is_small_authenticated_and_classifies_unauthorized() {
+        let (base_url, requests, server) = fixture_server(vec![
+            FixtureResponse {
+                status: 200,
+                headers: vec![],
+                body: r#"{"status":"ACTIVE"}"#,
+            },
+            FixtureResponse {
+                status: 401,
+                headers: vec![],
+                body: r#"{"message":"not authenticated"}"#,
+            },
+        ]);
+        let temp = TempDir::new().expect("temp dir");
+        let provider = AlpacaProvider::new(&settings(&temp, &base_url)).expect("provider");
+        provider
+            .validate_credentials()
+            .await
+            .expect("valid credentials");
+        assert!(matches!(
+            provider.validate_credentials().await,
+            Err(ProviderError::Authentication)
+        ));
+        server.join().expect("fixture server");
+
+        let requests = requests.lock().expect("fixture requests");
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /v2/account "));
+        assert!(requests[0].contains("apca-api-key-id: fixture-key"));
+        assert!(requests[0].contains("apca-api-secret-key: fixture-secret"));
     }
 
     #[tokio::test]

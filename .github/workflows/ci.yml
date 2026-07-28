@@ -32,6 +32,9 @@ jobs:
       - name: Format
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
+      - name: SEC catalog fixtures
+        if: runner.os == 'Linux'
+        run: python3 -m unittest discover -s tools/tests
       - name: Check
         run: cargo check --locked --all-targets
       - name: Clippy

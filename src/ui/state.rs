@@ -103,6 +103,7 @@ pub struct UiState {
     pub snapshot_checkpoint: Option<DateTime<Utc>>,
     pub auto_refresh_interval: Option<Duration>,
     pub theme: Theme,
+    pub data_provider_label: String,
     pub simulated_data: bool,
 }
 
@@ -138,6 +139,7 @@ impl Default for UiState {
             snapshot_checkpoint: None,
             auto_refresh_interval: None,
             theme: Theme::detect(),
+            data_provider_label: "Unconfigured".to_owned(),
             simulated_data: false,
         }
     }
