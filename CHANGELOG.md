@@ -7,12 +7,20 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-28
+
 ### Added
 
+- Added ticker-cell metric cycling in Sector and Starred views for price,
+  relative and absolute gain, sector-relative gain, market cap, and volume.
+- Added reversible ticker ordering and a center-out clockwise spiral
+  presentation across Overview, Sector, and Starred heatmaps.
+- Added `=`/`+` and `-` shortcuts to step toward shorter and longer chart
+  ranges.
 - Added first-run Alpaca onboarding with a highlighted OSC 8 signup link,
   explicit open, copy, skip, and demo choices, OSC 52 clipboard fallback,
-  hidden key/secret entry, credential validation, and a managed
-  `credentials.env` below the platform config directory.
+  hidden key/secret entry, credential validation, and comment-preserving
+  storage under `[providers.alpaca]` in the platform `config.toml`.
 - Added SEC Financial Statement Data Set share extraction with explicit
   source, as-of date, method, and confidence metadata. The hierarchy supports
   issuer totals, reviewed equal-economic and converted share classes, and a
@@ -31,6 +39,18 @@ pre-1.0 releases.
 
 ### Changed
 
+- Sector cells now show one context-sensitive value below a vertically centered
+  ticker, and starred cells use a thin frame when space permits.
+- In color themes, Volume ordering now distinguishes sectors by hue and shows
+  sector-relative volume through brightness; monochrome uses brightness only,
+  and every other ordering retains the return scale.
+- Normal status chrome now includes numeric synchronization progress, overlays
+  use left-aligned columns, and the action rail identifies the app version.
+- Alpaca credentials may live beside provider settings in `config.toml`;
+  environment values remain higher precedence and older `credentials.env`
+  files remain a read-only upgrade fallback.
+- Sort direction now reverses loaded heatmap groups in memory, avoiding a
+  synchronous full-market cache query.
 - Replaced `p`/`n` sibling navigation with `Backspace`/`Space`; `Esc` is now
   the sole key for going up one route level.
 - Isolated the default demo and live SQLite caches as `demo.sqlite3` and
@@ -54,6 +74,18 @@ pre-1.0 releases.
 
 ### Fixed
 
+- Restrict GitHub release publication to exactly five platform archives so the
+  build-only catalog artifact cannot become a separate public release asset.
+- Redact echoed `stock-api` bearer tokens and terminal control characters from
+  that adapter's errors before they reach status output or logs.
+- Limit stale-data underlining to the ticker label instead of every value in
+  the tile or benchmark footer item.
+- Derive relative and absolute gains from the same period baseline and current
+  displayed price, including intraday snapshot updates.
+- Keep the detail header, chart endpoints, volume source, and stale-data
+  timestamp on the same newer valid snapshot-or-bar observation.
+- Compare starred tickers against their actual sector return and retain
+  two-line metrics for a full 100-ticker sector at 80x24.
 - Clean up simulated observations on a legacy demo-to-live transition so demo
   and Alpaca bars cannot interleave into corrupted charts.
 - Load `STOCK_TUI_DB_PATH` from `.env` after dotenv initialization.
@@ -151,6 +183,7 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0

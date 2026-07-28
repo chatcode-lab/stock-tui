@@ -11,9 +11,9 @@ use stock_tui::{
     },
     palette::{CANVAS, CYAN, HeatScale, MUTED, PANEL, Theme},
     ui::{
-        layout::AppLayout,
+        layout::{AppLayout, SectorView, sector_cell_for_rank, uniform_grid},
         render,
-        state::{DetailTab, Overlay, Route, UiAction, UiState},
+        state::{DetailTab, Overlay, Route, SectorMetric, UiAction, UiState},
     },
 };
 
@@ -61,7 +61,123 @@ fn overview_renders_at_supported_viewports_with_visible_hit_targets() {
                 "compact overview did not use paired heatmap rows at {width}x{height}"
             );
         }
+        if (width, height) == (60, 20) {
+            let layout = AppLayout::calculate(Rect::new(0, 0, width, height));
+            assert_eq!(layout.header.height, 1);
+            for panel in uniform_grid(layout.content, 3, 3) {
+                assert_eq!(panel.height, 6);
+                let body = Rect::new(panel.x + 1, panel.y + 1, panel.width - 1, 5);
+                assert!(
+                    (body.y..body.bottom()).all(|y| {
+                        (body.x..body.right())
+                            .filter(|x| buffer[(*x, y)].symbol() == "▀")
+                            .count()
+                            >= 10
+                    }),
+                    "minimum overview panel dropped a paired logical row"
+                );
+            }
+        }
     }
+}
+
+#[test]
+fn overview_view_control_repositions_ranked_tiles_in_full_and_compact_panels() {
+    let mut state = fixture_state();
+    let first_return = state
+        .tiles
+        .iter()
+        .find(|tile| tile.company.sector == Some(Sector::Consumer))
+        .and_then(|tile| tile.period_return);
+    let scale = HeatScale::from_values(
+        state.tiles.iter().map(|tile| tile.period_return),
+        0.01,
+        state.theme,
+    );
+    let expected = scale.color(first_return);
+
+    let full_layout = AppLayout::calculate(Rect::new(0, 0, 200, 60));
+    let full_panel = uniform_grid(full_layout.content, 3, 3)[0];
+    let full_body = Rect::new(
+        full_panel.x + 1,
+        full_panel.y + 1,
+        full_panel.width - 1,
+        full_panel.height - 1,
+    );
+    let full_cells = uniform_grid(full_body, 10, 10);
+    let grid = render_at(&mut state, 200, 60);
+    assert_eq!(grid[(full_cells[0].x, full_cells[0].y)].bg, expected);
+
+    assert!(press(&mut state, KeyCode::Char('v'), KeyModifiers::NONE).is_empty());
+    let spiral = render_at(&mut state, 200, 60);
+    assert_eq!(spiral[(full_cells[44].x, full_cells[44].y)].bg, expected);
+    assert_eq!(spiral[(full_cells[0].x, full_cells[0].y)].bg, CANVAS);
+
+    let compact_layout = AppLayout::calculate(Rect::new(0, 0, 80, 24));
+    let compact_panel = uniform_grid(compact_layout.content, 3, 3)[0];
+    let compact_body = Rect::new(
+        compact_panel.x + 1,
+        compact_panel.y + 1,
+        compact_panel.width - 1,
+        compact_panel.height - 1,
+    );
+    let compact_columns = uniform_grid(
+        Rect::new(compact_body.x, compact_body.y, compact_body.width, 1),
+        10,
+        1,
+    );
+    let compact_spiral = render_at(&mut state, 80, 24);
+    let rank_zero = &compact_spiral[(compact_columns[4].x, compact_body.y + 2)];
+    assert_eq!(rank_zero.symbol(), "▀");
+    assert_eq!(rank_zero.fg, expected);
+}
+
+#[test]
+fn minimum_overview_keeps_the_hundredth_ticker_in_grid_and_spiral() {
+    let mut state = fixture_state();
+    let template = state
+        .tiles
+        .iter()
+        .find(|tile| tile.company.sector == Some(Sector::Consumer))
+        .cloned()
+        .expect("fixture contains a consumer tile");
+    state.tiles = (0..100)
+        .map(|rank| {
+            let mut tile = template.clone();
+            tile.company.symbol = format!("C{rank:03}");
+            tile.company.rank = Some(u16::try_from(rank + 1).expect("fixture rank fits u16"));
+            tile.period_return = Some(if rank == 99 { 0.10 } else { -0.10 });
+            tile
+        })
+        .collect();
+    let expected = HeatScale::from_values(
+        state.tiles.iter().map(|tile| tile.period_return),
+        0.01,
+        state.theme,
+    )
+    .color(Some(0.10));
+    let layout = AppLayout::calculate(Rect::new(0, 0, 60, 20));
+    let panel = uniform_grid(layout.content, 3, 3)[0];
+    let body = Rect::new(panel.x + 1, panel.y + 1, panel.width - 1, panel.height - 1);
+    let columns = uniform_grid(Rect::new(body.x, body.y, body.width, 1), 10, 1);
+    let color_at_logical_cell = |buffer: &Buffer, cell: usize| {
+        let logical_row = cell / 10;
+        let column = cell % 10;
+        let rendered = &buffer[(columns[column].x, body.y + logical_row as u16 / 2)];
+        if logical_row.is_multiple_of(2) {
+            rendered.fg
+        } else {
+            rendered.bg
+        }
+    };
+
+    let grid = render_at(&mut state, 60, 20);
+    assert_eq!(color_at_logical_cell(&grid, 99), expected);
+
+    state.sector_view = SectorView::Spiral;
+    let spiral = render_at(&mut state, 60, 20);
+    let last_cell = sector_cell_for_rank(SectorView::Spiral, 99, 10, 10);
+    assert_eq!(color_at_logical_cell(&spiral, last_cell), expected);
 }
 
 #[test]
@@ -231,6 +347,10 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
     }
     assert!(full.chart_rect.is_some());
     assert!(!full.chart_sample_indices.is_empty());
+    assert!(
+        full_screen.matches("+7.25%").count() >= 2,
+        "detail header and default chart title should share the period return"
+    );
     assert!(full_screen.contains('★'));
     assert!(full.hit_targets.iter().any(|target| {
         target.action == UiAction::ToggleFavorite("ACME".to_owned()) && target.rect.width == 1
@@ -601,6 +721,53 @@ fn rendered_mouse_target_hovers_and_opens_ticker() {
 }
 
 #[test]
+fn spiral_layout_keeps_rank_mouse_and_arrow_selection_aligned() {
+    let mut state = fixture_state();
+    state.route = Route::Sector(Sector::Technology);
+    assert!(press(&mut state, KeyCode::Char('v'), KeyModifiers::NONE).is_empty());
+
+    let width = 120;
+    let height = 40;
+    render_at(&mut state, width, height);
+    let content = AppLayout::calculate(Rect::new(0, 0, width, height)).content;
+    let acme = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("ACME".to_owned()))
+        .cloned()
+        .expect("spiral renders the first-ranked ticker");
+    let beta = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("BETA".to_owned()))
+        .cloned()
+        .expect("spiral renders the second-ranked ticker");
+
+    assert!(acme.rect.x > content.x + content.width / 3);
+    assert_eq!(acme.rect.y, beta.rect.y);
+    assert_eq!(acme.rect.right(), beta.rect.x);
+
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: beta.rect.x + beta.rect.width / 2,
+                row: beta.rect.y + beta.rect.height / 2,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    assert_eq!(state.selected_ticker, 1);
+    assert_eq!(state.focused_symbol(), Some("BETA"));
+
+    assert!(press(&mut state, KeyCode::Left, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.selected_ticker, 0);
+    assert_eq!(state.focused_symbol(), Some("ACME"));
+}
+
+#[test]
 fn bright_heat_tile_uses_dark_focus_contrast() {
     let mut state = fixture_state();
     state.theme = Theme::Default;
@@ -659,11 +826,33 @@ fn stale_bright_heat_tile_keeps_contrast_and_uses_an_underline_hint() {
         .iter()
         .find(|target| target.action == UiAction::OpenTicker("S81".to_owned()))
         .expect("stale utility tile remains rendered");
-    let cell = &buffer[(target.rect.x, target.rect.y)];
+    let mut underlined = Vec::new();
+    for y in target.rect.y..target.rect.bottom() {
+        for x in target.rect.x..target.rect.right() {
+            let cell = &buffer[(x, y)];
+            if cell.modifier.contains(Modifier::UNDERLINED) {
+                underlined.push((cell.symbol().to_owned(), cell.fg));
+            }
+        }
+    }
 
-    assert_eq!(cell.fg, scale.text_color(Some(1.0)));
-    assert_ne!(cell.fg, MUTED);
-    assert!(cell.modifier.contains(Modifier::UNDERLINED));
+    assert_eq!(
+        underlined
+            .iter()
+            .map(|(symbol, _)| symbol.as_str())
+            .collect::<String>(),
+        "S81"
+    );
+    assert!(
+        underlined
+            .iter()
+            .all(|(_, foreground)| *foreground == scale.text_color(Some(1.0)))
+    );
+    assert!(
+        underlined
+            .iter()
+            .all(|(_, foreground)| *foreground != MUTED)
+    );
 }
 
 #[test]
@@ -709,7 +898,13 @@ fn overview_hover_selects_only_the_enclosing_sector() {
 fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
     for (width, height) in VIEWPORTS {
         let mut state = fixture_state();
-        render_at(&mut state, width, height);
+        state
+            .benchmarks
+            .iter_mut()
+            .find(|tile| tile.company.symbol == "DIA")
+            .expect("fixture contains DIA")
+            .stale = true;
+        let buffer = render_at(&mut state, width, height);
         let layout = AppLayout::calculate(Rect::new(0, 0, width, height));
         let benchmark_targets: Vec<_> = state
             .hit_targets
@@ -736,6 +931,15 @@ fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
             );
             assert!(benchmark.rect.right() <= layout.content.right());
         }
+        let dia = benchmark_targets
+            .iter()
+            .find(|target| target.action == UiAction::OpenTicker("DIA".to_owned()))
+            .expect("DIA benchmark target");
+        assert_eq!(
+            cells_with_modifier_text(&buffer, dia.rect, Modifier::UNDERLINED),
+            "DIA",
+            "responsive stale benchmark underline at {width}x{height}"
+        );
         assert!(
             layout.content.right() < layout.footer.right(),
             "test viewport must reserve footer width for the action rail"
@@ -743,6 +947,12 @@ fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
     }
 
     let mut state = fixture_state();
+    state
+        .benchmarks
+        .iter_mut()
+        .find(|tile| tile.company.symbol == "DIA")
+        .expect("fixture contains DIA")
+        .stale = true;
     let buffer = render_at(&mut state, 120, 40);
     let screen = screen_text(&buffer);
     for expected in [
@@ -786,6 +996,15 @@ fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
             .iter()
             .all(|target| target.rect.right() <= layout.content.right())
     );
+    let dia = benchmark_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("DIA".to_owned()))
+        .expect("DIA benchmark target");
+    assert_eq!(
+        cells_with_modifier_text(&buffer, dia.rect, Modifier::UNDERLINED),
+        "DIA",
+        "staleness should underline only the benchmark ticker"
+    );
 
     let qqq = benchmark_targets
         .iter()
@@ -811,6 +1030,11 @@ fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
             .modifier
             .contains(Modifier::BOLD)
     }));
+    assert_eq!(
+        cells_with_modifier_text(&selected_buffer, qqq.rect, Modifier::UNDERLINED),
+        "QQQ",
+        "selection should retain a ticker-scoped underline"
+    );
     let technology = state
         .hit_targets
         .iter()
@@ -932,6 +1156,121 @@ fn sector_heatmap_uses_equal_centered_tiles_without_corner_artifacts() {
 }
 
 #[test]
+fn eighty_column_sector_keeps_compact_metrics_semantic_for_one_hundred_tickers() {
+    let mut state = fixture_state();
+    let template = state
+        .tiles
+        .iter()
+        .find(|tile| tile.company.symbol == "ACME")
+        .cloned()
+        .expect("fixture contains a technology tile");
+    for rank in 3..=100 {
+        let mut tile = template.clone();
+        tile.company.symbol = format!("T{rank:03}");
+        tile.company.name = format!("Technology Fixture {rank}");
+        tile.company.rank = Some(rank);
+        tile.starred = false;
+        state.tiles.push(tile);
+    }
+    let peer_return = (10.0 - 0.25) / 99.0;
+    for tile in state
+        .tiles
+        .iter_mut()
+        .filter(|tile| tile.company.sector == Some(Sector::Technology))
+    {
+        tile.company.market_cap = Some(100.0);
+        if tile.company.symbol == "ACME" {
+            tile.price = Some(125.0);
+            tile.period_start_price = Some(100.0);
+            tile.period_return = Some(0.25);
+        } else {
+            tile.period_return = Some(peer_return);
+        }
+    }
+    state.route = Route::Sector(Sector::Technology);
+
+    for (metric, expected) in [
+        (SectorMetric::Price, "$125.0"),
+        (SectorMetric::RelativeGain, "+25.0%"),
+        (SectorMetric::AbsoluteGain, "+$25.0"),
+        (SectorMetric::SectorRelativeGain, "+15.0%"),
+    ] {
+        state.sector_metric = metric;
+        let buffer = render_at(&mut state, 80, 24);
+        let tiles = state
+            .hit_targets
+            .iter()
+            .filter(|target| matches!(target.action, UiAction::OpenTicker(_)))
+            .collect::<Vec<_>>();
+
+        assert_eq!(state.sector_columns, 10);
+        assert_eq!(state.sector_rows, 10);
+        assert_eq!(tiles.len(), 100);
+        assert!(
+            tiles
+                .iter()
+                .all(|target| target.rect.width == 6 && target.rect.height == 2)
+        );
+        let acme = tiles
+            .iter()
+            .find(|target| target.action == UiAction::OpenTicker("ACME".to_owned()))
+            .expect("ACME has a rendered cell");
+        assert!(
+            rect_text(&buffer, acme.rect).contains(expected),
+            "{metric:?} lost its sign or unit in a six-column cell"
+        );
+    }
+}
+
+#[test]
+fn favorite_sector_relative_metric_uses_each_companys_full_sector() {
+    let mut state = fixture_state();
+    for tile in &mut state.tiles {
+        match tile.company.symbol.as_str() {
+            "ACME" => {
+                tile.period_return = Some(0.20);
+                tile.company.market_cap = Some(100.0);
+                tile.starred = true;
+            }
+            "BETA" => {
+                tile.period_return = Some(0.0);
+                tile.company.market_cap = Some(100.0);
+                tile.starred = false;
+            }
+            "S00" | "S01" => {
+                tile.period_return = Some(-0.50);
+                tile.company.market_cap = Some(100.0);
+                tile.starred = tile.company.symbol == "S00";
+            }
+            _ => tile.starred = false,
+        }
+    }
+    state.favorite_tiles = state
+        .tiles
+        .iter()
+        .filter(|tile| tile.starred)
+        .cloned()
+        .collect();
+    state.route = Route::Favorites;
+    state.sector_metric = SectorMetric::SectorRelativeGain;
+
+    let buffer = render_at(&mut state, 120, 40);
+    let acme = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("ACME".to_owned()))
+        .expect("favorite technology ticker has a rendered cell");
+    let consumer = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenTicker("S00".to_owned()))
+        .expect("favorite consumer ticker has a rendered cell");
+
+    assert!(rect_text(&buffer, acme.rect).contains("+10.00%"));
+    assert!(rect_text(&buffer, consumer.rect).contains("+0.00%"));
+}
+
+#[test]
 fn keyboard_changes_ranges_opens_favorites_toggles_star_and_goes_back() {
     let mut state = fixture_state();
     state.route = Route::Sector(Sector::Technology);
@@ -947,6 +1286,16 @@ fn keyboard_changes_ranges_opens_favorites_toggles_star_and_goes_back() {
     assert_eq!(state.date_range, DateRange::FiveYears);
     assert_eq!(
         press(&mut state, KeyCode::Char('['), KeyModifiers::NONE),
+        vec![AppCommand::ReloadTiles]
+    );
+    assert_eq!(state.date_range, DateRange::TwoYears);
+    assert_eq!(
+        press(&mut state, KeyCode::Char('-'), KeyModifiers::NONE),
+        vec![AppCommand::ReloadTiles]
+    );
+    assert_eq!(state.date_range, DateRange::FiveYears);
+    assert_eq!(
+        press(&mut state, KeyCode::Char('+'), KeyModifiers::SHIFT),
         vec![AppCommand::ReloadTiles]
     );
     assert_eq!(state.date_range, DateRange::TwoYears);
@@ -987,6 +1336,8 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         "s Sort",
         "F Starred",
         "g Sectors",
+        "o Order ↓",
+        "v Grid",
         "1: 1D",
         "8: 5Y",
         "0: ALL",
@@ -1025,9 +1376,12 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         "Navigate",
         "arrows or h j k l",
         "Starred      F",
-        "Ranges       1..9, 0 or [ ]",
+        "Ranges       1..9/0, [ ], =/+ in, - out",
         "Sectors      g then c s h e t f i m u",
         "Back         Esc",
+        "Metric       i",
+        "Order        o",
+        "View         v",
         "Prev / next  Backspace / Space",
         "Detail       Left/Right chart, Up/Down news",
         "Quit         q",
@@ -1051,7 +1405,7 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
         );
     }
     let price_cache = format!(
-        "Price cache {}",
+        "Price cache  {}",
         fixture_time()
             .with_timezone(&Local)
             .format("%Y-%m-%d %H:%M:%S")
@@ -1068,6 +1422,22 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
 }
 
 #[test]
+fn chrome_shows_version_sync_counts_and_current_sector_controls() {
+    let mut state = fixture_state();
+    state.sync.message = "Loading history".to_owned();
+    state.sync.completed = 123;
+    state.sync.total = 1_234;
+    state.route = Route::Sector(Sector::Technology);
+
+    let screen = screen_text(&render_at(&mut state, 120, 40));
+    assert!(screen.contains("123/1234 (10%)"));
+    assert!(screen.contains(concat!("v", env!("CARGO_PKG_VERSION"))));
+    assert!(screen.contains("i Mkt cap"));
+    assert!(screen.contains("o Order ↓"));
+    assert!(screen.contains("v Grid"));
+}
+
+#[test]
 fn every_range_remains_clickable_at_the_minimum_supported_height() {
     let mut state = fixture_state();
     state.route = Route::Sector(Sector::Technology);
@@ -1080,6 +1450,64 @@ fn every_range_remains_clickable_at_the_minimum_supported_height() {
                 .iter()
                 .any(|target| target.action == UiAction::SelectRange(range)),
             "{} range has no compact rail target",
+            range.label()
+        );
+    }
+}
+
+#[test]
+fn overview_order_and_view_rail_controls_remain_clickable_at_minimum_size() {
+    let mut state = fixture_state();
+    let screen = screen_text(&render_at(&mut state, 60, 20));
+    assert!(screen.contains("o Order ↓"));
+    assert!(screen.contains("v Grid"));
+
+    let order = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::ToggleSortDirection)
+        .cloned()
+        .expect("overview order rail target");
+    let view = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::ToggleSectorView)
+        .cloned()
+        .expect("overview view rail target");
+
+    assert_eq!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: order.rect.x,
+                row: order.rect.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        ),
+        Vec::new()
+    );
+    assert!(!state.sort_descending);
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: view.rect.x,
+                row: view.rect.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    assert_eq!(state.sector_view, stock_tui::ui::layout::SectorView::Spiral);
+    for range in DateRange::ALL {
+        assert!(
+            state
+                .hit_targets
+                .iter()
+                .any(|target| target.action == UiAction::SelectRange(range)),
+            "{} range lost its compact rail target",
             range.label()
         );
     }
@@ -1107,10 +1535,13 @@ fn fixture_state() -> UiState {
                 u16::try_from(rank + 1).expect("fixture rank fits u16"),
                 900_000_000_000.0 - ordinal as f64 * 23_000_000_000.0,
             );
+            let price = 82.0 + ordinal as f64 * 3.25;
+            let period_return = (ordinal as f64 - 8.5) / 100.0;
             tiles.push(MarketTile {
                 company,
-                price: Some(82.0 + ordinal as f64 * 3.25),
-                period_return: Some((ordinal as f64 - 8.5) / 100.0),
+                price: Some(price),
+                period_start_price: Some(price / (1.0 + period_return)),
+                period_return: Some(period_return),
                 volume: Some(1_200_000.0 + ordinal as f64 * 75_000.0),
                 starred: rank == 0 && sector_index.is_multiple_of(3),
                 stale: ordinal.is_multiple_of(7),
@@ -1125,6 +1556,9 @@ fn fixture_state() -> UiState {
         .map(|(index, benchmark)| MarketTile {
             company: benchmark.company(fixture_time()),
             price: Some(510.25 - index as f64 * 34.5),
+            period_start_price: Some(
+                (510.25 - index as f64 * 34.5) / (1.0 + benchmark_returns[index]),
+            ),
             period_return: Some(benchmark_returns[index]),
             volume: Some(40_000_000.0 + index as f64 * 5_000_000.0),
             starred: false,
@@ -1216,6 +1650,10 @@ fn fixture_detail() -> TickerDetail {
         bars,
         news,
         starred: true,
+        period_start_price: Some(103.75 / 1.0725),
+        period_start_at: Some(fixture_time() - Duration::hours(47)),
+        period_end_price: Some(103.75),
+        period_end_at: Some(fixture_time()),
         period_return: Some(0.0725),
         sector_return: Some(0.018),
         sector_rank: Some(1),
@@ -1277,6 +1715,30 @@ fn screen_text(buffer: &Buffer) -> String {
     let mut text = String::new();
     for cell in buffer.content() {
         text.push_str(cell.symbol());
+    }
+    text
+}
+
+fn cells_with_modifier_text(buffer: &Buffer, area: Rect, modifier: Modifier) -> String {
+    let mut text = String::new();
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let cell = &buffer[(x, y)];
+            if cell.modifier.contains(modifier) {
+                text.push_str(cell.symbol());
+            }
+        }
+    }
+    text
+}
+
+fn rect_text(buffer: &Buffer, rect: Rect) -> String {
+    let mut text = String::new();
+    for y in rect.y..rect.bottom() {
+        for x in rect.x..rect.right() {
+            text.push_str(buffer[(x, y)].symbol());
+        }
+        text.push('\n');
     }
     text
 }

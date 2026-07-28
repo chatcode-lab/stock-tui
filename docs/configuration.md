@@ -1,7 +1,8 @@
 # Configuration
 
 `stock-tui` has command-line flags, environment variables, a local dotenv
-file, a small onboarding-managed credentials file, and a strict TOML file.
+file, a strict TOML file updated by onboarding, and a legacy credential file
+kept for upgrade compatibility.
 
 ## Precedence
 
@@ -23,21 +24,26 @@ stock-tui --print-config
 
 to show resolved paths and non-secret values. Credential values are redacted.
 Provider selection is resolved before credential lookup. The presence of
-`<config_dir>/credentials.env` never selects Alpaca or overrides an explicit
-`provider = "stock-api"`; only a CLI or environment provider override has
-higher precedence than TOML.
+Alpaca keys in either supported file never selects Alpaca or overrides an
+explicit `provider = "stock-api"`; only a CLI or environment provider override
+has higher precedence than TOML.
 
 Credential lookup is narrower and applies only when `provider = "alpaca"`:
 
 1. A complete `ALPACA_API_KEY` and `ALPACA_API_SECRET` pair from the process or
    working-directory `.env`
-2. `<config_dir>/credentials.env`
-3. Interactive onboarding for a normal online launch
+2. A complete `providers.alpaca.api_key` and
+   `providers.alpaca.api_secret` pair in `<config_dir>/config.toml`
+3. The legacy `<config_dir>/credentials.env` file, when present
+4. Interactive onboarding for a normal online launch
 
-Values from different sources are never combined. `--demo`, `--offline`,
-`--print-config`, and the non-interactive `stock-api` adapter do not launch
-Alpaca onboarding or read its managed credential file. A `stock-api` bearer
-token has its own narrower precedence: `STOCK_TUI_STOCK_API_TOKEN`, then
+Values from different sources are never combined. A complete higher-precedence
+pair suppresses pair validation in lower-precedence sources. Invalid TOML
+syntax is still always an error. `--demo`, `--offline`, and the non-interactive
+`stock-api` adapter do not launch Alpaca onboarding or resolve Alpaca
+credential values. `--print-config` resolves configured settings but never
+launches onboarding or prints credential values. A `stock-api` bearer token
+has its own narrower precedence: `STOCK_TUI_STOCK_API_TOKEN`, then
 `providers.stock_api.token` in `config.toml`.
 
 ## Credentials
@@ -65,6 +71,14 @@ ALPACA_API_KEY=your-own-key-id
 ALPACA_API_SECRET=your-own-secret
 ```
 
+The same pair can be stored directly in the platform configuration file:
+
+```toml
+[providers.alpaca]
+api_key = "your-own-key-id"
+api_secret = "your-own-secret"
+```
+
 Alpaca's
 [Paper Trading setup guide](https://alpaca.markets/learn/start-paper-trading)
 documents the current dashboard flow. Its
@@ -85,18 +99,26 @@ credentials, and `Esc` continues directly to credential entry. A failed browser
 launch still falls back to OSC 52. Both credential input fields are hidden. The
 app reports credential validation and cache preparation before slow work. It
 validates the pair against Alpaca's Paper Trading account endpoint before
-writing it to `<config_dir>/credentials.env`, then starts the normal market
-view.
+writing it under `[providers.alpaca]` in `<config_dir>/config.toml`, then starts
+the normal market view. Existing comments and unrelated settings in the TOML
+file are retained.
 
 The onboarding demo choice applies only to the current launch. It uses the
 isolated default `demo.sqlite3` cache unless `--db` or `STOCK_TUI_DB_PATH`
 explicitly selected another path.
 
-On macOS and Linux, the managed file is forced to owner read/write permissions
-(`0600`). On Windows it is kept below the current user's platform configuration
-directory. The file contains the two raw dotenv values; it is not encrypted.
-Do not share, synchronize, or commit it. Alpaca credentials are never written
-to SQLite, `config.toml`, logs, or terminal output.
+On macOS and Linux, onboarding forces `config.toml` to owner read/write
+permissions (`0600`) when it saves credentials. A manually populated file is
+not rewritten on read, so protect it yourself with `chmod 600`. On Windows it
+is kept below the current user's platform configuration directory. The values
+are not encrypted. Do not share, synchronize, or commit the populated file.
+Alpaca credentials are never written to SQLite, logs, `--print-config`, or
+terminal output.
+
+Older releases stored onboarding credentials in
+`<config_dir>/credentials.env`. That file remains a read-only, lower-precedence
+fallback so upgrades do not require re-entry. New onboarding sessions write
+only `config.toml`.
 
 Only an Alpaca `401` response proves that a configured pair is invalid.
 Provider downtime, rate limits, malformed responses, and entitlement errors do
@@ -108,9 +130,9 @@ still be removed or updated.
 Debug and release binaries use the same environment variable names and `.env`
 format. The dotenv loader starts at the process working directory and searches
 its parents; it does not search beside an installed executable automatically.
-Keep that file private and outside version control. Do not put Alpaca
-credentials in `config.toml`, command history, screenshots, issues, or release
-assets.
+Keep every credential-bearing `.env`, `config.toml`, or legacy
+`credentials.env` private and outside version control. Do not put Alpaca
+credentials in command history, screenshots, issues, or release assets.
 
 For an interactive installation, export both variables in the launching shell,
 start `stock-tui` from a dedicated private directory containing `.env`, or use
@@ -182,8 +204,8 @@ controls the observations written to the local cache.
 The active file is `<config_dir>/config.toml` in the platform configuration
 directory. Find the exact `config_dir` with `--print-config`. A `config.toml`
 in the current working directory or beside the executable is not loaded
-automatically. Alpaca onboarding writes credentials to the separate
-`<config_dir>/credentials.env` file; it does not modify `config.toml`.
+automatically. Alpaca onboarding preserves the file's existing comments and
+settings while updating only the credential keys shown below.
 
 ```toml
 provider = "alpaca"
@@ -192,6 +214,9 @@ catalog_url = "https://stock.chatcode.dev/catalog/sec-catalog.json"
 catalog_refresh_hours = 12
 
 [providers.alpaca]
+# Optional; onboarding writes these after validating the pair.
+# api_key = "your-own-key-id"
+# api_secret = "your-own-secret"
 feed = "iex"
 request_limit_per_minute = 180
 snapshot_batch_size = 100
@@ -218,6 +243,8 @@ Supported keys and validation:
 | `refresh_seconds` | `300` | Integer, clamped to 30..86,400 |
 | `catalog_url` | Public `stock.chatcode.dev` catalog | HTTPS URL, or loopback HTTP for tests |
 | `catalog_refresh_hours` | `12` | Integer, clamped to 1..168 |
+| `providers.alpaca.api_key` | Unset | Personal Alpaca API key ID; must be set with `api_secret` |
+| `providers.alpaca.api_secret` | Unset | Matching Alpaca API secret; must be set with `api_key` |
 | `providers.alpaca.feed` | `iex` | `iex`, `delayed_sip`, or `sip` |
 | `providers.alpaca.request_limit_per_minute` | `180` | Integer, clamped to 1..200 |
 | `providers.alpaca.snapshot_batch_size` | `100` | Integer, clamped to 1..500 |
@@ -228,11 +255,10 @@ Supported keys and validation:
 | `providers.stock_api.news` | `true` | Boolean; omit the news capability and requests when false |
 | `providers.stock_api.token` | Unset | Optional bearer token: at most 4,096 ASCII token68 bytes (`A-Z`, `a-z`, `0-9`, `-._~+/`, then optional `=` padding); surrounding whitespace is trimmed |
 
-Alpaca credentials and the database path are intentionally absent from TOML.
-Use onboarding or the environment for Alpaca credentials, and `--db` /
-`STOCK_TUI_DB_PATH` for the database path. A `stock-api` token is accepted
-because this adapter has no interactive onboarding; the environment remains
-the higher-precedence option. Never commit a populated token.
+Alpaca credentials may be entered through onboarding, environment variables,
+or this TOML pair; environment values remain higher precedence. The database
+path remains intentionally absent from TOML: use `--db` /
+`STOCK_TUI_DB_PATH`. Never commit a populated credential or token.
 
 On Unix-like systems, find `config_dir` with `--print-config`, then protect the
 file at the reported path:
@@ -241,9 +267,10 @@ file at the reported path:
 chmod 600 /path/reported/as/config_dir/config.toml
 ```
 
-The flat Alpaca keys accepted by earlier releases remain compatible, but the
-`[providers.alpaca]` namespace is preferred so future adapters can have
-independent settings.
+The flat non-secret Alpaca settings accepted by earlier releases remain
+compatible, but the `[providers.alpaca]` namespace is preferred so future
+adapters can have independent settings. Credential keys are accepted only
+inside that namespace.
 
 `https://stock.chatcode.dev/api` is the default for the compiled `stock-api`
 adapter, but it is not hardcoded as the only endpoint:

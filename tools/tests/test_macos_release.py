@@ -31,6 +31,8 @@ class MacosReleasePolicyTests(unittest.TestCase):
             workflow.index("name: Archive signed macOS executable"),
         )
         self.assertIn("needs: [build, build-macos]", workflow)
+        self.assertIn("pattern: stock-tui-*", workflow)
+        self.assertIn("Expected exactly 5 platform archives", workflow)
         self.assertIn(
             "APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.",
             workflow,

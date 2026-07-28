@@ -16,7 +16,7 @@ use crate::{
         chart::render_price_volume,
         heatmap,
         layout::{AppLayout, LayoutMode, uniform_grid},
-        state::{DetailTab, Overlay, Route, UiAction, UiState},
+        state::{DetailTab, Overlay, Route, SectorMetric, UiAction, UiState},
     },
 };
 
@@ -69,7 +69,26 @@ fn render_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
         Style::default().fg(TEXT).bold(),
     ));
     let left = Line::from(left_spans);
-    let right = format!("{}  ·  {} ", state.date_range, state.sort.label());
+    let direction = if state.sort_descending { '↓' } else { '↑' };
+    let compact_right = format!(
+        "{}  ·  {} {direction} ",
+        state.date_range,
+        state.sort.label()
+    );
+    let detailed_right = matches!(state.route, Route::Sector(_) | Route::Favorites).then(|| {
+        format!(
+            "{}  ·  {} {direction}  ·  {}  ·  {} ",
+            state.date_range,
+            state.sort.label(),
+            state.sector_metric.label(),
+            state.sector_view.label()
+        )
+    });
+    let right = match detailed_right {
+        Some(text) if left.width() + text.width() <= usize::from(area.width) => text,
+        _ if left.width() + compact_right.width() <= usize::from(area.width) => compact_right,
+        _ => format!("{} {direction} ", state.date_range),
+    };
     let split = area.width.saturating_sub(right.width() as u16);
     frame.render_widget(
         Paragraph::new(left).style(Style::default().bg(PANEL)),
@@ -81,6 +100,9 @@ fn render_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
             .style(Style::default().fg(MUTED).bg(PANEL)),
         Rect::new(area.x + split, area.y, area.width - split, 1),
     );
+    if area.height < 2 {
+        return;
+    }
     let inspector_symbol = match state.route {
         Route::Sector(_) | Route::Favorites => state.focused_symbol(),
         Route::Overview | Route::Ticker(_) => state.hovered_symbol.as_deref(),
@@ -103,10 +125,24 @@ fn render_header(frame: &mut Frame<'_>, state: &UiState, area: Rect) {
                 )
             },
         );
+    let progress = sync_progress_label(state);
+    let progress_width = progress
+        .as_deref()
+        .map_or(0, |text| text.width() as u16 + 1)
+        .min(area.width);
+    let inspector_width = area.width.saturating_sub(progress_width);
     frame.render_widget(
         Paragraph::new(format!(" {inspector}")).style(Style::default().fg(MUTED).bg(PANEL_ALT)),
-        Rect::new(area.x, area.y + 1, area.width, 1),
+        Rect::new(area.x, area.y + 1, inspector_width, 1),
     );
+    if let Some(progress) = progress {
+        frame.render_widget(
+            Paragraph::new(format!("{progress} "))
+                .alignment(Alignment::Right)
+                .style(Style::default().fg(MUTED).bg(PANEL_ALT)),
+            Rect::new(area.x + inspector_width, area.y + 1, progress_width, 1),
+        );
+    }
 }
 
 fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
@@ -158,6 +194,47 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         UiAction::BeginSectorShortcut,
         sector_shortcut_pending,
     );
+    let show_sector_controls =
+        matches!(state.route, Route::Sector(_) | Route::Favorites) && area.height >= 20;
+    let show_overview_controls = matches!(state.route, Route::Overview) && area.height >= 15;
+    if show_sector_controls {
+        y = rail_button(
+            frame,
+            state,
+            area,
+            y,
+            "i",
+            compact_metric_label(state.sector_metric),
+            UiAction::CycleSectorMetric,
+            false,
+        );
+    }
+    if show_sector_controls || show_overview_controls {
+        y = rail_button(
+            frame,
+            state,
+            area,
+            y,
+            "o",
+            if state.sort_descending {
+                "Order ↓"
+            } else {
+                "Order ↑"
+            },
+            UiAction::ToggleSortDirection,
+            false,
+        );
+        y = rail_button(
+            frame,
+            state,
+            area,
+            y,
+            "v",
+            state.sector_view.label(),
+            UiAction::ToggleSectorView,
+            false,
+        );
+    }
     if matches!(state.route, Route::Sector(_) | Route::Ticker(_)) {
         y = rail_button(
             frame,
@@ -239,6 +316,17 @@ fn render_rail(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
             UiAction::OpenHelp,
             false,
         );
+    }
+}
+
+fn compact_metric_label(metric: SectorMetric) -> &'static str {
+    match metric {
+        SectorMetric::Price => "Price",
+        SectorMetric::RelativeGain => "Return",
+        SectorMetric::AbsoluteGain => "Δ price",
+        SectorMetric::SectorRelativeGain => "Vs sector",
+        SectorMetric::MarketCap => "Mkt cap",
+        SectorMetric::Volume => "Volume",
     }
 }
 
@@ -330,15 +418,19 @@ fn rail_button(
 }
 
 fn render_footer(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, content: Rect) {
+    let status_area = Rect::new(area.x, area.y, content.width, area.height);
+    let version_area = Rect::new(
+        content.right(),
+        area.y,
+        area.right().saturating_sub(content.right()),
+        area.height,
+    );
     if matches!(state.route, Route::Overview) {
         frame
             .buffer_mut()
             .set_style(area, Style::default().bg(PANEL_ALT));
-        render_benchmark_footer(
-            frame,
-            state,
-            Rect::new(content.x, area.y, content.width, area.height),
-        );
+        render_benchmark_footer(frame, state, status_area);
+        render_version(frame, version_area);
         return;
     }
     let freshness = state.snapshot_checkpoint.map_or_else(
@@ -359,18 +451,53 @@ fn render_footer(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, content
         },
     );
     let right = format!("{freshness}  ");
-    let left_width = area.width.saturating_sub(right.width() as u16);
+    let left_width = status_area.width.saturating_sub(right.width() as u16);
     frame.render_widget(
-        Paragraph::new(format!(" {}", state.sync.message))
+        Paragraph::new(format!(" {}", sync_status_label(state)))
             .style(Style::default().fg(MUTED).bg(PANEL_ALT)),
-        Rect::new(area.x, area.y, left_width, 1),
+        Rect::new(status_area.x, status_area.y, left_width, 1),
     );
     frame.render_widget(
         Paragraph::new(right)
             .alignment(Alignment::Right)
             .style(Style::default().fg(MUTED).bg(PANEL_ALT)),
-        Rect::new(area.x + left_width, area.y, area.width - left_width, 1),
+        Rect::new(
+            status_area.x + left_width,
+            status_area.y,
+            status_area.width - left_width,
+            1,
+        ),
     );
+    render_version(frame, version_area);
+}
+
+fn render_version(frame: &mut Frame<'_>, area: Rect) {
+    if area.is_empty() {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(format!("v{} ", env!("CARGO_PKG_VERSION")))
+            .alignment(Alignment::Right)
+            .style(Style::default().fg(MUTED).bg(PANEL_ALT)),
+        area,
+    );
+}
+
+fn sync_progress_label(state: &UiState) -> Option<String> {
+    (state.sync.total > 0).then(|| {
+        let percent = (state.sync.fraction() * 100.0).clamp(0.0, 100.0).round();
+        format!(
+            "{}/{} ({percent:.0}%)",
+            state.sync.completed, state.sync.total
+        )
+    })
+}
+
+fn sync_status_label(state: &UiState) -> String {
+    sync_progress_label(state).map_or_else(
+        || state.sync.message.clone(),
+        |progress| format!("{} · {progress}", state.sync.message),
+    )
 }
 
 fn render_benchmark_footer(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
@@ -404,14 +531,18 @@ fn render_benchmark_footer(frame: &mut Frame<'_>, state: &mut UiState, area: Rec
             })
             .bg(scale.color(period_return));
         if selected {
-            style = style.add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
-        } else if tile.is_some_and(|tile| tile.stale) {
-            style = style.add_modifier(Modifier::UNDERLINED);
+            style = style.add_modifier(Modifier::BOLD);
         }
+        let underline_symbol = selected || tile.is_some_and(|tile| tile.stale);
         frame.render_widget(
-            Paragraph::new(benchmark_footer_text(benchmark, tile, cell.width))
-                .centered()
-                .style(style),
+            Paragraph::new(benchmark_footer_line(
+                benchmark,
+                tile,
+                cell.width,
+                underline_symbol,
+            ))
+            .centered()
+            .style(style),
             cell,
         );
         targets.push((cell, benchmark.symbol.to_owned()));
@@ -419,6 +550,29 @@ fn render_benchmark_footer(frame: &mut Frame<'_>, state: &mut UiState, area: Rec
     for (cell, symbol) in targets {
         state.register(cell, UiAction::OpenTicker(symbol), None);
     }
+}
+
+fn benchmark_footer_line(
+    benchmark: MarketBenchmark,
+    tile: Option<&MarketTile>,
+    width: u16,
+    underline_symbol: bool,
+) -> Line<'static> {
+    let text = benchmark_footer_text(benchmark, tile, width);
+    let Some(symbol_start) = text.find(benchmark.symbol) else {
+        return Line::from(text);
+    };
+    let symbol_end = symbol_start + benchmark.symbol.len();
+    let symbol_style = if underline_symbol {
+        Style::default().add_modifier(Modifier::UNDERLINED)
+    } else {
+        Style::default()
+    };
+    Line::from(vec![
+        Span::raw(text[..symbol_start].to_owned()),
+        Span::styled(benchmark.symbol.to_owned(), symbol_style),
+        Span::raw(text[symbol_end..].to_owned()),
+    ])
 }
 
 fn benchmark_footer_text(
@@ -511,7 +665,15 @@ fn render_full_detail(
         .constraints([Constraint::Min(10), Constraint::Length(5)])
         .split(columns[0]);
     let accent = performance_accent(detail.period_return);
-    render_price_volume(frame, state, left[0], &detail.bars, accent);
+    render_price_volume(
+        frame,
+        state,
+        left[0],
+        &detail.bars,
+        detail.period_start_at.zip(detail.period_start_price),
+        detail.period_end_at.zip(detail.period_end_price),
+        accent,
+    );
     render_description(frame, detail, left[1], tint);
     let right = Layout::default()
         .direction(Direction::Vertical)
@@ -544,6 +706,8 @@ fn render_compact_detail(
             state,
             rows[2],
             &detail.bars,
+            detail.period_start_at.zip(detail.period_start_price),
+            detail.period_end_at.zip(detail.period_end_price),
             performance_accent(detail.period_return),
         ),
         DetailTab::Statistics => render_statistics(frame, detail, rows[2], tint),
@@ -558,15 +722,16 @@ fn render_detail_header(
     area: Rect,
     tint: Color,
 ) {
-    let price_value = detail.snapshot.as_ref().and_then(|snapshot| snapshot.price);
+    let price_value = detail.period_end_price;
     let price = price_value.map_or_else(|| "--".to_owned(), |value| format!("${value:.2}"));
     let period_return = detail.period_return.map_or_else(
         || "--".to_owned(),
         |value| format!("{:+.2}%", value * 100.0),
     );
     let period_gain = price_value
-        .zip(detail.period_return)
-        .and_then(|(price, period_return)| absolute_period_gain(price, period_return))
+        .zip(detail.period_start_price)
+        .map(|(price, baseline)| price - baseline)
+        .filter(|gain| gain.is_finite())
         .map_or_else(|| "--".to_owned(), format_signed_price);
     let classification = MarketBenchmark::for_symbol(&detail.company.symbol).map_or_else(
         || {
@@ -885,43 +1050,63 @@ fn render_sort(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
 }
 
 fn render_about(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
-    let modal = centered(area, 58.min(area.width.saturating_sub(4)), 20);
+    let modal = centered(area, 62.min(area.width.saturating_sub(4)), 23);
     frame.render_widget(Clear, modal);
-    let content = vec![
-        Line::styled("Keyboard", Style::default().fg(CYAN).bold()),
-        Line::from("Navigate     arrows or h j k l"),
-        Line::from("Open         Enter"),
-        Line::from("Back         Esc"),
-        Line::from("Search       /"),
-        Line::from("Sort         s"),
-        Line::from("Star         f"),
-        Line::from("Starred      F"),
-        Line::from("Refresh      r"),
-        Line::from("Data status  S"),
-        Line::from("Ranges       1..9, 0 or [ ]"),
-        Line::from("Sectors      g then c s h e t f i m u"),
-        Line::from("Prev / next  Backspace / Space"),
-        Line::from("Detail tabs  Tab"),
-        Line::from("Detail       Left/Right chart, Up/Down news"),
-        Line::from("Quit         q"),
-        Line::from(""),
-        Line::styled(
-            format!("Market prices and news: {}", state.data_provider_label),
-            Style::default().fg(MUTED),
-        ),
-    ];
     frame.render_widget(
-        Paragraph::new(content)
-            .centered()
-            .style(Style::default().fg(TEXT).bg(PANEL))
-            .block(
-                Block::default()
-                    .title(" HELP ")
-                    .borders(Borders::ALL)
-                    .border_style(CYAN),
-            ),
+        Block::default()
+            .title(" HELP ")
+            .borders(Borders::ALL)
+            .border_style(CYAN)
+            .style(Style::default().bg(PANEL)),
         modal,
     );
+    let inner = modal.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+    let mut content = vec![
+        help_row("Navigate", "arrows or h j k l"),
+        help_row("Open", "Enter"),
+        help_row("Back", "Esc"),
+        help_row("Search", "/"),
+        help_row("Sort", "s"),
+        help_row("Metric", "i  Sector, Starred"),
+        help_row("Order", "o  Overview, Sector, Starred"),
+        help_row("View", "v  Overview, Sector, Starred"),
+        help_row("Star", "f"),
+        help_row("Starred", "F"),
+        help_row("Refresh", "r"),
+        help_row("Data status", "S"),
+        help_row("Ranges", "1..9/0, [ ], =/+ in, - out"),
+        help_row("Sectors", "g then c s h e t f i m u"),
+        help_row("Prev / next", "Backspace / Space"),
+        help_row("Detail tabs", "Tab"),
+        help_row("Detail", "Left/Right chart, Up/Down news"),
+        help_row("Quit", "q"),
+    ];
+    if inner.height >= 19 {
+        content.insert(
+            0,
+            Line::styled("Keyboard", Style::default().fg(CYAN).bold()),
+        );
+    }
+    if inner.height >= 20 {
+        content.push(Line::styled(
+            format!("Market prices and news: {}", state.data_provider_label),
+            Style::default().fg(MUTED),
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(content).style(Style::default().fg(TEXT).bg(PANEL)),
+        inner,
+    );
+}
+
+fn help_row<'a>(label: &'a str, keys: &'a str) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(format!("{label:<13}"), Style::default().fg(TEXT)),
+        Span::styled(keys, Style::default().fg(MUTED)),
+    ])
 }
 
 fn render_sync(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
@@ -942,35 +1127,53 @@ fn render_sync(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         },
     );
     let content = vec![
-        Line::from(format!("Phase       {:?}", state.sync.phase)),
-        Line::from(format!(
-            "Progress    {}/{} ({percent:.0}%)",
-            state.sync.completed, state.sync.total
-        )),
-        Line::from(format!("Status      {}", state.sync.message)),
-        Line::from(format!("Auto refresh {cadence}")),
-        Line::from(format!("Price cache {snapshot}")),
-        Line::styled(
-            "Coverage     Refresh requests every retained ticker",
-            Style::default().fg(MUTED),
+        status_row("Phase", format!("{:?}", state.sync.phase), TEXT),
+        status_row(
+            "Progress",
+            format!(
+                "{}/{} ({percent:.0}%)",
+                state.sync.completed, state.sync.total
+            ),
+            TEXT,
         ),
-        Line::styled(
-            "Stale data   Provider observation is over 72h old",
-            Style::default().fg(MUTED),
+        status_row("Status", state.sync.message.clone(), TEXT),
+        status_row("Auto refresh", cadence, TEXT),
+        status_row("Price cache", snapshot, TEXT),
+        status_row(
+            "Coverage",
+            "Refresh requests every retained ticker".to_owned(),
+            MUTED,
         ),
-        Line::styled(format!("Last error  {error}"), Style::default().fg(MUTED)),
+        status_row(
+            "Stale data",
+            "Provider observation is over 72h old".to_owned(),
+            MUTED,
+        ),
+        status_row("Last error", error.to_owned(), MUTED),
     ];
     frame.render_widget(
-        Paragraph::new(content)
-            .style(Style::default().fg(TEXT).bg(PANEL))
-            .block(
-                Block::default()
-                    .title(" DATA STATUS ")
-                    .borders(Borders::ALL)
-                    .border_style(CYAN),
-            ),
+        Block::default()
+            .title(" DATA STATUS ")
+            .borders(Borders::ALL)
+            .border_style(CYAN)
+            .style(Style::default().bg(PANEL)),
         modal,
     );
+    let inner = modal.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+    frame.render_widget(
+        Paragraph::new(content).style(Style::default().fg(TEXT).bg(PANEL)),
+        inner,
+    );
+}
+
+fn status_row(label: &str, value: String, value_color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<13}"), Style::default().fg(MUTED)),
+        Span::styled(value, Style::default().fg(value_color)),
+    ])
 }
 
 fn compact_duration(duration: std::time::Duration) -> String {
@@ -1008,15 +1211,6 @@ fn format_price(value: f64) -> String {
 fn format_signed_price(value: f64) -> String {
     let sign = if value.is_sign_negative() { '-' } else { '+' };
     format!("{sign}${:.2}", value.abs())
-}
-
-fn absolute_period_gain(price: f64, period_return: f64) -> Option<f64> {
-    let denominator = 1.0 + period_return;
-    if price.is_finite() && denominator.is_finite() && denominator.abs() > f64::EPSILON {
-        Some(price - price / denominator)
-    } else {
-        None
-    }
 }
 
 fn format_percent(value: f64) -> String {

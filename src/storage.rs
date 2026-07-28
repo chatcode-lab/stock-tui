@@ -23,6 +23,35 @@ const STALE_AFTER_HOURS: i64 = 72;
 const MAX_MEMBERS_PER_SECTOR: usize = 100;
 const TIMEFRAME_EXISTS_SQL: &str =
     "SELECT EXISTS(SELECT 1 FROM bars WHERE symbol = ?1 AND timeframe = ?2 LIMIT 1)";
+const PERIOD_METRIC_SQL: &str = "WITH
+    before_cutoff AS (
+        SELECT close, timestamp FROM bars
+        WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?3
+        ORDER BY timestamp DESC LIMIT 1
+    ),
+    after_cutoff AS (
+        SELECT close, timestamp FROM bars
+        WHERE symbol = ?1 AND timeframe = ?2
+          AND timestamp >= ?3 AND timestamp <= ?4
+        ORDER BY timestamp ASC LIMIT 1
+    ),
+    latest AS (
+        SELECT close, volume, timestamp FROM bars
+        WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?4
+        ORDER BY timestamp DESC LIMIT 1
+    )
+SELECT
+    COALESCE(
+        (SELECT close FROM before_cutoff),
+        (SELECT close FROM after_cutoff)
+    ),
+    COALESCE(
+        (SELECT timestamp FROM before_cutoff),
+        (SELECT timestamp FROM after_cutoff)
+    ),
+    (SELECT close FROM latest),
+    (SELECT volume FROM latest),
+    (SELECT timestamp FROM latest)";
 
 const COMPANY_COLUMNS: &str = "
     symbol, name, sector, raw_sector, exchange, industry, market_cap,
@@ -163,15 +192,32 @@ pub struct StorageCounts {
 
 #[derive(Debug, Clone, Copy)]
 struct PeriodMetric {
+    baseline: Option<f64>,
+    baseline_at: Option<DateTime<Utc>>,
     close: Option<f64>,
     volume: Option<f64>,
     updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EndpointSource {
+    Snapshot,
+    Bar,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResolvedPeriod {
+    price: Option<f64>,
+    baseline: Option<f64>,
+    baseline_at: Option<DateTime<Utc>>,
     period_return: Option<f64>,
+    updated_at: Option<DateTime<Utc>>,
+    source: Option<EndpointSource>,
 }
 
 type PeriodMetricRow = (
     Option<f64>,
-    Option<f64>,
+    Option<i64>,
     Option<f64>,
     Option<f64>,
     Option<i64>,
@@ -849,6 +895,25 @@ impl Storage {
         favorites_only: bool,
         now: DateTime<Utc>,
     ) -> Result<Vec<MarketTile>> {
+        self.heatmap_tiles_ordered(
+            range,
+            sort,
+            sort.default_descending(),
+            sector,
+            favorites_only,
+            now,
+        )
+    }
+
+    pub fn heatmap_tiles_ordered(
+        &self,
+        range: DateRange,
+        sort: SortMode,
+        descending: bool,
+        sector: Option<Sector>,
+        favorites_only: bool,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<MarketTile>> {
         let connection = self.connection()?;
         let companies =
             load_heatmap_companies(&connection, sector, favorites_only, now.date_naive())?;
@@ -858,25 +923,7 @@ impl Storage {
         let favorite_symbols = load_favorite_set(&connection)?;
         let snapshots = load_snapshots(&connection)?;
         let mut timeframe_statement = connection.prepare_cached(TIMEFRAME_EXISTS_SQL)?;
-        let mut metric_statement = connection.prepare_cached(
-            "SELECT
-                (SELECT close FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?3
-                 ORDER BY timestamp DESC LIMIT 1),
-                (SELECT close FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2
-                   AND timestamp >= ?3 AND timestamp <= ?4
-                 ORDER BY timestamp ASC LIMIT 1),
-                (SELECT close FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?4
-                 ORDER BY timestamp DESC LIMIT 1),
-                (SELECT volume FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?4
-                 ORDER BY timestamp DESC LIMIT 1),
-                (SELECT timestamp FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?4
-                 ORDER BY timestamp DESC LIMIT 1)",
-        )?;
+        let mut metric_statement = connection.prepare_cached(PERIOD_METRIC_SQL)?;
         let cutoff = range.cutoff(now);
         let mut tiles = Vec::with_capacity(companies.len());
         for company in companies {
@@ -889,31 +936,25 @@ impl Storage {
                 now,
             )?;
             let snapshot = snapshots.get(&company.symbol);
-            let period_return = if range == DateRange::Day {
-                snapshot
-                    .and_then(Snapshot::day_return)
-                    .or(metric.period_return)
-            } else {
-                metric.period_return
-            };
-            let price = snapshot.and_then(|value| value.price).or(metric.close);
-            let volume = snapshot.and_then(|value| value.volume).or(metric.volume);
-            let updated_at = snapshot.map(|value| value.updated_at).or(metric.updated_at);
+            let period = resolve_period(range, cutoff, snapshot, metric);
+            let volume = volume_for_source(period.source, snapshot, metric);
+            let updated_at = period.updated_at;
             let stale = updated_at.is_none_or(|updated| {
                 now.signed_duration_since(updated).num_hours() > STALE_AFTER_HOURS
             });
             let starred = favorite_symbols.contains(&company.symbol);
             tiles.push(MarketTile {
                 company,
-                price,
-                period_return,
+                price: period.price,
+                period_start_price: period.baseline,
+                period_return: period.period_return,
                 volume,
                 starred,
                 stale,
                 updated_at,
             });
         }
-        sort_and_limit_tiles(&mut tiles, sort, sector, favorites_only);
+        sort_and_limit_tiles(&mut tiles, sort, descending, sector, favorites_only);
         Ok(tiles)
     }
 
@@ -926,36 +967,58 @@ impl Storage {
         self.heatmap_tiles(range, sort, None, true, now)
     }
 
+    pub fn favorite_tiles_ordered(
+        &self,
+        range: DateRange,
+        sort: SortMode,
+        descending: bool,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<MarketTile>> {
+        self.heatmap_tiles_ordered(range, sort, descending, None, true, now)
+    }
+
+    fn load_symbol_period_metric(
+        &self,
+        symbol: &str,
+        range: DateRange,
+        now: DateTime<Utc>,
+    ) -> Result<(&'static str, PeriodMetric)> {
+        let connection = self.connection()?;
+        let mut timeframe_statement = connection.prepare_cached(TIMEFRAME_EXISTS_SQL)?;
+        let timeframe = choose_timeframe(&mut timeframe_statement, range, symbol)?;
+        drop(timeframe_statement);
+        let mut metric_statement = connection.prepare_cached(PERIOD_METRIC_SQL)?;
+        let metric = load_period_metric(
+            &mut metric_statement,
+            symbol,
+            timeframe,
+            range.cutoff(now),
+            now,
+        )?;
+        Ok((timeframe, metric))
+    }
+
     pub fn benchmark_tiles(&self, range: DateRange, now: DateTime<Utc>) -> Result<Vec<MarketTile>> {
         let mut tiles = Vec::with_capacity(MarketBenchmark::ALL.len());
         for benchmark in MarketBenchmark::ALL {
-            let Some(detail) = self.ticker_detail(benchmark.symbol, range, now, 0)? else {
+            let Some(company) = self.company(benchmark.symbol)? else {
                 continue;
             };
-            let latest_bar = detail.bars.last();
-            let updated_at = detail
-                .snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.updated_at)
-                .or_else(|| latest_bar.map(|bar| bar.timestamp));
+            let (_, metric) = self.load_symbol_period_metric(benchmark.symbol, range, now)?;
+            let snapshot = self.snapshot(benchmark.symbol)?;
+            let period = resolve_period(range, range.cutoff(now), snapshot.as_ref(), metric);
+            let updated_at = period.updated_at;
             tiles.push(MarketTile {
-                price: detail
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.price)
-                    .or_else(|| latest_bar.map(|bar| bar.close)),
-                volume: detail
-                    .snapshot
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.volume)
-                    .or_else(|| latest_bar.map(|bar| bar.volume)),
-                starred: detail.starred,
+                price: period.price,
+                period_start_price: period.baseline,
+                period_return: period.period_return,
+                volume: volume_for_source(period.source, snapshot.as_ref(), metric),
+                starred: self.is_favorite(benchmark.symbol)?,
                 stale: updated_at.is_none_or(|updated| {
                     now.signed_duration_since(updated).num_hours() > STALE_AFTER_HOURS
                 }),
                 updated_at,
-                company: detail.company,
-                period_return: detail.period_return,
+                company,
             });
         }
         Ok(tiles)
@@ -971,38 +1034,7 @@ impl Storage {
         let Some(company) = self.company(symbol)? else {
             return Ok(None);
         };
-        let connection = self.connection()?;
-        let mut timeframe_statement = connection.prepare_cached(TIMEFRAME_EXISTS_SQL)?;
-        let timeframe = choose_timeframe(&mut timeframe_statement, range, &company.symbol)?;
-        drop(timeframe_statement);
-        let mut metric_statement = connection.prepare_cached(
-            "SELECT
-                (SELECT close FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?3
-                 ORDER BY timestamp DESC LIMIT 1),
-                (SELECT close FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2
-                   AND timestamp >= ?3 AND timestamp <= ?4
-                 ORDER BY timestamp ASC LIMIT 1),
-                (SELECT close FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?4
-                 ORDER BY timestamp DESC LIMIT 1),
-                (SELECT volume FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?4
-                 ORDER BY timestamp DESC LIMIT 1),
-                (SELECT timestamp FROM bars
-                 WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?4
-                 ORDER BY timestamp DESC LIMIT 1)",
-        )?;
-        let metric = load_period_metric(
-            &mut metric_statement,
-            &company.symbol,
-            timeframe,
-            range.cutoff(now),
-            now,
-        )?;
-        drop(metric_statement);
-        drop(connection);
+        let (timeframe, metric) = self.load_symbol_period_metric(&company.symbol, range, now)?;
         let bars = self.bars(
             &company.symbol,
             Some(timeframe),
@@ -1011,14 +1043,7 @@ impl Storage {
             None,
         )?;
         let snapshot = self.snapshot(&company.symbol)?;
-        let period_return = if range == DateRange::Day {
-            snapshot
-                .as_ref()
-                .and_then(Snapshot::day_return)
-                .or(metric.period_return)
-        } else {
-            metric.period_return
-        };
+        let period = resolve_period(range, range.cutoff(now), snapshot.as_ref(), metric);
         let own_tiles = company
             .sector
             .map(|sector| self.heatmap_tiles(range, SortMode::Gainers, Some(sector), false, now))
@@ -1040,7 +1065,11 @@ impl Storage {
             company,
             snapshot,
             bars,
-            period_return,
+            period_start_price: period.baseline,
+            period_start_at: period.baseline_at,
+            period_end_price: period.price,
+            period_end_at: period.updated_at,
+            period_return: period.period_return,
             sector_return,
             sector_rank,
         }))
@@ -1259,10 +1288,14 @@ fn selected_members(companies: &[Company], limit: usize) -> Vec<&Company> {
 fn selected_members_from_refs<'a>(companies: &[&'a Company], limit: usize) -> Vec<&'a Company> {
     let mut selected = companies.to_vec();
     selected.sort_by(|left, right| {
-        compare_optional_f64_desc(screened_company_size(left), screened_company_size(right))
-            .then_with(|| left.rank.is_none().cmp(&right.rank.is_none()))
-            .then_with(|| left.rank.cmp(&right.rank))
-            .then_with(|| left.symbol.cmp(&right.symbol))
+        compare_optional_f64(
+            screened_company_size(left),
+            screened_company_size(right),
+            true,
+        )
+        .then_with(|| left.rank.is_none().cmp(&right.rank.is_none()))
+        .then_with(|| left.rank.cmp(&right.rank))
+        .then_with(|| left.symbol.cmp(&right.symbol))
     });
     selected.truncate(limit);
     selected
@@ -1380,7 +1413,7 @@ fn load_period_metric(
     cutoff: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<PeriodMetric> {
-    let (before, after, close, volume, timestamp): PeriodMetricRow = statement.query_row(
+    let (baseline, baseline_at, close, volume, timestamp): PeriodMetricRow = statement.query_row(
         params![
             symbol,
             timeframe,
@@ -1397,27 +1430,102 @@ fn load_period_metric(
             ))
         },
     )?;
-    let baseline = before.or(after);
-    let period_return = baseline
-        .filter(|value| *value != 0.0)
-        .zip(close)
-        .map(|(baseline, latest)| latest / baseline - 1.0);
     Ok(PeriodMetric {
+        baseline,
+        baseline_at: baseline_at.map(datetime_from_millis).transpose()?,
         close,
         volume,
         updated_at: timestamp.map(datetime_from_millis).transpose()?,
-        period_return,
     })
+}
+
+fn resolve_period(
+    range: DateRange,
+    cutoff: DateTime<Utc>,
+    snapshot: Option<&Snapshot>,
+    metric: PeriodMetric,
+) -> ResolvedPeriod {
+    let snapshot_endpoint = snapshot.and_then(|value| {
+        value
+            .price
+            .filter(|price| valid_stock_price(*price))
+            .map(|price| (price, value.updated_at))
+    });
+    let bar_endpoint = metric
+        .close
+        .filter(|price| valid_stock_price(*price))
+        .map(|price| (price, metric.updated_at));
+    let (price, updated_at, source) = match (snapshot_endpoint, bar_endpoint) {
+        (Some((_snapshot_price, snapshot_at)), Some((bar_price, Some(bar_at))))
+            if bar_at > snapshot_at =>
+        {
+            (Some(bar_price), Some(bar_at), Some(EndpointSource::Bar))
+        }
+        (Some((snapshot_price, snapshot_at)), Some(_)) => (
+            Some(snapshot_price),
+            Some(snapshot_at),
+            Some(EndpointSource::Snapshot),
+        ),
+        (Some((snapshot_price, snapshot_at)), None) => (
+            Some(snapshot_price),
+            Some(snapshot_at),
+            Some(EndpointSource::Snapshot),
+        ),
+        (None, Some((bar_price, bar_at))) => (Some(bar_price), bar_at, Some(EndpointSource::Bar)),
+        (None, None) => (None, None, None),
+    };
+    let metric_baseline = metric.baseline.filter(|value| valid_stock_price(*value));
+    let snapshot_day_baseline = (range == DateRange::Day
+        && source == Some(EndpointSource::Snapshot))
+    .then(|| {
+        snapshot
+            .and_then(|value| value.previous_close)
+            .filter(|value| valid_stock_price(*value))
+    })
+    .flatten();
+    let (baseline, baseline_at) = if let Some(baseline) = snapshot_day_baseline {
+        (Some(baseline), metric.baseline_at.or(Some(cutoff)))
+    } else {
+        (metric_baseline, metric.baseline_at)
+    };
+    let period_return = price
+        .zip(baseline)
+        .map(|(latest, baseline)| latest / baseline - 1.0);
+    ResolvedPeriod {
+        price,
+        baseline,
+        baseline_at,
+        period_return,
+        updated_at,
+        source,
+    }
+}
+
+fn volume_for_source(
+    source: Option<EndpointSource>,
+    snapshot: Option<&Snapshot>,
+    metric: PeriodMetric,
+) -> Option<f64> {
+    match source {
+        Some(EndpointSource::Snapshot) => snapshot.and_then(|value| value.volume),
+        Some(EndpointSource::Bar) => metric.volume,
+        None => None,
+    }
+}
+
+fn valid_stock_price(value: f64) -> bool {
+    value.is_finite() && value > 0.0
 }
 
 fn sort_and_limit_tiles(
     tiles: &mut Vec<MarketTile>,
     sort: SortMode,
+    descending: bool,
     selected_sector: Option<Sector>,
     favorites_only: bool,
 ) {
     let compare = |left: &MarketTile, right: &MarketTile| {
-        compare_tiles(left, right, sort)
+        compare_tiles(left, right, sort, descending)
             .then_with(|| left.company.symbol.cmp(&right.company.symbol))
     };
     if selected_sector.is_some() || favorites_only {
@@ -1449,22 +1557,38 @@ fn sort_and_limit_tiles(
     tiles.extend(unclassified);
 }
 
-fn compare_tiles(left: &MarketTile, right: &MarketTile, sort: SortMode) -> Ordering {
+fn compare_tiles(
+    left: &MarketTile,
+    right: &MarketTile,
+    sort: SortMode,
+    descending: bool,
+) -> Ordering {
     match sort {
-        SortMode::MarketCap => compare_optional_f64_desc(
+        SortMode::MarketCap => compare_optional_f64(
             screened_company_size(&left.company),
             screened_company_size(&right.company),
+            descending,
         )
-        .then_with(|| left.company.rank.cmp(&right.company.rank)),
-        SortMode::Gainers => compare_optional_f64_desc(left.period_return, right.period_return),
-        SortMode::Volume => compare_optional_f64_desc(left.volume, right.volume),
+        .then_with(|| {
+            if descending {
+                left.company.rank.cmp(&right.company.rank)
+            } else {
+                right.company.rank.cmp(&left.company.rank)
+            }
+        }),
+        SortMode::Gainers => {
+            compare_optional_f64(left.period_return, right.period_return, descending)
+        }
+        SortMode::Volume => compare_optional_f64(left.volume, right.volume, descending),
+        SortMode::Alphabetical if descending => right.company.symbol.cmp(&left.company.symbol),
         SortMode::Alphabetical => left.company.symbol.cmp(&right.company.symbol),
     }
 }
 
-fn compare_optional_f64_desc(left: Option<f64>, right: Option<f64>) -> Ordering {
+fn compare_optional_f64(left: Option<f64>, right: Option<f64>, descending: bool) -> Ordering {
     match (left, right) {
-        (Some(left), Some(right)) => right.total_cmp(&left),
+        (Some(left), Some(right)) if descending => right.total_cmp(&left),
+        (Some(left), Some(right)) => left.total_cmp(&right),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => Ordering::Equal,
@@ -2053,6 +2177,36 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["BBB", "CCC", "AAA"]
         );
+        let by_volume_ascending = storage.heatmap_tiles_ordered(
+            DateRange::Day,
+            SortMode::Volume,
+            false,
+            Some(Sector::Technology),
+            false,
+            now,
+        )?;
+        assert_eq!(
+            by_volume_ascending
+                .iter()
+                .map(|tile| tile.company.symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["AAA", "CCC", "BBB"]
+        );
+        let alphabetical_descending = storage.heatmap_tiles_ordered(
+            DateRange::Day,
+            SortMode::Alphabetical,
+            true,
+            Some(Sector::Technology),
+            false,
+            now,
+        )?;
+        assert_eq!(
+            alphabetical_descending
+                .iter()
+                .map(|tile| tile.company.symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["CCC", "BBB", "AAA"]
+        );
 
         let detail = storage
             .ticker_detail("aaa", DateRange::Week, now, 10)?
@@ -2067,6 +2221,170 @@ mod tests {
                 .is_some_and(|value| (value - 0.1).abs() < f64::EPSILON * 4.0)
         );
         assert!(!detail.starred);
+        Ok(())
+    }
+
+    #[test]
+    fn tile_period_values_share_the_displayed_snapshot_endpoint() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        storage.replace_universe(
+            now.date_naive(),
+            &[company(
+                "AAA",
+                "Alpha",
+                Sector::Technology,
+                300.0,
+                Some(1),
+                now,
+            )],
+        )?;
+        storage.upsert_bars(&[
+            bar("AAA", instant(5), 100.0, 10.0),
+            bar("AAA", now, 110.0, 100.0),
+        ])?;
+        storage.upsert_snapshots(&[snapshot("AAA", 125.0, 120.0, 100.0, now)])?;
+
+        let week = storage.heatmap_tiles(
+            DateRange::Week,
+            SortMode::Gainers,
+            Some(Sector::Technology),
+            false,
+            now,
+        )?;
+        assert_eq!(week[0].price, Some(125.0));
+        assert_eq!(week[0].period_start_price, Some(100.0));
+        assert!(
+            week[0]
+                .period_return
+                .is_some_and(|value| (value - 0.25).abs() < f64::EPSILON * 4.0)
+        );
+        assert_eq!(week[0].absolute_change(), Some(25.0));
+
+        let day = storage.heatmap_tiles(
+            DateRange::Day,
+            SortMode::Gainers,
+            Some(Sector::Technology),
+            false,
+            now,
+        )?;
+        assert_eq!(day[0].price, Some(125.0));
+        assert_eq!(day[0].period_start_price, Some(120.0));
+        assert!(
+            day[0]
+                .period_return
+                .is_some_and(|value| (value - (125.0 / 120.0 - 1.0)).abs() < f64::EPSILON * 4.0)
+        );
+        assert_eq!(day[0].absolute_change(), Some(5.0));
+
+        let detail = storage
+            .ticker_detail("AAA", DateRange::Week, now, 0)?
+            .expect("known company");
+        assert_eq!(detail.period_start_price, Some(100.0));
+        assert_eq!(detail.period_end_price, Some(125.0));
+        assert_eq!(detail.period_end_at, Some(now));
+        assert!(
+            detail
+                .period_return
+                .is_some_and(|value| (value - 0.25).abs() < f64::EPSILON * 4.0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn period_endpoint_uses_the_newer_price_source_and_its_timestamp() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        storage.replace_universe(
+            now.date_naive(),
+            &[company(
+                "AAA",
+                "Alpha",
+                Sector::Technology,
+                300.0,
+                Some(1),
+                now,
+            )],
+        )?;
+        storage.upsert_bars(&[
+            bar("AAA", instant(5), 100.0, 10.0),
+            bar("AAA", now, 110.0, 100.0),
+        ])?;
+        storage.upsert_snapshots(&[snapshot("AAA", 125.0, 120.0, 999.0, instant(12))])?;
+
+        let tile = storage
+            .heatmap_tiles(
+                DateRange::Week,
+                SortMode::Gainers,
+                Some(Sector::Technology),
+                false,
+                now,
+            )?
+            .remove(0);
+        assert_eq!(tile.price, Some(110.0));
+        assert_eq!(tile.period_start_price, Some(100.0));
+        assert!(
+            tile.period_return
+                .is_some_and(|value| (value - 0.1).abs() < f64::EPSILON * 4.0)
+        );
+        assert_eq!(tile.volume, Some(100.0));
+        assert_eq!(tile.updated_at, Some(now));
+        assert!(!tile.stale);
+
+        let detail = storage
+            .ticker_detail("AAA", DateRange::Week, now, 0)?
+            .expect("known company");
+        assert_eq!(detail.period_end_price, Some(110.0));
+        assert_eq!(detail.period_end_at, Some(now));
+        assert!(
+            detail
+                .period_return
+                .is_some_and(|value| (value - 0.1).abs() < f64::EPSILON * 4.0)
+        );
+        let all_detail = storage
+            .ticker_detail("AAA", DateRange::All, now, 0)?
+            .expect("known company");
+        assert_eq!(all_detail.period_start_price, Some(100.0));
+        assert_eq!(all_detail.period_start_at, Some(instant(5)));
+        Ok(())
+    }
+
+    #[test]
+    fn price_less_snapshot_does_not_refresh_an_old_bar_price() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        storage.replace_universe(
+            now.date_naive(),
+            &[company(
+                "AAA",
+                "Alpha",
+                Sector::Technology,
+                300.0,
+                Some(1),
+                now,
+            )],
+        )?;
+        storage.upsert_bars(&[bar("AAA", instant(5), 100.0, 10.0)])?;
+        let mut current_snapshot = snapshot("AAA", 125.0, 120.0, 100.0, now);
+        current_snapshot.price = None;
+        storage.upsert_snapshots(&[current_snapshot])?;
+
+        let tile = storage
+            .heatmap_tiles(
+                DateRange::Week,
+                SortMode::Gainers,
+                Some(Sector::Technology),
+                false,
+                now,
+            )?
+            .remove(0);
+        assert_eq!(tile.price, Some(100.0));
+        assert_eq!(tile.volume, Some(10.0));
+        assert_eq!(tile.updated_at, Some(instant(5)));
+        assert!(tile.stale);
         Ok(())
     }
 
@@ -2089,6 +2407,8 @@ mod tests {
         assert_eq!(tiles[0].company.symbol, "SPY");
         assert_eq!(tiles[0].company.sector, None);
         assert_eq!(tiles[0].price, Some(612.0));
+        assert_eq!(tiles[0].period_start_price, Some(600.0));
+        assert_eq!(tiles[0].absolute_change(), Some(12.0));
         assert!(
             tiles[0]
                 .period_return

@@ -1,6 +1,6 @@
 [package]
 name = "stock-tui"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95"
 description = "A mouse-first terminal stock market heatmap inspired by StockTouch"
@@ -14,6 +14,7 @@ categories = ["command-line-utilities", "visualization"]
 include = [
   "/.editorconfig",
   "/.env.example",
+  "/.github/workflows/release.yml",
   "/CHANGELOG.md",
   "/CODE_OF_CONDUCT.md",
   "/CONTRIBUTING.md",
@@ -30,7 +31,9 @@ include = [
   "/src/**/*.rs",
   "/tests/**/*.rs",
   "/tools/build_sec_catalog.py",
-  "/tools/tests/**",
+  "/tools/release/sign-notarize-macos.sh",
+  "/tools/tests/*.py",
+  "/tools/tests/fixtures/*.json",
 ]
 
 [dependencies]
@@ -67,6 +70,7 @@ tokio = { version = "1.52.3", features = [
 ] }
 tokio-util = { version = "0.7.18", features = ["rt"] }
 toml = "1.0.7"
+toml_edit = "0.25.8"
 tracing = "0.1.44"
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }

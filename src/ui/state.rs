@@ -7,6 +7,7 @@ use crate::{
     benchmarks::MarketBenchmark,
     domain::{Company, DateRange, MarketTile, Sector, SortMode, SyncProgress, TickerDetail},
     palette::Theme,
+    ui::layout::SectorView,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +23,52 @@ pub enum DetailTab {
     Chart,
     Statistics,
     News,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectorMetric {
+    Price,
+    RelativeGain,
+    AbsoluteGain,
+    SectorRelativeGain,
+    MarketCap,
+    Volume,
+}
+
+impl SectorMetric {
+    #[must_use]
+    pub const fn for_sort(sort: SortMode) -> Self {
+        match sort {
+            SortMode::MarketCap => Self::MarketCap,
+            SortMode::Gainers => Self::RelativeGain,
+            SortMode::Volume => Self::Volume,
+            SortMode::Alphabetical => Self::Price,
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Price => "Price",
+            Self::RelativeGain => "Return",
+            Self::AbsoluteGain => "Price change",
+            Self::SectorRelativeGain => "Vs sector",
+            Self::MarketCap => "Market cap",
+            Self::Volume => "Volume",
+        }
+    }
+
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Price => Self::RelativeGain,
+            Self::RelativeGain => Self::AbsoluteGain,
+            Self::AbsoluteGain => Self::SectorRelativeGain,
+            Self::SectorRelativeGain => Self::MarketCap,
+            Self::MarketCap => Self::Volume,
+            Self::Volume => Self::Price,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +94,9 @@ pub enum UiAction {
     CloseOverlay,
     SelectRange(DateRange),
     SelectSort(SortMode),
+    CycleSectorMetric,
+    ToggleSortDirection,
+    ToggleSectorView,
     OpenSector(Sector),
     OpenTicker(String),
     ToggleFavorite(String),
@@ -78,6 +128,9 @@ pub struct UiState {
     pub overlay: Option<Overlay>,
     pub date_range: DateRange,
     pub sort: SortMode,
+    pub sort_descending: bool,
+    pub sector_metric: SectorMetric,
+    pub sector_view: SectorView,
     pub tiles: Vec<MarketTile>,
     pub favorite_tiles: Vec<MarketTile>,
     pub benchmarks: Vec<MarketTile>,
@@ -90,6 +143,7 @@ pub struct UiState {
     pub selected_sector: usize,
     pub selected_ticker: usize,
     pub sector_columns: usize,
+    pub sector_rows: usize,
     pub detail_return_route: Option<Route>,
     pub detail_tab: DetailTab,
     pub selected_news: usize,
@@ -114,6 +168,9 @@ impl Default for UiState {
             overlay: None,
             date_range: DateRange::Day,
             sort: SortMode::MarketCap,
+            sort_descending: true,
+            sector_metric: SectorMetric::MarketCap,
+            sector_view: SectorView::Grid,
             tiles: Vec::new(),
             favorite_tiles: Vec::new(),
             benchmarks: Vec::new(),
@@ -126,6 +183,7 @@ impl Default for UiState {
             selected_sector: 0,
             selected_ticker: 0,
             sector_columns: 10,
+            sector_rows: 10,
             detail_return_route: None,
             detail_tab: DetailTab::Chart,
             selected_news: 0,
@@ -146,6 +204,89 @@ impl Default for UiState {
 }
 
 impl UiState {
+    pub fn select_sort(&mut self, sort: SortMode) {
+        self.sort = sort;
+        self.sort_descending = sort.default_descending();
+        self.sector_metric = SectorMetric::for_sort(sort);
+    }
+
+    pub fn toggle_sort_direction_in_memory(&mut self) {
+        let selected_symbol = self.selected_context_symbol();
+        self.sort_descending = !self.sort_descending;
+        self.reverse_current_tile_order();
+        self.hovered_symbol = None;
+        if let Some(symbol) = selected_symbol {
+            self.restore_context_selection(&symbol);
+        }
+    }
+
+    /// Applies the selected direction after loading tiles in a sort mode's natural order.
+    pub fn orient_default_ordered_tiles(&mut self) {
+        if self.sort_descending != self.sort.default_descending() {
+            self.reverse_current_tile_order();
+        }
+    }
+
+    fn reverse_current_tile_order(&mut self) {
+        for sector in Sector::ALL
+            .into_iter()
+            .map(Some)
+            .chain(std::iter::once(None))
+        {
+            let indices = self
+                .tiles
+                .iter()
+                .enumerate()
+                .filter_map(|(index, tile)| (tile.company.sector == sector).then_some(index))
+                .take(100)
+                .collect::<Vec<_>>();
+            for offset in 0..indices.len() / 2 {
+                self.tiles
+                    .swap(indices[offset], indices[indices.len() - 1 - offset]);
+            }
+        }
+        let visible_favorites = self.favorite_tiles.len().min(100);
+        self.favorite_tiles[..visible_favorites].reverse();
+    }
+
+    fn selected_context_symbol(&self) -> Option<String> {
+        match &self.route {
+            Route::Sector(_) | Route::Favorites => self
+                .visible_tiles()
+                .get(self.selected_ticker)
+                .map(|tile| tile.company.symbol.clone()),
+            Route::Ticker(symbol) => Some(symbol.clone()),
+            Route::Overview => None,
+        }
+    }
+
+    fn restore_context_selection(&mut self, symbol: &str) {
+        let index = match self.route.clone() {
+            Route::Sector(_) | Route::Favorites => self
+                .visible_tiles()
+                .iter()
+                .position(|tile| tile.company.symbol == symbol),
+            Route::Ticker(_) => match self.detail_context_route() {
+                Some(Route::Sector(sector)) => self
+                    .tiles
+                    .iter()
+                    .filter(|tile| tile.company.sector == Some(sector))
+                    .take(100)
+                    .position(|tile| tile.company.symbol == symbol),
+                Some(Route::Favorites) => self
+                    .favorite_tiles
+                    .iter()
+                    .take(100)
+                    .position(|tile| tile.company.symbol == symbol),
+                Some(Route::Overview) | Some(Route::Ticker(_)) | None => None,
+            },
+            Route::Overview => None,
+        };
+        if let Some(index) = index {
+            self.selected_ticker = index;
+        }
+    }
+
     pub fn begin_frame(&mut self) {
         self.hit_targets.clear();
         self.chart_rect = None;

@@ -1,13 +1,19 @@
 use std::{
     env, fmt, fs,
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     time::Duration,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
 use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use toml_edit::{DocumentMut, value};
 
 use crate::{cli::Cli, providers::stock_api::validated_bearer_token};
 
@@ -15,7 +21,9 @@ const DEFAULT_DATA_URL: &str = "https://data.alpaca.markets";
 const DEFAULT_TRADING_URL: &str = "https://paper-api.alpaca.markets";
 pub const DEFAULT_STOCK_API_URL: &str = "https://stock.chatcode.dev/api";
 pub const DEFAULT_CATALOG_URL: &str = "https://stock.chatcode.dev/catalog/sec-catalog.json";
+pub const CONFIG_FILE_NAME: &str = "config.toml";
 pub const CREDENTIALS_FILE_NAME: &str = "credentials.env";
+const MAX_ALPACA_CREDENTIAL_LENGTH: usize = 4_096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
@@ -73,6 +81,7 @@ impl fmt::Debug for Credentials {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialSource {
     Environment,
+    ConfigFile,
     StoredFile,
     OnboardingSession,
 }
@@ -82,7 +91,8 @@ impl CredentialSource {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Environment => "environment",
-            Self::StoredFile => "credentials file",
+            Self::ConfigFile => "config.toml",
+            Self::StoredFile => "legacy credentials file",
             Self::OnboardingSession => "onboarding session",
         }
     }
@@ -177,6 +187,8 @@ struct ProviderConfigs {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct AlpacaFileConfig {
+    api_key: Option<toml::Value>,
+    api_secret: Option<toml::Value>,
     feed: Option<String>,
     request_limit_per_minute: Option<u32>,
     snapshot_batch_size: Option<usize>,
@@ -209,7 +221,8 @@ impl Settings {
         fs::create_dir_all(&cache_dir).context("could not create cache directory")?;
         fs::create_dir_all(&data_dir).context("could not create application data directory")?;
 
-        let file = read_file_config(&config_dir.join("config.toml"))?;
+        let config_path = config_dir.join(CONFIG_FILE_NAME);
+        let file = read_file_config(&config_path)?;
         let environment_provider = if cli.provider.is_none() {
             environment_value("STOCK_TUI_PROVIDER")?
         } else {
@@ -230,21 +243,29 @@ impl Settings {
                 incomplete: false,
             }
         };
+        let file_credentials = if resolve_credentials {
+            alpaca_credentials_after_environment(&environment, &file.providers.alpaca)?
+        } else {
+            None
+        };
         let (credentials, credential_source) = if resolve_credentials {
-            if let Some(credentials) = environment.credentials {
-                (Some(credentials), Some(CredentialSource::Environment))
-            } else {
-                match crate::credentials::load(&config_dir.join(CREDENTIALS_FILE_NAME)) {
-                    Ok(Some(credentials)) => {
-                        (Some(credentials), Some(CredentialSource::StoredFile))
+            let stored_credentials =
+                if environment.credentials.is_none() && file_credentials.is_none() {
+                    match crate::credentials::load(&config_dir.join(CREDENTIALS_FILE_NAME)) {
+                        Ok(credentials) => credentials,
+                        Err(error) => {
+                            eprintln!("Ignoring unusable legacy Alpaca credentials: {error}");
+                            None
+                        }
                     }
-                    Ok(None) => (None, None),
-                    Err(error) => {
-                        eprintln!("Ignoring unusable stored Alpaca credentials: {error}");
-                        (None, None)
-                    }
-                }
-            }
+                } else {
+                    None
+                };
+            select_alpaca_credentials(
+                environment.credentials,
+                file_credentials,
+                stored_credentials,
+            )
         } else {
             (None, None)
         };
@@ -391,10 +412,129 @@ impl Settings {
         self.config_dir.join(CREDENTIALS_FILE_NAME)
     }
 
+    #[must_use]
+    pub fn config_path(&self) -> PathBuf {
+        self.config_dir.join(CONFIG_FILE_NAME)
+    }
+
+    pub fn config_credentials(&self) -> Result<Option<Credentials>> {
+        let file = read_file_config(&self.config_path())?;
+        alpaca_credentials_from_file(&file.providers.alpaca)
+    }
+
+    pub fn save_credentials_to_config(&self, credentials: &Credentials) -> Result<()> {
+        save_alpaca_credentials(&self.config_path(), credentials)
+    }
+
     pub fn set_credentials(&mut self, credentials: Credentials, source: CredentialSource) {
         self.credentials = Some(credentials);
         self.credential_source = Some(source);
     }
+}
+
+fn alpaca_credentials_from_file(config: &AlpacaFileConfig) -> Result<Option<Credentials>> {
+    let key = alpaca_credential_text(config.api_key.as_ref())?;
+    let secret = alpaca_credential_text(config.api_secret.as_ref())?;
+    match (key, secret) {
+        (None, None) => Ok(None),
+        (Some(key), Some(secret)) => Ok(Some(Credentials {
+            key: SecretString::from(key.to_owned()),
+            secret: SecretString::from(secret.to_owned()),
+        })),
+        _ => bail!(
+            "providers.alpaca.api_key and providers.alpaca.api_secret must be configured together"
+        ),
+    }
+}
+
+fn alpaca_credential_text(value: Option<&toml::Value>) -> Result<Option<&str>> {
+    match value {
+        None => Ok(None),
+        Some(value) => match value.as_str() {
+            Some("") => Ok(None),
+            Some(value) if valid_alpaca_credential(value) => Ok(Some(value)),
+            _ => bail!("invalid Alpaca credential value in providers.alpaca (values redacted)"),
+        },
+    }
+}
+
+fn alpaca_credentials_after_environment(
+    environment: &EnvironmentCredentials,
+    config: &AlpacaFileConfig,
+) -> Result<Option<Credentials>> {
+    if environment.credentials.is_some() {
+        Ok(None)
+    } else {
+        alpaca_credentials_from_file(config)
+    }
+}
+
+fn valid_alpaca_credential(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_ALPACA_CREDENTIAL_LENGTH
+        && !value
+            .chars()
+            .any(|character| matches!(character, '\0' | '\r' | '\n'))
+}
+
+fn select_alpaca_credentials(
+    environment: Option<Credentials>,
+    file: Option<Credentials>,
+    stored: Option<Credentials>,
+) -> (Option<Credentials>, Option<CredentialSource>) {
+    environment
+        .map(|credentials| (Some(credentials), Some(CredentialSource::Environment)))
+        .or_else(|| file.map(|credentials| (Some(credentials), Some(CredentialSource::ConfigFile))))
+        .or_else(|| {
+            stored.map(|credentials| (Some(credentials), Some(CredentialSource::StoredFile)))
+        })
+        .unwrap_or((None, None))
+}
+
+fn save_alpaca_credentials(path: &Path, credentials: &Credentials) -> Result<()> {
+    let key = credentials.key.expose_secret();
+    let secret = credentials.secret.expose_secret();
+    if !valid_alpaca_credential(key) || !valid_alpaca_credential(secret) {
+        bail!("could not store invalid Alpaca credentials (values redacted)");
+    }
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(_) => bail!("could not read existing configuration before saving credentials"),
+    };
+    let mut document = if contents.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        contents
+            .parse::<DocumentMut>()
+            .map_err(|_| anyhow::anyhow!("could not update invalid configuration"))?
+    };
+    document["providers"]["alpaca"]["api_key"] = value(key);
+    document["providers"]["alpaca"]["api_secret"] = value(secret);
+    let rendered = document.to_string();
+    toml::from_str::<FileConfig>(&rendered)
+        .map_err(|_| anyhow::anyhow!("could not validate updated configuration"))?;
+    write_private_config(path, rendered.as_bytes())
+}
+
+fn write_private_config(path: &Path, contents: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).context("could not create configuration directory")?;
+    }
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(path)
+        .context("could not open configuration for writing")?;
+    #[cfg(unix)]
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .context("could not restrict configuration permissions")?;
+    file.write_all(contents)
+        .and_then(|()| file.sync_all())
+        .context("could not write configuration")?;
+    Ok(())
 }
 
 fn read_file_config(path: &Path) -> Result<FileConfig> {
@@ -567,6 +707,13 @@ fn default_database_name(demo: bool) -> &'static str {
 mod tests {
     use super::*;
 
+    fn credentials(key: &str, secret: &str) -> Credentials {
+        Credentials {
+            key: SecretString::from(key.to_owned()),
+            secret: SecretString::from(secret.to_owned()),
+        }
+    }
+
     #[test]
     fn debug_never_exposes_credentials() {
         let credentials = Credentials {
@@ -686,6 +833,8 @@ provider = "alpaca"
 catalog_refresh_hours = 24
 
 [providers.alpaca]
+api_key = "toml-key"
+api_secret = "toml-secret"
 feed = "delayed_sip"
 history_batch_size = 75
 
@@ -701,6 +850,11 @@ token = "private-development-token"
         assert_eq!(file.catalog_refresh_hours, Some(24));
         assert_eq!(file.providers.alpaca.feed.as_deref(), Some("delayed_sip"));
         assert_eq!(file.providers.alpaca.history_batch_size, Some(75));
+        let credentials =
+            alpaca_credentials_from_file(&file.providers.alpaca).expect("TOML credentials");
+        let credentials = credentials.expect("complete TOML pair");
+        assert_eq!(credentials.key.expose_secret(), "toml-key");
+        assert_eq!(credentials.secret.expose_secret(), "toml-secret");
         assert_eq!(
             file.providers.stock_api.base_url.as_deref(),
             Some("http://127.0.0.1:8787")
@@ -724,6 +878,179 @@ token = "private-development-token"
     fn example_configuration_matches_the_strict_schema() {
         toml::from_str::<FileConfig>(include_str!("../config.example.toml"))
             .expect("config.example.toml");
+    }
+
+    #[test]
+    fn alpaca_credentials_follow_environment_toml_legacy_precedence() {
+        use secrecy::ExposeSecret;
+
+        let (selected, source) = select_alpaca_credentials(
+            Some(credentials("environment-key", "environment-secret")),
+            Some(credentials("toml-key", "toml-secret")),
+            Some(credentials("legacy-key", "legacy-secret")),
+        );
+        assert_eq!(source, Some(CredentialSource::Environment));
+        assert_eq!(
+            selected
+                .as_ref()
+                .expect("environment credentials")
+                .key
+                .expose_secret(),
+            "environment-key"
+        );
+
+        let (selected, source) = select_alpaca_credentials(
+            None,
+            Some(credentials("toml-key", "toml-secret")),
+            Some(credentials("legacy-key", "legacy-secret")),
+        );
+        assert_eq!(source, Some(CredentialSource::ConfigFile));
+        assert_eq!(
+            selected
+                .as_ref()
+                .expect("TOML credentials")
+                .secret
+                .expose_secret(),
+            "toml-secret"
+        );
+
+        let (selected, source) =
+            select_alpaca_credentials(None, None, Some(credentials("legacy-key", "legacy-secret")));
+        assert_eq!(source, Some(CredentialSource::StoredFile));
+        assert_eq!(
+            selected
+                .as_ref()
+                .expect("legacy credentials")
+                .key
+                .expose_secret(),
+            "legacy-key"
+        );
+    }
+
+    #[test]
+    fn incomplete_or_invalid_toml_credentials_are_redacted() {
+        let incomplete = AlpacaFileConfig {
+            api_key: Some(toml::Value::String("do-not-echo-key".to_owned())),
+            ..AlpacaFileConfig::default()
+        };
+        let error = alpaca_credentials_from_file(&incomplete)
+            .expect_err("incomplete TOML credentials must fail");
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("must be configured together"));
+        assert!(!rendered.contains("do-not-echo-key"));
+
+        let invalid_secret = "do-not-echo-secret\nnext-line";
+        let invalid = AlpacaFileConfig {
+            api_key: Some(toml::Value::String("valid-key".to_owned())),
+            api_secret: Some(toml::Value::String(invalid_secret.to_owned())),
+            ..AlpacaFileConfig::default()
+        };
+        let error =
+            alpaca_credentials_from_file(&invalid).expect_err("invalid TOML credentials must fail");
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("values redacted"));
+        assert!(!rendered.contains("valid-key"));
+        assert!(!rendered.contains(invalid_secret));
+    }
+
+    #[test]
+    fn complete_environment_pair_skips_lower_priority_toml_pair_validation() {
+        let environment = EnvironmentCredentials {
+            credentials: Some(credentials("environment-key", "environment-secret")),
+            incomplete: false,
+        };
+        let incomplete_file = AlpacaFileConfig {
+            api_key: Some(toml::Value::String("lower-priority-key".to_owned())),
+            ..AlpacaFileConfig::default()
+        };
+
+        assert!(
+            alpaca_credentials_after_environment(&environment, &incomplete_file)
+                .expect("lower-priority pair is ignored")
+                .is_none()
+        );
+        let absent_environment = EnvironmentCredentials {
+            credentials: None,
+            incomplete: false,
+        };
+        assert!(
+            alpaca_credentials_after_environment(&absent_environment, &incomplete_file).is_err()
+        );
+
+        let malformed_file = AlpacaFileConfig {
+            api_key: Some(toml::Value::Integer(123)),
+            api_secret: Some(toml::Value::String("lower-priority-secret".to_owned())),
+            ..AlpacaFileConfig::default()
+        };
+        assert!(
+            alpaca_credentials_after_environment(&environment, &malformed_file)
+                .expect("malformed lower-priority pair is ignored")
+                .is_none()
+        );
+        assert!(
+            alpaca_credentials_after_environment(&absent_environment, &malformed_file).is_err()
+        );
+    }
+
+    #[test]
+    fn saving_alpaca_credentials_preserves_toml_comments_and_settings() {
+        use secrecy::ExposeSecret;
+
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = temp.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &path,
+            r#"# keep this operator comment
+provider = "alpaca"
+
+[providers.alpaca]
+feed = "delayed_sip" # keep this feed comment
+
+[providers.stock_api]
+base_url = "http://127.0.0.1:8787"
+"#,
+        )
+        .expect("existing configuration");
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            .expect("loose initial permissions");
+
+        save_alpaca_credentials(&path, &credentials("persisted-key", "persisted-secret"))
+            .expect("save TOML credentials");
+
+        let rendered = fs::read_to_string(&path).expect("updated configuration");
+        assert!(rendered.contains("# keep this operator comment"));
+        assert!(rendered.contains("feed = \"delayed_sip\" # keep this feed comment"));
+        assert!(rendered.contains("base_url = \"http://127.0.0.1:8787\""));
+        let file = read_file_config(&path).expect("strict updated configuration");
+        let stored = alpaca_credentials_from_file(&file.providers.alpaca)
+            .expect("stored pair")
+            .expect("complete pair");
+        assert_eq!(stored.key.expose_secret(), "persisted-key");
+        assert_eq!(stored.secret.expose_secret(), "persisted-secret");
+
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(&path)
+                .expect("configuration metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
+    fn saving_toml_credentials_never_echoes_invalid_values() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = temp.path().join(CONFIG_FILE_NAME);
+        let secret = "do-not-echo-this-secret\nnext-line";
+        let error = save_alpaca_credentials(&path, &credentials("key", secret))
+            .expect_err("invalid credentials must not be written");
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("values redacted"));
+        assert!(!rendered.contains(secret));
+        assert!(!path.exists());
     }
 
     #[test]

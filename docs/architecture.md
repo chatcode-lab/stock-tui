@@ -36,8 +36,8 @@ the relevant cached view. The renderer never performs HTTP requests.
 | Module | Responsibility |
 | --- | --- |
 | `cli` | Parses command-line flags and environment-backed overrides with Clap. |
-| `config` | Resolves project directories, `.env`, the managed credential file, TOML, environment, defaults, and redacted credentials. |
-| `credentials` | Reads and writes the onboarding-managed dotenv pair with owner-only Unix permissions. |
+| `config` | Resolves project directories, `.env`, TOML, environment, defaults, and redacted credentials; it updates onboarding credentials in TOML with owner-only Unix permissions. |
+| `credentials` | Reads the legacy dotenv credential file as a lower-precedence compatibility fallback. |
 | `onboarding` | Offers open/copy/skip registration actions or demo mode, collects hidden input, validates credentials, and starts the selected mode. |
 | `logging` | Writes non-ANSI daily tracing logs below the platform cache directory. |
 | `domain` | Defines sectors, date ranges, sort modes, companies, bars, snapshots, news, tiles, and sync state. |
@@ -55,10 +55,11 @@ the relevant cached view. The renderer never performs HTTP requests.
 ## Startup Paths
 
 Settings and project directories are resolved before the alternate screen is
-entered. A normal online launch validates configured credentials and, when
-needed, completes onboarding before storage is opened or synchronization can
-start. Storage then opens, enables foreign keys and WAL, and applies forward
-schema migrations.
+entered. A normal online launch validates the selected provider's
+configuration. Alpaca launches validate configured credentials and complete
+onboarding when needed; `stock-api` launches do not enter Alpaca onboarding.
+Storage then opens, enables foreign keys and WAL, and applies forward schema
+migrations.
 
 ### Demo Mode
 
@@ -78,9 +79,12 @@ deterministic demo data rather than a factual quote.
 
 ### Live Mode
 
-Live mode requires a complete pair from the environment, a working-directory
-dotenv file, or the onboarding-managed file. A missing pair starts onboarding;
-it does not manufacture live data or silently switch to demo.
+With Alpaca selected, live mode requires a complete pair from the environment,
+a working-directory dotenv file, `[providers.alpaca]` in the platform
+`config.toml`, or the legacy credential-file fallback. A missing pair starts
+onboarding; it does not manufacture live data or silently switch to demo.
+`stock-api` uses its own endpoint and optional token configuration and does not
+require Alpaca credentials.
 
 The runtime first resolves the newest valid local SEC-derived catalog and
 renders without waiting for a network request. Unless `--offline` is set, a
@@ -161,8 +165,10 @@ for terminals that transmit those modifiers.
 ## Responsive Rendering
 
 The minimum coherent viewport is 60x20. Smaller viewports render only a resize
-message. At 60x20 and above, the layout reserves a two-row header, a right
-action rail, and a one-row status footer.
+message. At exactly 60x20 the secondary header status row collapses so every
+overview sector retains five paired heatmap rows. Larger viewports reserve a
+two-row header; every supported size keeps a right action rail and a one-row
+status footer.
 
 Full mode begins at 120x36. It uses a 15-column rail and a split detail view.
 Compact mode uses a 12-column rail and replaces the detail split with Chart,
@@ -172,7 +178,10 @@ The overview always has three columns and three rows. Panels and ticker cells
 use uniform dimensions; indivisible terminal rows and columns become centered
 outer padding. A sector panel with ten body rows draws its full 10x10 tile
 matrix. A shorter panel draws two ticker colors per terminal cell with the
-upper-half block character, retaining all 100 signals in five rows. Sector
+upper-half block character, retaining all 100 signals in five rows. Grid maps
+rank directly to row-major cells; Spiral maps rank center-out clockwise. The
+compact renderer applies the inverse mapping before combining logical rows, so
+both presentations keep the same order at every supported height. Sector
 detail uses ten columns when possible and otherwise selects between three and
 ten columns from the available width. The three benchmark-proxy footer cells
 reuse the overview's centered three-column geometry and stop at the content
@@ -197,20 +206,29 @@ of a full-block glyph, avoiding line-height seams through the solid portions.
 
 ## Heatmap Semantics
 
-For `1D`, the preferred return is snapshot price divided by previous close.
-For longer ranges, storage chooses the best cached timeframe and compares the
-latest close to the nearest close at the period cutoff. The fallback order is
-range-specific, so the UI remains useful while finer history is still loading.
-Timeframe selection probes the indexed `(symbol, timeframe)` key in fallback
-order instead of enumerating distinct timeframes across the full bars history
-on every range change.
+Storage selects the newest valid price endpoint by timestamp from the current
+snapshot and the latest cached bar. For `1D`, a selected snapshot endpoint uses
+its previous close when available; otherwise, and for longer ranges, the
+baseline is the nearest cached close at the exact period cutoff. The fallback
+timeframe order is range-specific, so the UI remains useful while finer history
+is still loading. Timeframe selection probes the indexed `(symbol, timeframe)`
+key instead of enumerating distinct timeframes across the full bars history on
+every range change. Detail price plots reconcile the cutoff baseline and
+selected current endpoint with the cached close series. The volume plot
+continues to use only provider OHLCV bars, so those price-only boundary points
+cannot fabricate volume. Heatmap volume values follow the same selected
+snapshot or bar observation as the displayed price and freshness timestamp.
 
-The color extent is the 90th percentile of absolute returns across loaded
-tiles, with a 0.5% floor for `1D` and a 1% floor for longer ranges. Values
-outside that extent saturate at the brightest palette endpoint. Sector headers
-weight each available return by estimated market cap, falling back to numeric
-SEC public float for proxy-only issuers and equal weight only when neither size
-is available.
+Except when ordering by Volume, the color extent is the 90th percentile of
+absolute returns across loaded tiles, with a 0.5% floor for `1D` and a 1% floor
+for longer ranges. Values outside that extent saturate at the brightest
+red/green palette endpoint. Volume ordering builds an independent log scale
+for each sector from its 10th through 90th percentile. In color themes, hue
+distinguishes sectors and intensity identifies volume within that sector;
+monochrome intentionally retains only the intensity signal. Missing volume
+remains neutral. Sector headers always report return and weight each available
+return by estimated market cap, falling back to numeric SEC public float for
+proxy-only issuers and equal weight only when neither size is available.
 
 ## Storage Boundary
 
@@ -272,12 +290,15 @@ cache retention, attribution, and redistribution restrictions. See
 
 ## Security And Privacy
 
-Credentials enter through hidden onboarding input or environment variables
-(including a local dotenv file) and are held in secret wrappers. Onboarding
-stores its validated pair as raw dotenv values below `<config_dir>`; Unix
-permissions are forced to `0600`. Debug output and provider errors redact known
-credential values. Credentials are not stored in SQLite, TOML, logs, or
-rendering buffers.
+Credentials enter through hidden onboarding input, environment variables
+(including a local dotenv file), `[providers.alpaca]` in `config.toml`, or a
+legacy credential file, and are held in secret wrappers. Onboarding preserves
+existing TOML comments and settings when it stores the validated pair in
+`<config_dir>/config.toml`; Unix permissions are forced to `0600` on write.
+Debug output and provider errors redact known credential values before
+truncation. The `stock-api` adapter also removes terminal control characters
+from remote errors before they reach status or logs. Credentials are not stored
+in SQLite, logs, or rendering buffers.
 
 Daily tracing logs are written under `<cache_dir>/logs`. Logs are designed not
 to contain credentials, but provider errors and user activity can still be

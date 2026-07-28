@@ -42,9 +42,10 @@ are simulated.
   per sector.
 - Shows S&P 500, Dow, and Nasdaq-100 performance through the liquid `SPY`,
   `DIA`, and `QQQ` ETF proxies in the overview footer.
-- Colors each ticker from bright red through neutral gray to bright green from
-  its return over `1D`, `1W`, `1M`, `3M`, `6M`, `1Y`, `2Y`, `5Y`, `10Y`, or
-  all available history.
+- Colors tickers by period return in every ordering except Volume: losses run
+  bright red, neutral returns gray, and gains bright green. Volume ordering
+  instead distinguishes sectors by stable hues in color themes and uses
+  brightness for sector-relative volume. Monochrome mode uses brightness only.
 - Reorders tickers by estimated market cap with SEC public-float fallback,
   gain, volume, or symbol.
 - Provides responsive sector grids and a ticker detail screen with a
@@ -64,11 +65,12 @@ are simulated.
   SEC-catalog issuer identities plus three benchmark ETF identities, with
   deterministic, clearly labeled simulated market values.
 
-The heat scale is symmetric around zero and capped using the visible market's
-90th-percentile absolute move. This keeps one extreme ticker from flattening
-the rest of the palette. Missing or zero-return data appears neutral; data more
-than 72 hours old keeps a contrast-aware foreground and is underlined as a
-freshness hint.
+For every ordering except Volume, the return heat scale is symmetric around
+zero and capped using the visible market's 90th-percentile absolute move.
+Volume uses a separate log scale within each sector, bounded by its 10th and
+90th percentiles, so exceptional prints do not flatten brightness. Missing
+return or volume data appears neutral; data more than 72 hours old keeps a
+contrast-aware foreground and is underlined as a freshness hint.
 
 ## Why Rust
 
@@ -102,11 +104,10 @@ When no credentials are configured, `stock-tui` shows Alpaca's registration
 URL as a highlighted OSC 8 terminal link and waits: press `Enter` to open it,
 `c` to copy it through the terminal clipboard, `d` to start demo mode, or `Esc`
 to continue directly to credential entry. It accepts the key ID and secret
-through hidden terminal input, validates the pair, and stores it in
-`credentials.env` below the platform configuration directory. Existing
-environment or working-directory `.env` values skip onboarding. This managed
-credential file does not select a provider or override `provider = "stock-api"`
-in the platform `config.toml`.
+through hidden terminal input, validates the pair, and stores it under
+`[providers.alpaca]` in the platform `config.toml`. Existing environment or
+working-directory `.env` values skip onboarding. Alpaca credentials never
+select a provider or override `provider = "stock-api"`.
 
 Use the simulated market explicitly when testing without provider data:
 
@@ -144,13 +145,20 @@ data plan; no funded brokerage account is required. To configure it:
    immediately: Alpaca displays it only once, and regenerating a pair
    invalidates the previous credentials.
 4. Launch `stock-tui` and enter both values when prompted. Input is not echoed,
-   and the pair is validated before it is stored. Alternatively, put both
-   values in the process environment or in a private `.env` file in the
-   directory from which `stock-tui` is launched:
+   and the pair is validated before it is stored in the platform
+   `config.toml`. Alternatively, put both values in the process environment,
+   in a private `.env` file in the directory from which `stock-tui` is
+   launched, or under `[providers.alpaca]` in that platform file:
 
 ```dotenv
 ALPACA_API_KEY=your-own-key-id
 ALPACA_API_SECRET=your-own-secret
+```
+
+```toml
+[providers.alpaca]
+api_key = "your-own-key-id"
+api_secret = "your-own-secret"
 ```
 
 For a source checkout, `.env.example` remains a ready-to-fill override:
@@ -172,10 +180,13 @@ For a prebuilt binary, run `stock-tui` from the private directory containing
 `.env`, or export the variables in the launching shell. The dotenv loader
 searches the current directory and its parents; it does not automatically
 search beside an installed executable. Without either override, onboarding
-uses `<config_dir>/credentials.env`; find the exact directory with
-`stock-tui --print-config`. The app reads asset metadata from Alpaca's paper
-endpoint but never submits orders. If your credentials belong to another
-Alpaca environment, set `STOCK_TUI_TRADING_URL` to its matching HTTPS base URL.
+updates `<config_dir>/config.toml`; find the exact directory with
+`stock-tui --print-config` and keep a populated file private. Releases before
+this storage change may have created `<config_dir>/credentials.env`; it remains
+a read-only fallback until the pair is saved into TOML. The app reads asset
+metadata from Alpaca's paper endpoint but never submits orders. If your
+credentials belong to another Alpaca environment, set
+`STOCK_TUI_TRADING_URL` to its matching HTTPS base URL.
 
 The default `iex` feed works with Alpaca's Basic plan. See
 [Data Providers](docs/data-providers.md) before selecting `sip` or
@@ -307,9 +318,14 @@ news row can be clicked with the left mouse button.
 | `Space` | Open the next sector or ticker, wrapping at either end; insert a space in Search |
 | `/` | Search cached companies by ticker or name |
 | `s` | Open ticker ordering |
+| `i` | Cycle the cell value in Sector and Starred views: price, relative gain, absolute gain, sector-relative gain, market cap, or volume |
+| `o` | Reverse ticker ordering in Overview, Sector, or Starred views |
+| `v` | Toggle Overview, Sector, and Starred heatmaps between grid and center-out clockwise spiral |
 | `F` | Open starred tickers |
 | `f` | Star or unstar the focused ticker |
 | `[` / `]` | Previous / next date range |
+| `=` or `+` | Zoom in one step to the next shorter date range |
+| `-` | Zoom out one step to the next longer date range |
 | `1` through `9` | Select `1D` through `10Y` directly |
 | `0` | Select all available history |
 | `g`, then `c s h e t f i m u` | Open Consumer, Services, Healthcare, Energy, Technology, Financial, Industrial, Materials, or Utilities |
@@ -325,6 +341,15 @@ Up/Down (or `k`/`j`) selects the related-news row; `Enter` opens it.
 `Backspace` and `Space` open the previous or next ticker in the originating
 sector, starred list, or benchmark order while preserving the selected range
 and ordering.
+
+Sector and Starred cells show the ticker plus one selected value. Choosing an
+ordering also selects its natural default value: estimated market cap,
+relative gain, volume, or price for alphabetical order. `i` then cycles the
+six available values independently. `o` reverses ticker order in Overview,
+Sector, and Starred views. `v` applies Grid or Spiral placement to the nested
+Overview sector heatmaps and the expanded Sector/Starred heatmaps. In
+ticker-selectable views, mouse targets and arrow-key navigation follow the
+visible layout; Overview input remains sector-level.
 
 The `g` sector prefix applies only to the immediately following key. While it
 is armed, `Esc` or `Backspace` cancels it without navigating; any other
@@ -348,15 +373,19 @@ transport.
 - Below 60x20, the app shows a resize prompt instead of drawing overlapping
   content.
 - From 60x20, compact mode keeps the action rail and adapts the number of
-  sector columns to available width.
+  sector columns to available width. At the exact minimum, the secondary
+  header row collapses so every overview sector retains all five paired rows.
 - At 120x36 and above, ticker detail becomes a split workspace with chart and
   description on the left and statistics and news on the right.
 - The overview always preserves the 3x3 sector model. Short terminals compress
   each 10x10 sector into paired half-block rows so all 100 color signals remain
-  visible.
+  visible. Grid and Spiral placement is preserved in both renderings.
 - Sector panels and ticker tiles use one fixed cell size at a given viewport.
   Any indivisible rows or columns become balanced outer padding instead of
   stretching selected tiles.
+- Sector tiles vertically center their ticker and selected value. Starred
+  tiles use a thin frame when the cell is large enough and retain a compact
+  star marker when it is not.
 
 Terminals differ in their handling of mouse motion, Braille/half-block glyphs,
 OSC 8 links, OSC 52 clipboard access, and RGB color. `NO_COLOR=1 stock-tui`

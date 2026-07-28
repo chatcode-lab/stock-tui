@@ -2,6 +2,8 @@ use std::{env, f64};
 
 use ratatui::style::Color;
 
+use crate::domain::Sector;
+
 pub const CANVAS: Color = Color::Rgb(7, 9, 13);
 pub const PANEL: Color = Color::Rgb(15, 19, 25);
 pub const PANEL_ALT: Color = Color::Rgb(20, 25, 32);
@@ -46,6 +48,33 @@ const MONO_STOPS: [(u8, u8, u8); 9] = [
     (84, 87, 93),
     (94, 97, 103),
 ];
+
+const DEFAULT_SECTOR_HUES: [(u8, u8, u8); 9] = [
+    (255, 72, 166),
+    (65, 148, 255),
+    (203, 72, 255),
+    (75, 111, 244),
+    (115, 226, 54),
+    (45, 214, 190),
+    (255, 123, 48),
+    (255, 82, 67),
+    (255, 187, 52),
+];
+
+const COLORBLIND_SECTOR_HUES: [(u8, u8, u8); 9] = [
+    (230, 159, 0),
+    (86, 180, 233),
+    (204, 121, 167),
+    (240, 228, 66),
+    (0, 114, 178),
+    (0, 158, 115),
+    (213, 94, 0),
+    (148, 103, 189),
+    (170, 175, 180),
+];
+
+const VOLUME_DARK_TEXT: Color = Color::Rgb(0, 0, 0);
+const VOLUME_BRIGHT_TEXT: Color = Color::Rgb(255, 255, 255);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Theme {
@@ -141,6 +170,79 @@ impl HeatScale {
     }
 }
 
+/// Sector-aware color scale for volume views.
+///
+/// Volumes are compared in log space between the 10th and 90th percentiles, so
+/// a small number of exceptional prints cannot flatten the rest of the view.
+#[derive(Debug, Clone, Copy)]
+pub struct VolumeScale {
+    lower_log: f64,
+    upper_log: f64,
+    theme: Theme,
+}
+
+impl VolumeScale {
+    #[must_use]
+    pub fn from_values(values: impl Iterator<Item = Option<f64>>, theme: Theme) -> Self {
+        let mut logarithms: Vec<f64> = values
+            .flatten()
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .map(f64::ln_1p)
+            .collect();
+        logarithms.sort_by(f64::total_cmp);
+
+        let mut lower_log = percentile(&logarithms, 0.10).unwrap_or(0.0);
+        let mut upper_log = percentile(&logarithms, 0.90).unwrap_or(1.0);
+        if upper_log - lower_log <= f64::EPSILON {
+            lower_log = 0.0;
+            upper_log = upper_log.max(1.0);
+        }
+
+        Self {
+            lower_log,
+            upper_log,
+            theme,
+        }
+    }
+
+    #[must_use]
+    pub fn normalized(self, volume: Option<f64>) -> f64 {
+        let Some(volume) = volume.filter(|value| value.is_finite() && *value >= 0.0) else {
+            return 0.0;
+        };
+        ((volume.ln_1p() - self.lower_log) / (self.upper_log - self.lower_log)).clamp(0.0, 1.0)
+    }
+
+    #[must_use]
+    pub fn color(self, sector: Option<Sector>, volume: Option<f64>) -> Color {
+        let intensity = self.normalized(volume);
+        let (dark, bright) = volume_stops(self.theme, sector);
+        let (red, green, blue) = mix(dark, bright, intensity);
+        Color::Rgb(red, green, blue)
+    }
+
+    #[must_use]
+    pub fn text_color(self, sector: Option<Sector>, volume: Option<f64>) -> Color {
+        readable_text_color(self.color(sector, volume))
+    }
+
+    #[must_use]
+    pub fn focus_color(self, sector: Option<Sector>, volume: Option<f64>) -> Color {
+        let background = self.color(sector, volume);
+        let accent = [CYAN, AMBER]
+            .into_iter()
+            .max_by(|left, right| {
+                contrast_ratio(background, *left).total_cmp(&contrast_ratio(background, *right))
+            })
+            .unwrap_or(CYAN);
+        if contrast_ratio(background, accent) >= 4.5 {
+            accent
+        } else {
+            readable_text_color(background)
+        }
+    }
+}
+
 #[must_use]
 pub fn detail_tint(value: Option<f64>, theme: Theme) -> Color {
     let heat = HeatScale::from_values(std::iter::once(value), 0.02, theme).color(value);
@@ -149,6 +251,50 @@ pub fn detail_tint(value: Option<f64>, theme: Theme) -> Color {
     };
     let (red, green, blue) = mix((14, 17, 22), (red, green, blue), 0.22);
     Color::Rgb(red, green, blue)
+}
+
+fn percentile(sorted: &[f64], percentile: f64) -> Option<f64> {
+    let last = sorted.len().checked_sub(1)?;
+    let index = (last as f64 * percentile.clamp(0.0, 1.0)).round() as usize;
+    sorted.get(index).copied()
+}
+
+fn volume_stops(theme: Theme, sector: Option<Sector>) -> ((u8, u8, u8), (u8, u8, u8)) {
+    if theme == Theme::Monochrome {
+        return ((32, 36, 43), (160, 166, 176));
+    }
+    let hues = match theme {
+        Theme::Default => DEFAULT_SECTOR_HUES,
+        Theme::Colorblind => COLORBLIND_SECTOR_HUES,
+        Theme::Monochrome => unreachable!("monochrome handled above"),
+    };
+    let bright = sector
+        .and_then(|sector| hues.get(sector_index(sector)).copied())
+        .unwrap_or((174, 185, 198));
+    (mix((11, 14, 18), bright, 0.22), bright)
+}
+
+fn sector_index(sector: Sector) -> usize {
+    match sector {
+        Sector::Consumer => 0,
+        Sector::Services => 1,
+        Sector::Healthcare => 2,
+        Sector::Energy => 3,
+        Sector::Technology => 4,
+        Sector::Financial => 5,
+        Sector::Industrial => 6,
+        Sector::Materials => 7,
+        Sector::Utilities => 8,
+    }
+}
+
+fn readable_text_color(background: Color) -> Color {
+    if contrast_ratio(background, VOLUME_DARK_TEXT) > contrast_ratio(background, VOLUME_BRIGHT_TEXT)
+    {
+        VOLUME_DARK_TEXT
+    } else {
+        VOLUME_BRIGHT_TEXT
+    }
 }
 
 fn mix(left: (u8, u8, u8), right: (u8, u8, u8), amount: f64) -> (u8, u8, u8) {
@@ -215,5 +361,94 @@ mod tests {
             contrast_ratio(scale.color(Some(0.1)), scale.focus_color(Some(0.1)))
                 > contrast_ratio(scale.color(Some(0.1)), CYAN)
         );
+    }
+
+    #[test]
+    fn volume_scale_uses_log_percentiles_to_limit_outliers() {
+        let scale = VolumeScale::from_values(
+            [
+                10.0,
+                20.0,
+                30.0,
+                40.0,
+                50.0,
+                60.0,
+                70.0,
+                80.0,
+                90.0,
+                1_000_000_000_000.0,
+            ]
+            .into_iter()
+            .map(Some),
+            Theme::Default,
+        );
+
+        assert_eq!(scale.normalized(Some(10.0)), 0.0);
+        assert!(scale.normalized(Some(50.0)) > 0.0);
+        assert!(scale.normalized(Some(50.0)) < 1.0);
+        assert_eq!(scale.normalized(Some(90.0)), 1.0);
+        assert_eq!(scale.normalized(Some(1_000_000_000_000.0)), 1.0);
+        assert_eq!(scale.normalized(Some(-1.0)), 0.0);
+        assert_eq!(scale.normalized(Some(f64::NAN)), 0.0);
+        assert_eq!(scale.normalized(None), 0.0);
+    }
+
+    #[test]
+    fn volume_sector_hues_are_distinct_and_brighten_with_volume() {
+        let scale = VolumeScale::from_values(
+            [Some(1_000.0), Some(1_000_000.0)].into_iter(),
+            Theme::Default,
+        );
+        let high_colors = Sector::ALL
+            .into_iter()
+            .map(|sector| scale.color(Some(sector), Some(1_000_000.0)))
+            .collect::<Vec<_>>();
+
+        for (index, sector) in Sector::ALL.into_iter().enumerate() {
+            let low = scale.color(Some(sector), Some(1_000.0));
+            let high = high_colors[index];
+            assert!(
+                relative_luminance(high) > relative_luminance(low),
+                "{} volume hue did not brighten",
+                sector.label()
+            );
+            for other in high_colors.iter().skip(index + 1) {
+                assert_ne!(high, *other);
+            }
+        }
+    }
+
+    #[test]
+    fn monochrome_volume_scale_removes_hue_but_preserves_intensity() {
+        let scale = VolumeScale::from_values(
+            [Some(100.0), Some(1_000_000.0)].into_iter(),
+            Theme::Monochrome,
+        );
+        let consumer_low = scale.color(Some(Sector::Consumer), Some(100.0));
+        let technology_low = scale.color(Some(Sector::Technology), Some(100.0));
+        let consumer_high = scale.color(Some(Sector::Consumer), Some(1_000_000.0));
+
+        assert_eq!(consumer_low, technology_low);
+        assert!(relative_luminance(consumer_high) > relative_luminance(consumer_low));
+    }
+
+    #[test]
+    fn volume_text_and_focus_colors_remain_readable() {
+        for theme in [Theme::Default, Theme::Colorblind, Theme::Monochrome] {
+            let scale = VolumeScale::from_values([Some(1.0), Some(1_000_000.0)].into_iter(), theme);
+            for sector in Sector::ALL {
+                for step in 0..=100 {
+                    let logarithm = f64::from(step) / 100.0 * 1_000_001.0_f64.ln();
+                    let volume = Some(logarithm.exp_m1());
+                    let background = scale.color(Some(sector), volume);
+                    assert!(
+                        contrast_ratio(background, scale.text_color(Some(sector), volume)) >= 4.5
+                    );
+                    assert!(
+                        contrast_ratio(background, scale.focus_color(Some(sector), volume)) >= 4.5
+                    );
+                }
+            }
+        }
     }
 }

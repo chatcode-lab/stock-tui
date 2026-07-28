@@ -72,6 +72,7 @@ pub struct StockApiProvider {
     base_url: Url,
     news_enabled: bool,
     authorization: Option<HeaderValue>,
+    redaction_token: Option<SecretString>,
     retry: RetryPolicy,
 }
 
@@ -126,11 +127,13 @@ impl StockApiProvider {
         client: Client,
         bearer_token: Option<SecretString>,
     ) -> Result<Self, ProviderError> {
+        let redaction_token = normalize_bearer_token(bearer_token.as_ref())?;
         Ok(Self {
             client,
             base_url: validate_base_url(base_url)?,
             news_enabled,
-            authorization: bearer_header(bearer_token.as_ref())?,
+            authorization: bearer_header(redaction_token.as_ref())?,
+            redaction_token,
             retry: RetryPolicy::default(),
         })
     }
@@ -208,12 +211,35 @@ impl StockApiProvider {
                 tokio::time::sleep(delay).await;
                 continue;
             }
-            return Err(response_error(response).await);
+            return Err(self.response_error(response).await);
         }
 
         Err(ProviderError::Transport {
             kind: "retry exhaustion",
         })
+    }
+
+    async fn response_error(&self, response: Response) -> ProviderError {
+        let status = response.status();
+        let message = read_bounded_body(response, "error").await.ok().map_or_else(
+            || "request rejected".to_owned(),
+            |body| {
+                let message = extract_error_message(&body);
+                sanitize_error_message(&message, self.redaction_token.as_ref())
+            },
+        );
+        match status {
+            StatusCode::UNAUTHORIZED => ProviderError::Authentication,
+            StatusCode::FORBIDDEN => ProviderError::Permission {
+                status: status.as_u16(),
+                message,
+            },
+            StatusCode::TOO_MANY_REQUESTS => ProviderError::RateLimited { message },
+            _ => ProviderError::Api {
+                status: status.as_u16(),
+                message,
+            },
+        }
     }
 
     async fn paginated<T>(
@@ -662,28 +688,8 @@ async fn read_bounded_body(
     Ok(body)
 }
 
-async fn response_error(response: Response) -> ProviderError {
-    let status = response.status();
-    let message = read_bounded_body(response, "error").await.ok().map_or_else(
-        || "request rejected".to_owned(),
-        |body| extract_error_message(&body),
-    );
-    match status {
-        StatusCode::UNAUTHORIZED => ProviderError::Authentication,
-        StatusCode::FORBIDDEN => ProviderError::Permission {
-            status: status.as_u16(),
-            message,
-        },
-        StatusCode::TOO_MANY_REQUESTS => ProviderError::RateLimited { message },
-        _ => ProviderError::Api {
-            status: status.as_u16(),
-            message,
-        },
-    }
-}
-
 fn extract_error_message(body: &[u8]) -> String {
-    let message = serde_json::from_slice::<ErrorEnvelope>(body).map_or_else(
+    serde_json::from_slice::<ErrorEnvelope>(body).map_or_else(
         |_| String::from_utf8_lossy(body).into_owned(),
         |envelope| {
             if envelope.error.message.trim().is_empty() {
@@ -692,12 +698,32 @@ fn extract_error_message(body: &[u8]) -> String {
                 envelope.error.message
             }
         },
-    );
-    bounded_text(&message, MAX_ERROR_LENGTH)
+    )
+}
+
+fn sanitize_error_message(value: &str, token: Option<&SecretString>) -> String {
+    let mut safe = value.to_owned();
+    if let Some(token) = token {
+        safe = safe.replace(token.expose_secret(), "[redacted]");
+    }
+    bounded_text(&safe, MAX_ERROR_LENGTH)
 }
 
 fn bounded_text(value: &str, maximum: usize) -> String {
-    let mut value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let without_controls = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let mut value = without_controls
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut end = value.len().min(maximum);
     while !value.is_char_boundary(end) {
         end -= 1;
@@ -809,6 +835,20 @@ fn bearer_header(token: Option<&SecretString>) -> Result<Option<HeaderValue>, Pr
         .map_err(|_| ProviderError::InvalidRequest("invalid stock API bearer token".to_owned()))?;
     value.set_sensitive(true);
     Ok(Some(value))
+}
+
+fn normalize_bearer_token(
+    token: Option<&SecretString>,
+) -> Result<Option<SecretString>, ProviderError> {
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    let Some(token) = validated_bearer_token(token.expose_secret()) else {
+        return Err(ProviderError::InvalidRequest(
+            "invalid stock API bearer token".to_owned(),
+        ));
+    };
+    Ok(Some(SecretString::from(token.to_owned())))
 }
 
 pub(crate) fn validated_bearer_token(token: &str) -> Option<&str> {
@@ -1049,6 +1089,54 @@ mod tests {
         let rendered = format!("{provider:?}");
         assert!(!rendered.contains(token));
         assert!(!rendered.contains("authorization"));
+    }
+
+    #[tokio::test]
+    async fn redacts_echoed_bearer_tokens_from_structured_and_plain_errors() {
+        let token = "private-stock-api-test-token";
+        let (base_url, _, server) = fixture_server(vec![
+            FixtureResponse {
+                status: 403,
+                body: format!(
+                    r#"{{"error":{{"code":"not_entitled","message":"Bearer {token} is not entitled"}}}}"#
+                ),
+                content_length: None,
+            },
+            FixtureResponse {
+                status: 400,
+                body: format!("request rejected for {token}\u{1b}]52;unsafe"),
+                content_length: None,
+            },
+        ]);
+        let provider = authenticated_provider(&base_url, false, token);
+
+        for expected in [
+            "Bearer [redacted] is not entitled",
+            "request rejected for [redacted]",
+        ] {
+            let error = provider
+                .fetch_assets()
+                .await
+                .expect_err("fixture must return an error");
+            let rendered = error.to_string();
+            assert!(!rendered.contains(token));
+            assert!(!rendered.contains('\u{1b}'));
+            assert!(rendered.contains(expected), "{rendered}");
+        }
+        server.join().expect("fixture server");
+    }
+
+    #[test]
+    fn redacts_long_tokens_before_bounding_error_messages() {
+        let token = "t".repeat(MAX_ERROR_LENGTH + 32);
+        let token = SecretString::from(token.clone());
+        let rendered = sanitize_error_message(
+            &format!("{} should not survive truncation", token.expose_secret()),
+            Some(&token),
+        );
+
+        assert_eq!(rendered, "[redacted] should not survive truncation");
+        assert!(!rendered.contains(&"t".repeat(MAX_ERROR_LENGTH)));
     }
 
     #[test]

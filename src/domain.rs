@@ -265,6 +265,11 @@ impl SortMode {
             Self::Alphabetical => "A-Z",
         }
     }
+
+    #[must_use]
+    pub const fn default_descending(self) -> bool {
+        !matches!(self, Self::Alphabetical)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -353,11 +358,25 @@ pub struct NewsItem {
 pub struct MarketTile {
     pub company: Company,
     pub price: Option<f64>,
+    pub period_start_price: Option<f64>,
     pub period_return: Option<f64>,
     pub volume: Option<f64>,
     pub starred: bool,
     pub stale: bool,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl MarketTile {
+    #[must_use]
+    pub fn absolute_change(&self) -> Option<f64> {
+        let price = self.price?;
+        let period_start_price = self.period_start_price?;
+        (price.is_finite()
+            && price > 0.0
+            && period_start_price.is_finite()
+            && period_start_price > 0.0)
+            .then_some(price - period_start_price)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -367,6 +386,10 @@ pub struct TickerDetail {
     pub bars: Vec<Bar>,
     pub news: Vec<NewsItem>,
     pub starred: bool,
+    pub period_start_price: Option<f64>,
+    pub period_start_at: Option<DateTime<Utc>>,
+    pub period_end_price: Option<f64>,
+    pub period_end_at: Option<DateTime<Utc>>,
     pub period_return: Option<f64>,
     pub sector_return: Option<f64>,
     pub sector_rank: Option<usize>,

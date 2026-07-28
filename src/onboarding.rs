@@ -63,8 +63,10 @@ pub async fn ensure_ready(settings: &mut Settings) -> Result<OnboardingOutcome> 
                 eprintln!(
                     "The configured Alpaca credentials were rejected by the Paper Trading API."
                 );
-                if settings.credential_source == Some(CredentialSource::Environment)
-                    && try_stored_fallback(settings, &existing).await?
+                if matches!(
+                    settings.credential_source,
+                    Some(CredentialSource::Environment | CredentialSource::ConfigFile)
+                ) && try_fallback_credentials(settings, &existing).await?
                 {
                     return Ok(OnboardingOutcome::Ready);
                 }
@@ -80,35 +82,61 @@ pub async fn ensure_ready(settings: &mut Settings) -> Result<OnboardingOutcome> 
     run_prompt(settings).await
 }
 
-async fn try_stored_fallback(settings: &mut Settings, rejected: &Credentials) -> Result<bool> {
-    let stored = match credentials::load(&settings.credentials_path()) {
-        Ok(Some(stored)) => stored,
-        Ok(None) => return Ok(false),
-        Err(error) => {
-            eprintln!("Ignoring unusable stored Alpaca credentials: {error}");
-            return Ok(false);
+async fn try_fallback_credentials(settings: &mut Settings, rejected: &Credentials) -> Result<bool> {
+    let rejected_source = settings.credential_source;
+    let mut candidates = Vec::new();
+    if rejected_source == Some(CredentialSource::Environment) {
+        match settings.config_credentials() {
+            Ok(Some(credentials)) => {
+                candidates.push((credentials, CredentialSource::ConfigFile));
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("Ignoring unusable config.toml credentials: {error}"),
         }
-    };
-    if credentials_match(&stored, rejected) {
-        return Ok(false);
     }
-    print_status("Checking saved Alpaca credentials...")?;
-    match validate(settings, &stored).await {
-        Ok(()) => {
-            settings.set_credentials(stored, CredentialSource::StoredFile);
-            eprintln!(
-                "Using the saved credentials instead. Remove or update the rejected \
-                 ALPACA_API_KEY and ALPACA_API_SECRET environment values."
-            );
-            Ok(true)
+    match credentials::load(&settings.credentials_path()) {
+        Ok(Some(credentials)) => {
+            candidates.push((credentials, CredentialSource::StoredFile));
         }
-        Err(ProviderError::Authentication) => Ok(false),
-        Err(error) => {
-            settings.set_credentials(stored, CredentialSource::StoredFile);
-            eprintln!("Saved-credential preflight was unavailable: {error}");
-            eprintln!("Continuing with the local cache; synchronization will retry.");
-            Ok(true)
+        Ok(None) => {}
+        Err(error) => eprintln!("Ignoring unusable legacy Alpaca credentials: {error}"),
+    }
+
+    for (candidate, source) in candidates {
+        if credentials_match(&candidate, rejected) {
+            continue;
         }
+        print_status(&format!("Checking {} credentials...", source.label()))?;
+        match validate(settings, &candidate).await {
+            Ok(()) => {
+                settings.set_credentials(candidate, source);
+                eprintln!("Using {} credentials instead.", source.label());
+                print_rejected_source_hint(rejected_source);
+                return Ok(true);
+            }
+            Err(ProviderError::Authentication) => {}
+            Err(error) => {
+                settings.set_credentials(candidate, source);
+                eprintln!("Fallback credential preflight was unavailable: {error}");
+                eprintln!("Continuing with the local cache; synchronization will retry.");
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn print_rejected_source_hint(source: Option<CredentialSource>) {
+    match source {
+        Some(CredentialSource::Environment) => eprintln!(
+            "Remove or update the rejected ALPACA_API_KEY and ALPACA_API_SECRET \
+             environment values."
+        ),
+        Some(CredentialSource::ConfigFile) => eprintln!(
+            "Remove or update providers.alpaca.api_key and providers.alpaca.api_secret \
+             in config.toml."
+        ),
+        _ => {}
     }
 }
 
@@ -149,11 +177,11 @@ async fn run_prompt(settings: &mut Settings) -> Result<OnboardingOutcome> {
         print_status("Validating Alpaca credentials...")?;
         match validate(settings, &candidate).await {
             Ok(()) => {
-                let path = settings.credentials_path();
-                let source = match credentials::save(&path, &candidate) {
+                let path = settings.config_path();
+                let source = match settings.save_credentials_to_config(&candidate) {
                     Ok(()) => {
                         println!("Credentials validated and saved at {}.", path.display());
-                        CredentialSource::StoredFile
+                        CredentialSource::ConfigFile
                     }
                     Err(error) => {
                         eprintln!("Credentials are valid but could not be saved: {error}");

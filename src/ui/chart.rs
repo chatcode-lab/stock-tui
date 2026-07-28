@@ -28,12 +28,15 @@ pub fn render_price_volume(
     state: &mut UiState,
     area: Rect,
     bars: &[Bar],
+    period_start: Option<(DateTime<Utc>, f64)>,
+    period_end: Option<(DateTime<Utc>, f64)>,
     accent: Color,
 ) {
     if area.height < 5 || area.width < 10 {
         return;
     }
-    if bars.is_empty() {
+    let price_bars = reconciled_price_bars(bars, period_start, period_end);
+    if price_bars.is_empty() {
         frame.render_widget(
             Paragraph::new("Waiting for cached history")
                 .centered()
@@ -49,12 +52,12 @@ pub fn render_price_volume(
         .constraints([Constraint::Min(4), Constraint::Length(volume_height)])
         .split(area);
     let chart_area = sections[0];
-    let data_low = bars
+    let data_low = price_bars
         .iter()
         .map(|bar| bar.close)
         .filter(|value| value.is_finite())
         .fold(f64::INFINITY, f64::min);
-    let data_high = bars
+    let data_high = price_bars
         .iter()
         .map(|bar| bar.close)
         .filter(|value| value.is_finite())
@@ -99,7 +102,7 @@ pub fn render_price_volume(
     state.chart_rect = Some(plot_area);
 
     let usable_width = usize::from(plot_area.width).max(1);
-    let sampled = sample_bars(bars, usable_width);
+    let sampled = sample_bars(&price_bars, usable_width);
     state.chart_sample_indices = sampled.iter().map(|(index, _)| *index).collect();
     let hover_index = state
         .detail_hover
@@ -107,10 +110,15 @@ pub fn render_price_volume(
     state.detail_hover = hover_index;
     let title_bar = hover_index
         .and_then(|index| sampled.get(index))
-        .map_or_else(|| bars.last().expect("bars are non-empty"), |(_, bar)| *bar);
-    let first_close = sampled
-        .first()
-        .map_or(title_bar.close, |(_, bar)| bar.close);
+        .map_or_else(
+            || price_bars.last().expect("price bars are non-empty"),
+            |(_, bar)| *bar,
+        );
+    let first_close = period_start
+        .map(|(_, price)| price)
+        .filter(|price| valid_price(*price))
+        .or_else(|| sampled.first().map(|(_, bar)| bar.close))
+        .unwrap_or(title_bar.close);
     let change = if first_close == 0.0 {
         0.0
     } else {
@@ -135,7 +143,10 @@ pub fn render_price_volume(
             .style(Style::default().bg(PANEL)),
         chart_area,
     );
-    let trace_sampled = trace_bars(bars, usable_width.saturating_mul(TRACE_SAMPLES_PER_COLUMN));
+    let trace_sampled = trace_bars(
+        &price_bars,
+        usable_width.saturating_mul(TRACE_SAMPLES_PER_COLUMN),
+    );
     let points = normalized_price_points(&trace_sampled);
     let canvas_points = points.clone();
     let crosshair = hover_index.map(|index| normalized_position(index, sampled.len()));
@@ -164,6 +175,99 @@ pub fn render_price_volume(
     render_time_axis(frame, x_axis_area, &sampled, state.date_range);
 
     render_volume(frame, sections[1], plot_area, bars, accent, crosshair);
+}
+
+fn reconciled_price_bars(
+    bars: &[Bar],
+    period_start: Option<(DateTime<Utc>, f64)>,
+    period_end: Option<(DateTime<Utc>, f64)>,
+) -> Vec<Bar> {
+    let mut prices = bars.to_vec();
+    if let Some((timestamp, price)) = period_start.filter(|(_, price)| valid_price(*price)) {
+        match prices.first().map(|first| first.timestamp) {
+            Some(first_at) if first_at == timestamp => {
+                set_bar_price(
+                    prices.first_mut().expect("price series has a first bar"),
+                    price,
+                );
+            }
+            Some(first_at) if timestamp < first_at => {
+                let boundary = price_only_bar(
+                    prices.first().expect("price series has a first bar"),
+                    timestamp,
+                    price,
+                );
+                prices.insert(0, boundary);
+            }
+            None => prices.push(price_only_bar_without_template(timestamp, price)),
+            Some(_) => {}
+        }
+    }
+    if let Some((timestamp, price)) = period_end.filter(|(_, price)| valid_price(*price)) {
+        match prices.last().map(|last| last.timestamp) {
+            Some(last_at) if last_at == timestamp => {
+                set_bar_price(
+                    prices.last_mut().expect("price series has a last bar"),
+                    price,
+                );
+            }
+            Some(last_at) if timestamp > last_at => {
+                let boundary = price_only_bar(
+                    prices.last().expect("price series has a last bar"),
+                    timestamp,
+                    price,
+                );
+                prices.push(boundary);
+            }
+            None => prices.push(price_only_bar_without_template(timestamp, price)),
+            Some(_) => {}
+        }
+    }
+    prices
+}
+
+fn price_only_bar(template: &Bar, timestamp: DateTime<Utc>, price: f64) -> Bar {
+    let mut bar = template.clone();
+    bar.timestamp = timestamp;
+    bar.open = price;
+    bar.high = price;
+    bar.low = price;
+    bar.close = price;
+    bar.volume = 0.0;
+    bar.trade_count = None;
+    bar.vwap = None;
+    bar.source = "resolved-price-endpoint".to_owned();
+    bar
+}
+
+fn price_only_bar_without_template(timestamp: DateTime<Utc>, price: f64) -> Bar {
+    Bar {
+        symbol: String::new(),
+        timeframe: String::new(),
+        timestamp,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume: 0.0,
+        trade_count: None,
+        vwap: None,
+        source: "resolved-price-endpoint".to_owned(),
+    }
+}
+
+fn set_bar_price(bar: &mut Bar, price: f64) {
+    bar.close = price;
+    if !bar.high.is_finite() || price > bar.high {
+        bar.high = price;
+    }
+    if !bar.low.is_finite() || price < bar.low {
+        bar.low = price;
+    }
+}
+
+fn valid_price(price: f64) -> bool {
+    price.is_finite() && price > 0.0
 }
 
 fn price_axis_values(bounds: [f64; 2], count: usize) -> Vec<f64> {
@@ -702,6 +806,50 @@ mod tests {
         assert_eq!(points.first().unwrap().0, 0.0);
         assert_eq!(points.last().unwrap().0, 1.0);
         assert_eq!(interpolated_price(&points, 0.5), Some(1.5));
+    }
+
+    #[test]
+    fn price_series_reconciles_period_endpoints_without_changing_volume_bars() {
+        let mut bars: Vec<_> = (0..2).map(bar).collect();
+        bars[0].volume = 10.0;
+        bars[1].volume = 20.0;
+        let start_at = bars[0].timestamp - Duration::days(1);
+        let end_at = bars[1].timestamp + Duration::days(1);
+
+        let prices = reconciled_price_bars(&bars, Some((start_at, 50.0)), Some((end_at, 75.0)));
+
+        assert_eq!(
+            prices
+                .iter()
+                .map(|bar| (bar.timestamp, bar.close))
+                .collect::<Vec<_>>(),
+            [
+                (start_at, 50.0),
+                (bars[0].timestamp, bars[0].close),
+                (bars[1].timestamp, bars[1].close),
+                (end_at, 75.0),
+            ]
+        );
+        assert_eq!(prices.first().unwrap().volume, 0.0);
+        assert_eq!(prices.last().unwrap().volume, 0.0);
+        assert_eq!(volume_columns(&bars, 2), vec![10.0, 20.0]);
+        assert_eq!(
+            bars.iter().map(|bar| bar.volume).collect::<Vec<_>>(),
+            [10.0, 20.0]
+        );
+    }
+
+    #[test]
+    fn price_series_replaces_a_same_timestamp_bar_endpoint() {
+        let bars: Vec<_> = (0..2).map(bar).collect();
+        let endpoint_at = bars[1].timestamp;
+
+        let prices = reconciled_price_bars(&bars, None, Some((endpoint_at, 125.0)));
+
+        assert_eq!(prices.len(), bars.len());
+        assert_eq!(prices.last().unwrap().close, 125.0);
+        assert_eq!(bars.last().unwrap().close, 1.0);
+        assert_eq!(prices.last().unwrap().volume, bars.last().unwrap().volume);
     }
 
     #[test]

@@ -7,7 +7,7 @@ minor release and the default branch. Older binaries may not receive patches.
 
 | Version | Supported |
 | --- | --- |
-| Latest 0.1.x release | Yes |
+| Latest 0.2.x release | Yes |
 | Default branch | Yes, development only |
 | Older snapshots | No |
 
@@ -46,8 +46,9 @@ The current application:
 
 - runs as the invoking user and should not be installed or run with elevated
   privileges;
-- reads Alpaca credentials from the process environment, a local `.env`, or
-  the onboarding-managed `credentials.env` below the platform config directory;
+- reads Alpaca credentials from the process environment, a local `.env`,
+  `[providers.alpaca]` in the platform `config.toml`, or a legacy
+  `credentials.env` below the platform config directory;
 - stores market data, news metadata, sync checkpoints, and favorites in a local
   SQLite file;
 - makes HTTPS requests to configured provider/catalog base URLs;
@@ -56,12 +57,15 @@ The current application:
   intended market-data use.
 
 Onboarding hides both input fields, validates credentials before persistence,
-and forces its Unix credential file to mode `0600`. The file is raw dotenv
-text, not encrypted. Credential wrappers, debug redaction, and bounded error
-bodies reduce accidental disclosure, but the managed file and environment
-variables remain visible to processes with sufficient local privileges. A
-compromised user account, terminal, binary, dynamic loader, certificate store,
-proxy, or operating system is outside the application's trust boundary.
+preserves existing TOML comments and settings, and forces `config.toml` to mode
+`0600` on Unix when it writes the pair. The values are raw TOML strings, not
+encrypted. A manually populated `config.toml` is not rewritten merely by
+reading it, so its owner must restrict its permissions. Credential wrappers,
+debug redaction, and bounded error bodies reduce accidental disclosure, but
+credential-bearing files and environment variables remain visible to
+processes with sufficient local privileges. A compromised user account,
+terminal, binary, dynamic loader, certificate store, proxy, or operating
+system is outside the application's trust boundary.
 
 Changing `STOCK_TUI_DATA_URL` or `STOCK_TUI_TRADING_URL` directs authenticated
 requests to that host. Treat those overrides as security-sensitive and use
@@ -73,10 +77,10 @@ must remain bounded.
 
 The database does not intentionally store Alpaca credentials, but it can reveal
 favorite tickers, accessed news, cached companies, and provider-derived market
-history. The separate `<config_dir>/credentials.env` does contain the raw
-Alpaca pair. Protect both with normal per-user filesystem permissions and
-private backups. Do not place either in a public cloud-sync folder or
-repository.
+history. `<config_dir>/config.toml` may contain the raw Alpaca pair. A legacy
+`<config_dir>/credentials.env`, when present, can contain it as well. Protect
+all of these files with normal per-user filesystem permissions and private
+backups. Do not place them in a public cloud-sync folder or repository.
 
 SQLite WAL may leave adjacent `-wal` and `-shm` files while the app is open.
 Secure and dispose of them with the main database. Stop the application before

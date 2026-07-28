@@ -234,11 +234,22 @@ available offline.
 
 ## Period Calculations And Sorting
 
-For non-day ranges, the baseline is the last close at or before the exact
-cutoff, falling back to the first close after it. Return is latest close divided
-by baseline minus one. Calendar-day cutoffs mean the number of trading sessions
-varies with weekends and holidays. `ALL` uses the earliest bar present in the
-provider-backed local cache.
+The period endpoint is the newest valid price by timestamp between the current
+snapshot and the latest cached bar. Its timestamp also controls the tile's
+freshness marker, so an older snapshot cannot override a newer bar and a
+price-less snapshot cannot make an old bar price appear current. For non-day
+ranges, the baseline is the last close at or before the exact cutoff, falling
+back to the first close after it. For `1D`, a selected snapshot endpoint uses
+its previous close when available and otherwise uses that cached cutoff
+baseline. Return is endpoint price divided by baseline minus one. Calendar-day
+cutoffs mean the number of trading sessions varies with weekends and holidays.
+`ALL` uses the earliest bar present in the provider-backed local cache.
+The heatmap's volume value comes from that same selected snapshot or bar
+observation rather than mixing an older volume with a newer price timestamp.
+
+Ticker price charts add price-only boundary points for the cutoff baseline and
+selected endpoint when those values are not already represented by a cached
+bar. Volume charts continue to use the unmodified provider OHLCV bars.
 
 Sort modes operate within each sector:
 

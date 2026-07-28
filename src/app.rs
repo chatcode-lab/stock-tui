@@ -6,7 +6,10 @@ use ratatui::layout::Position;
 use crate::{
     benchmarks::MarketBenchmark,
     domain::{DateRange, Sector, SortMode},
-    ui::state::{DetailTab, Overlay, Route, UiAction, UiState},
+    ui::{
+        layout::{sector_cell_for_rank, sector_rank_for_cell},
+        state::{DetailTab, Overlay, Route, UiAction, UiState},
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +82,15 @@ fn handle_key(state: &mut UiState, key: KeyEvent) -> Vec<AppCommand> {
         KeyCode::Esc => apply_action(state, UiAction::Back),
         KeyCode::Char('/') => apply_action(state, UiAction::OpenSearch),
         KeyCode::Char('s') => apply_action(state, UiAction::OpenSort),
+        KeyCode::Char('i') if key.modifiers.is_empty() => {
+            apply_action(state, UiAction::CycleSectorMetric)
+        }
+        KeyCode::Char('o') if key.modifiers.is_empty() => {
+            apply_action(state, UiAction::ToggleSortDirection)
+        }
+        KeyCode::Char('v') if key.modifiers.is_empty() => {
+            apply_action(state, UiAction::ToggleSectorView)
+        }
         KeyCode::Char('F') => apply_action(state, UiAction::OpenFavorites),
         KeyCode::Char('S') => apply_action(state, UiAction::OpenSync),
         KeyCode::Char('?') => apply_action(state, UiAction::OpenHelp),
@@ -93,6 +105,14 @@ fn handle_key(state: &mut UiState, key: KeyEvent) -> Vec<AppCommand> {
             apply_action(state, UiAction::SelectRange(state.date_range.previous()))
         }
         KeyCode::Char(']') => apply_action(state, UiAction::SelectRange(state.date_range.next())),
+        KeyCode::Char('=') | KeyCode::Char('+')
+            if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+        {
+            apply_action(state, UiAction::SelectRange(state.date_range.previous()))
+        }
+        KeyCode::Char('-') if key.modifiers.is_empty() => {
+            apply_action(state, UiAction::SelectRange(state.date_range.next()))
+        }
         KeyCode::Char('0') => apply_action(state, UiAction::SelectRange(DateRange::All)),
         KeyCode::Char(character @ '1'..='9') => {
             let index = usize::from(character as u8 - b'1');
@@ -163,7 +183,7 @@ fn handle_overlay_key(state: &mut UiState, overlay: Overlay, key: KeyEvent) -> V
                     .iter()
                     .position(|mode| *mode == state.sort)
                     .unwrap_or(0);
-                state.sort = SortMode::ALL[index.saturating_sub(1)];
+                state.select_sort(SortMode::ALL[index.saturating_sub(1)]);
                 vec![AppCommand::ReloadTiles]
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -171,7 +191,7 @@ fn handle_overlay_key(state: &mut UiState, overlay: Overlay, key: KeyEvent) -> V
                     .iter()
                     .position(|mode| *mode == state.sort)
                     .unwrap_or(0);
-                state.sort = SortMode::ALL[(index + 1).min(SortMode::ALL.len() - 1)];
+                state.select_sort(SortMode::ALL[(index + 1).min(SortMode::ALL.len() - 1)]);
                 vec![AppCommand::ReloadTiles]
             }
             KeyCode::Enter => {
@@ -266,13 +286,29 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
         Route::Sector(_) | Route::Favorites => {
             state.hovered_symbol = None;
             let columns = state.sector_columns.max(1);
-            let row = state.selected_ticker / columns;
-            let column = state.selected_ticker % columns;
+            let rows = state.sector_rows.max(1);
             let count = state.visible_tiles().len();
-            let max_row = count.saturating_sub(1) / columns;
-            let row = offset(row, vertical, max_row);
-            let column = offset(column, horizontal, columns - 1);
-            state.selected_ticker = (row * columns + column).min(count.saturating_sub(1));
+            let cell =
+                sector_cell_for_rank(state.sector_view, state.selected_ticker, columns, rows);
+            let row = cell / columns;
+            let column = cell % columns;
+            let mut candidate_row = row as isize + vertical;
+            let mut candidate_column = column as isize + horizontal;
+            while candidate_row >= 0
+                && candidate_row < rows as isize
+                && candidate_column >= 0
+                && candidate_column < columns as isize
+            {
+                let candidate_cell = candidate_row as usize * columns + candidate_column as usize;
+                if let Some(rank) =
+                    sector_rank_for_cell(state.sector_view, candidate_cell, count, columns, rows)
+                {
+                    state.selected_ticker = rank;
+                    break;
+                }
+                candidate_row += vertical;
+                candidate_column += horizontal;
+            }
         }
         Route::Ticker(_) => {
             if horizontal != 0 {
@@ -416,9 +452,40 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
             }
         }
         UiAction::SelectSort(sort) => {
-            state.sort = sort;
+            state.select_sort(sort);
             state.overlay = None;
             vec![AppCommand::ReloadTiles]
+        }
+        UiAction::CycleSectorMetric => {
+            if matches!(state.route, Route::Sector(_) | Route::Favorites) {
+                state.sector_metric = state.sector_metric.next();
+                state.status = format!("Sector cells show {}", state.sector_metric.label());
+            }
+            Vec::new()
+        }
+        UiAction::ToggleSortDirection => {
+            if matches!(
+                state.route,
+                Route::Overview | Route::Sector(_) | Route::Favorites
+            ) {
+                state.toggle_sort_direction_in_memory();
+                state.status = if state.sort_descending {
+                    "Sort order: descending".to_owned()
+                } else {
+                    "Sort order: ascending".to_owned()
+                };
+            }
+            Vec::new()
+        }
+        UiAction::ToggleSectorView => {
+            if matches!(
+                state.route,
+                Route::Overview | Route::Sector(_) | Route::Favorites
+            ) {
+                state.sector_view = state.sector_view.toggled();
+                state.status = format!("Heatmap layout: {}", state.sector_view.label());
+            }
+            Vec::new()
         }
         UiAction::OpenSector(sector) => {
             state.route = Route::Sector(sector);
@@ -561,6 +628,44 @@ fn sector_for_character(character: char) -> Option<Sector> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{Company, MarketTile};
+    use crate::ui::{layout::SectorView, state::SectorMetric};
+    use chrono::Utc;
+
+    fn tile(symbol: &str) -> MarketTile {
+        MarketTile {
+            company: Company {
+                symbol: symbol.to_owned(),
+                name: symbol.to_owned(),
+                sector: Some(Sector::Technology),
+                raw_sector: None,
+                exchange: "NASDAQ".to_owned(),
+                industry: String::new(),
+                market_cap: Some(1.0),
+                size_proxy: None,
+                size_proxy_source: None,
+                size_proxy_as_of: None,
+                size_proxy_confidence: None,
+                shares_outstanding: None,
+                shares_source: None,
+                shares_as_of: None,
+                shares_method: None,
+                shares_confidence: None,
+                rank: None,
+                description: String::new(),
+                in_universe: true,
+                retained: true,
+                updated_at: Utc::now(),
+            },
+            price: Some(1.0),
+            period_start_price: Some(1.0),
+            period_return: Some(0.0),
+            volume: Some(1.0),
+            starred: false,
+            stale: false,
+            updated_at: Some(Utc::now()),
+        }
+    }
 
     #[test]
     fn numeric_range_shortcuts_are_direct() {
@@ -578,6 +683,312 @@ mod tests {
         );
         assert_eq!(state.date_range, DateRange::All);
         assert_eq!(zero_commands, vec![AppCommand::ReloadTiles]);
+    }
+
+    #[test]
+    fn range_zoom_shortcuts_step_and_honor_modifiers() {
+        let mut state = UiState {
+            date_range: DateRange::Month,
+            ..UiState::default()
+        };
+
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('='), KeyModifiers::NONE)),
+            ),
+            vec![AppCommand::ReloadTiles]
+        );
+        assert_eq!(state.date_range, DateRange::Week);
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::SHIFT,)),
+            ),
+            vec![AppCommand::ReloadTiles]
+        );
+        assert_eq!(state.date_range, DateRange::Day);
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE)),
+            ),
+            vec![AppCommand::ReloadTiles]
+        );
+        assert_eq!(state.date_range, DateRange::Week);
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('='), KeyModifiers::SHIFT,)),
+            ),
+            vec![AppCommand::ReloadTiles]
+        );
+        assert_eq!(state.date_range, DateRange::Day);
+
+        for (character, modifiers) in [
+            ('+', KeyModifiers::ALT),
+            ('=', KeyModifiers::CONTROL),
+            ('-', KeyModifiers::SHIFT),
+        ] {
+            assert!(
+                handle_event(
+                    &mut state,
+                    Event::Key(KeyEvent::new(KeyCode::Char(character), modifiers)),
+                )
+                .is_empty()
+            );
+            assert_eq!(state.date_range, DateRange::Day);
+        }
+    }
+
+    #[test]
+    fn search_and_modal_overlays_own_range_zoom_keys() {
+        let mut state = UiState {
+            date_range: DateRange::Month,
+            overlay: Some(Overlay::Search),
+            ..UiState::default()
+        };
+
+        for (character, modifiers, expected) in [
+            ('=', KeyModifiers::NONE, "="),
+            ('+', KeyModifiers::SHIFT, "=+"),
+            ('-', KeyModifiers::NONE, "=+-"),
+        ] {
+            assert_eq!(
+                handle_event(
+                    &mut state,
+                    Event::Key(KeyEvent::new(KeyCode::Char(character), modifiers)),
+                ),
+                vec![AppCommand::Search(expected.to_owned())]
+            );
+            assert_eq!(state.date_range, DateRange::Month);
+        }
+
+        state.overlay = Some(Overlay::Sort);
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE)),
+            )
+            .is_empty()
+        );
+        assert_eq!(state.overlay, Some(Overlay::Sort));
+        assert_eq!(state.date_range, DateRange::Month);
+    }
+
+    #[test]
+    fn sector_display_controls_cycle_metric_order_and_layout() {
+        let mut state = UiState {
+            route: Route::Sector(Sector::Technology),
+            ..UiState::default()
+        };
+
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
+            )
+            .is_empty()
+        );
+        assert_eq!(state.sector_metric, SectorMetric::Volume);
+
+        assert_eq!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
+            ),
+            Vec::new()
+        );
+        assert!(!state.sort_descending);
+
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
+            )
+            .is_empty()
+        );
+        assert_eq!(state.sector_view, SectorView::Spiral);
+    }
+
+    #[test]
+    fn order_toggle_exactly_reverses_current_groups_and_preserves_focus() {
+        for sort in [SortMode::MarketCap, SortMode::Gainers] {
+            let mut alpha = tile("A");
+            alpha.company.market_cap = Some(10.0);
+            alpha.period_return = Some(0.1);
+            let mut missing = tile("B");
+            missing.company.market_cap = None;
+            missing.period_return = None;
+            let mut tied = tile("C");
+            tied.company.market_cap = Some(10.0);
+            tied.period_return = Some(0.1);
+            let mut delta = tile("D");
+            delta.company.sector = Some(Sector::Energy);
+            delta.company.market_cap = Some(5.0);
+            delta.period_return = Some(-0.1);
+            let mut echo = tile("E");
+            echo.company.sector = Some(Sector::Energy);
+            echo.company.market_cap = Some(5.0);
+            echo.period_return = Some(-0.1);
+            let mut state = UiState {
+                route: Route::Sector(Sector::Technology),
+                sort,
+                sort_descending: true,
+                tiles: vec![
+                    alpha.clone(),
+                    missing.clone(),
+                    tied.clone(),
+                    delta.clone(),
+                    echo.clone(),
+                ],
+                favorite_tiles: vec![alpha, delta, missing],
+                selected_ticker: 0,
+                hovered_symbol: Some("C".to_owned()),
+                ..UiState::default()
+            };
+            let original_sectors = state
+                .tiles
+                .iter()
+                .map(|tile| tile.company.sector)
+                .collect::<Vec<_>>();
+
+            assert!(
+                handle_event(
+                    &mut state,
+                    Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
+                )
+                .is_empty()
+            );
+            assert_eq!(state.route, Route::Sector(Sector::Technology));
+            assert_eq!(
+                state
+                    .tiles
+                    .iter()
+                    .map(|tile| tile.company.symbol.as_str())
+                    .collect::<Vec<_>>(),
+                ["C", "B", "A", "E", "D"]
+            );
+            assert_eq!(
+                state
+                    .favorite_tiles
+                    .iter()
+                    .map(|tile| tile.company.symbol.as_str())
+                    .collect::<Vec<_>>(),
+                ["B", "D", "A"]
+            );
+            assert_eq!(
+                state
+                    .tiles
+                    .iter()
+                    .map(|tile| tile.company.sector)
+                    .collect::<Vec<_>>(),
+                original_sectors
+            );
+            assert_eq!(state.selected_ticker, 2);
+            assert_eq!(state.focused_symbol(), Some("A"));
+            assert_eq!(state.hovered_symbol, None);
+
+            assert!(
+                handle_event(
+                    &mut state,
+                    Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
+                )
+                .is_empty()
+            );
+            assert_eq!(
+                state
+                    .tiles
+                    .iter()
+                    .map(|tile| tile.company.symbol.as_str())
+                    .collect::<Vec<_>>(),
+                ["A", "B", "C", "D", "E"]
+            );
+            assert_eq!(state.selected_ticker, 0);
+            assert_eq!(state.focused_symbol(), Some("A"));
+
+            state.route = Route::Favorites;
+            state.selected_ticker = 0;
+            state.hovered_symbol = Some("D".to_owned());
+            assert!(
+                handle_event(
+                    &mut state,
+                    Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
+                )
+                .is_empty()
+            );
+            assert_eq!(state.route, Route::Favorites);
+            assert_eq!(
+                state
+                    .favorite_tiles
+                    .iter()
+                    .map(|tile| tile.company.symbol.as_str())
+                    .collect::<Vec<_>>(),
+                ["B", "D", "A"]
+            );
+            assert_eq!(state.selected_ticker, 2);
+            assert_eq!(state.focused_symbol(), Some("A"));
+            assert_eq!(state.hovered_symbol, None);
+        }
+    }
+
+    #[test]
+    fn overview_view_control_uses_the_shared_heatmap_layout() {
+        let mut state = UiState::default();
+
+        assert!(
+            handle_event(
+                &mut state,
+                Event::Key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
+            )
+            .is_empty()
+        );
+        assert_eq!(state.sector_view, SectorView::Spiral);
+        assert_eq!(state.status, "Heatmap layout: Spiral");
+    }
+
+    #[test]
+    fn selecting_sort_restores_its_direction_and_metric_defaults() {
+        let mut state = UiState {
+            sort_descending: false,
+            sector_metric: SectorMetric::Volume,
+            ..UiState::default()
+        };
+
+        assert_eq!(
+            apply_action(&mut state, UiAction::SelectSort(SortMode::Alphabetical)),
+            vec![AppCommand::ReloadTiles]
+        );
+        assert!(!state.sort_descending);
+        assert_eq!(state.sector_metric, SectorMetric::Price);
+
+        assert_eq!(
+            apply_action(&mut state, UiAction::SelectSort(SortMode::Gainers)),
+            vec![AppCommand::ReloadTiles]
+        );
+        assert!(state.sort_descending);
+        assert_eq!(state.sector_metric, SectorMetric::RelativeGain);
+    }
+
+    #[test]
+    fn spiral_arrow_navigation_tracks_displayed_cells() {
+        let mut state = UiState {
+            route: Route::Sector(Sector::Technology),
+            sector_view: SectorView::Spiral,
+            sector_columns: 3,
+            sector_rows: 3,
+            tiles: ["A", "B", "C", "D", "E"].map(tile).into(),
+            ..UiState::default()
+        };
+
+        move_selection(&mut state, 1, 0);
+        assert_eq!(state.selected_ticker, 1);
+        move_selection(&mut state, 0, 1);
+        assert_eq!(state.selected_ticker, 2);
+        move_selection(&mut state, -1, 0);
+        assert_eq!(state.selected_ticker, 3);
+        move_selection(&mut state, 0, -1);
+        assert_eq!(state.selected_ticker, 0);
     }
 
     #[test]

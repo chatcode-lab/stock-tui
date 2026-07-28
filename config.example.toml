@@ -1,13 +1,17 @@
 # Install as <config_dir>/config.toml; `stock-tui --print-config` shows the path.
 # A working-directory config.toml is not loaded automatically.
-# Alpaca onboarding stores keys separately in <config_dir>/credentials.env.
-# That file never selects Alpaca or overrides the provider chosen below.
+# Alpaca onboarding stores its validated pair in [providers.alpaca] below.
+# Protect a populated file with owner-only permissions and never commit it.
+# Older <config_dir>/credentials.env files remain a read-only fallback.
 provider = "alpaca"
 refresh_seconds = 300
 catalog_url = "https://stock.chatcode.dev/catalog/sec-catalog.json"
 catalog_refresh_hours = 12
 
 [providers.alpaca]
+# Optional personal credentials. Environment/.env values override this pair.
+# api_key = "your-own-key-id"
+# api_secret = "your-own-secret"
 feed = "iex"
 request_limit_per_minute = 180
 snapshot_batch_size = 100

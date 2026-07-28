@@ -399,10 +399,26 @@ fn apply_sync_event(event: SyncEvent, storage: &Storage, state: &mut UiState) ->
 }
 
 fn reload_tiles(storage: &Storage, state: &mut UiState) -> Result<()> {
+    let selected_symbol = if matches!(state.route, Route::Sector(_) | Route::Favorites) {
+        state
+            .visible_tiles()
+            .get(state.selected_ticker)
+            .map(|tile| tile.company.symbol.clone())
+    } else {
+        None
+    };
     let now = Utc::now();
     state.tiles = storage.heatmap_tiles(state.date_range, state.sort, None, false, now)?;
     state.favorite_tiles = storage.favorite_tiles(state.date_range, state.sort, now)?;
+    state.orient_default_ordered_tiles();
     state.benchmarks = storage.benchmark_tiles(state.date_range, now)?;
+    state.hovered_symbol = None;
+    if let Some(symbol) = selected_symbol {
+        state.select_visible_symbol(&symbol);
+    }
+    state.selected_ticker = state
+        .selected_ticker
+        .min(state.visible_tiles().len().saturating_sub(1));
     Ok(())
 }
 
@@ -519,10 +535,17 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        DemoCacheState, bootstrap_universe, classify_demo_cache, recover_news_url,
+        DemoCacheState, bootstrap_universe, classify_demo_cache, recover_news_url, reload_tiles,
         should_reset_auto_refresh,
     };
-    use crate::{app::AppCommand, benchmarks::MarketBenchmark, demo, storage::Storage};
+    use crate::{
+        app::AppCommand,
+        benchmarks::MarketBenchmark,
+        demo,
+        domain::{Sector, Snapshot, SortMode},
+        storage::Storage,
+        ui::state::{Route, UiState},
+    };
 
     #[test]
     fn only_remote_manual_refresh_resets_the_automatic_cadence() {
@@ -573,6 +596,58 @@ mod tests {
             classify_demo_cache(&HashSet::from([demo::CHECKPOINT_SCOPE.to_owned()])),
             DemoCacheState::Current
         );
+    }
+
+    #[test]
+    fn tile_reload_preserves_selected_symbol_and_clears_stale_hover() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = Utc::now();
+        let companies = crate::universe::embedded_companies(now)?
+            .into_iter()
+            .filter(|company| company.sector == Some(Sector::Technology))
+            .take(2)
+            .collect::<Vec<_>>();
+        storage.replace_memberships(now.date_naive(), Sector::Technology, &companies)?;
+        storage.upsert_snapshots(
+            &companies
+                .iter()
+                .enumerate()
+                .map(|(index, company)| Snapshot {
+                    symbol: company.symbol.clone(),
+                    price: Some(100.0 + index as f64),
+                    market_cap: None,
+                    previous_close: Some(99.0),
+                    open: Some(99.0),
+                    high: Some(102.0),
+                    low: Some(98.0),
+                    volume: Some(1_000.0),
+                    updated_at: now,
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        let mut state = UiState {
+            route: Route::Sector(Sector::Technology),
+            sort: SortMode::Alphabetical,
+            sort_descending: true,
+            ..UiState::default()
+        };
+        reload_tiles(&storage, &mut state)?;
+        assert_eq!(state.visible_tiles().len(), 2);
+        let selected_symbol = state.visible_tiles()[0].company.symbol.clone();
+        let hovered_symbol = state.visible_tiles()[1].company.symbol.clone();
+        state.hovered_symbol = Some(hovered_symbol);
+
+        state.sort_descending = false;
+        reload_tiles(&storage, &mut state)?;
+
+        assert_eq!(state.hovered_symbol, None);
+        assert_eq!(
+            state.visible_tiles()[state.selected_ticker].company.symbol,
+            selected_symbol
+        );
+        assert_eq!(state.selected_ticker, 1);
+        Ok(())
     }
 
     #[test]
