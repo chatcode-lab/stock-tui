@@ -872,6 +872,28 @@ save tile width. Cloudflare catalog provisioning uses a temporary token
 supplied only through the operator's environment; credentials and account
 identifiers are never copied into the repositories or session transcript.
 
+## 32. Avoid Remote Wrangler OAuth
+
+> Wrangler browser authentication fails in the remote terminal. Cloudflare's
+> OAuth page returns a bot-challenge response and `403 Forbidden` instead of
+> JSON, while the authorization callback targets `localhost` on the machine
+> running Wrangler.
+
+**Committed changes**
+
+- [`0b6e198` - Use API tokens for remote Wrangler setup][commit-0b6e198]
+
+**Summary**
+
+The one-time R2 instructions no longer recommend `wrangler login` from a
+remote session. They direct the operator to create a narrowly scoped
+Cloudflare REST API token in a normal browser. The provisioning script securely
+prompts for that token without echoing it, asks for validated account and zone
+IDs, and verifies R2 access before attempting to create resources. Missing
+credentials now fail immediately in non-interactive runs instead of silently
+falling through to browser OAuth; no token is written to the repository,
+Wrangler OAuth storage, or shell history.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -919,6 +941,7 @@ implementation work.
 [commit-65c194a]: https://github.com/chatcode-lab/stock-tui/commit/65c194a0e67c146c7d44fdbb89f5865dbadd565e
 [commit-95f20b6]: https://github.com/chatcode-lab/stock-tui/commit/95f20b631921053ee84a47a41b6b0ceefd416b57
 [commit-3e89a7f]: https://github.com/chatcode-lab/stock-tui/commit/3e89a7f9134f2e7246f8bb9a55a30cff4c74d936
+[commit-0b6e198]: https://github.com/chatcode-lab/stock-tui/commit/0b6e1980466415a54e0c64e4395fe7d0684db2b3
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
