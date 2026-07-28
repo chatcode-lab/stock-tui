@@ -184,18 +184,31 @@ contains the authoritative dashboard steps if its interface changes.
 
 Alpaca is the first provider adapter and remains the default. The provider is
 selected explicitly with `--provider alpaca`, `STOCK_TUI_PROVIDER=alpaca`, or
-`provider = "alpaca"` in `config.toml`. A credential-free, provider-neutral
-HTTP adapter is also available for compatible separately operated services:
+`provider = "alpaca"` in `config.toml`. A provider-neutral HTTP adapter is also
+available for compatible separately operated services:
 
 ```bash
 stock-tui --provider stock-api --stock-api-url http://127.0.0.1:8787
 ```
 
-The public default `https://stock.chatcode.dev/api` is reserved but is not
-currently deployed or licensed. See the
+Compatible services may be unauthenticated, or may require the optional
+environment-only `STOCK_TUI_STOCK_API_TOKEN` bearer token. There is no CLI or
+TOML token setting, and `--print-config` omits both its value and presence.
+For the private development endpoint:
+
+```bash
+read -rsp "Stock API token: " STOCK_TUI_STOCK_API_TOKEN
+printf '\n'
+export STOCK_TUI_STOCK_API_TOKEN
+stock-tui --provider stock-api --stock-api-url https://stock.chatcode.dev/api
+unset STOCK_TUI_STOCK_API_TOKEN
+```
+
+The project-operated endpoint is for explicitly authorized development tests,
+not a licensed public market-data service. See the
 [Stock API HTTP Contract](docs/stock-api-contract.md) before operating a
 service. The synchronization layer keeps separate asset, market-data, and
-optional-news capabilities so provider payloads and credentials do not leak
+optional-news capabilities so provider payloads and authentication do not leak
 into storage and UI code.
 
 To inspect the effective non-secret settings and resolved paths:

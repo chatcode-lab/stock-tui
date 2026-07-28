@@ -64,6 +64,41 @@ class CanonicalTickerTests(unittest.TestCase):
 
         self.assertEqual(selected["symbol"], "GOOG")
 
+    def test_molson_coors_prefers_reviewed_class_b_symbol(self) -> None:
+        for identities in (
+            [
+                ticker_identity("TAP-A", 0, "NYSE"),
+                ticker_identity("TAP", 1, "NYSE"),
+            ],
+            [
+                ticker_identity("TAP", 0, "NYSE"),
+                ticker_identity("TAP-A", 1, "NYSE"),
+            ],
+        ):
+            with self.subTest(order=[identity["symbol"] for identity in identities]):
+                selected = catalog.canonical_identity(identities, cik=24545)
+
+                self.assertEqual(selected["symbol"], "TAP")
+
+    def test_molson_coors_symbol_override_is_cik_scoped(self) -> None:
+        selected = catalog.canonical_identity(
+            [
+                ticker_identity("TAP-A", 0, "NYSE"),
+                ticker_identity("TAP", 1, "NYSE"),
+            ],
+            cik=999999,
+        )
+
+        self.assertEqual(selected["symbol"], "TAP-A")
+
+    def test_molson_coors_override_requires_tap_to_remain_listed(self) -> None:
+        selected = catalog.canonical_identity(
+            [ticker_identity("TAP-A", 0, "NYSE")],
+            cik=24545,
+        )
+
+        self.assertEqual(selected["symbol"], "TAP-A")
+
     def test_short_derivative_does_not_displace_long_common_ticker(self) -> None:
         selected = catalog.canonical_identity(
             [

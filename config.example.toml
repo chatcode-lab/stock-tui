@@ -14,8 +14,9 @@ history_batch_size = 50
 # data_url = "https://data.alpaca.markets"
 # trading_url = "https://paper-api.alpaca.markets"
 
-# Credential-free normalized HTTP adapter. Select with provider = "stock-api".
-# The public default URL is reserved but is not currently deployed/licensed.
+# Normalized HTTP adapter. Select with provider = "stock-api".
+# Its optional bearer token is environment-only; never put it in this file.
+# The private project endpoint is not a licensed public market-data service.
 [providers.stock_api]
 base_url = "https://stock.chatcode.dev/api"
 news = true

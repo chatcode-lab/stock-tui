@@ -101,6 +101,7 @@ pub struct Settings {
     pub catalog_refresh_interval: Duration,
     pub stock_api_url: String,
     pub stock_api_news: bool,
+    pub stock_api_token: Option<SecretString>,
     pub data_url: String,
     pub trading_url: String,
     pub feed: String,
@@ -317,6 +318,7 @@ impl Settings {
                 .or_else(|| env_bool("STOCK_TUI_STOCK_API_NEWS"))
                 .or(file.providers.stock_api.news)
                 .unwrap_or(true),
+            stock_api_token: stock_api_token_from_env(provider, demo, cli.offline),
             data_url: env::var("STOCK_TUI_DATA_URL")
                 .ok()
                 .or(file.providers.alpaca.data_url)
@@ -433,6 +435,24 @@ fn env_bool(key: &str) -> Option<bool> {
     }
 }
 
+fn stock_api_token_from_env(
+    provider: ProviderKind,
+    demo: bool,
+    offline: bool,
+) -> Option<SecretString> {
+    if !should_resolve_stock_api_token(provider, demo, offline) {
+        return None;
+    }
+    env::var("STOCK_TUI_STOCK_API_TOKEN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(SecretString::from)
+}
+
+fn should_resolve_stock_api_token(provider: ProviderKind, demo: bool, offline: bool) -> bool {
+    provider == ProviderKind::StockApi && !demo && !offline
+}
+
 const fn should_resolve_credentials(provider: ProviderKind, demo: bool, offline: bool) -> bool {
     provider.requires_credentials() && !demo && !offline
 }
@@ -523,6 +543,17 @@ news = false
     }
 
     #[test]
+    fn stock_api_token_cannot_be_configured_in_toml() {
+        let parsed = toml::from_str::<FileConfig>(
+            r#"
+[providers.stock_api]
+token = "must-remain-environment-only"
+"#,
+        );
+        assert!(parsed.is_err());
+    }
+
+    #[test]
     fn default_catalog_uses_the_static_cloudflare_hostname() {
         assert_eq!(
             DEFAULT_CATALOG_URL,
@@ -531,7 +562,7 @@ news = false
     }
 
     #[test]
-    fn stock_api_is_credential_free_and_uses_a_separate_endpoint() {
+    fn stock_api_uses_separate_optional_authentication() {
         assert!(!ProviderKind::StockApi.requires_credentials());
         assert!(ProviderKind::Alpaca.requires_credentials());
         assert_eq!(DEFAULT_STOCK_API_URL, "https://stock.chatcode.dev/api");
@@ -544,6 +575,26 @@ news = false
             ProviderKind::Alpaca,
             false,
             false
+        ));
+        assert!(should_resolve_stock_api_token(
+            ProviderKind::StockApi,
+            false,
+            false
+        ));
+        assert!(!should_resolve_stock_api_token(
+            ProviderKind::Alpaca,
+            false,
+            false
+        ));
+        assert!(!should_resolve_stock_api_token(
+            ProviderKind::StockApi,
+            true,
+            false
+        ));
+        assert!(!should_resolve_stock_api_token(
+            ProviderKind::StockApi,
+            false,
+            true
         ));
     }
 
@@ -561,6 +612,7 @@ news = false
             catalog_refresh_interval: Duration::from_secs(12 * 60 * 60),
             stock_api_url: "http://127.0.0.1:8787".to_owned(),
             stock_api_news: false,
+            stock_api_token: Some(SecretString::from("private-test-token".to_owned())),
             data_url: DEFAULT_DATA_URL.to_owned(),
             trading_url: DEFAULT_TRADING_URL.to_owned(),
             feed: "iex".to_owned(),
@@ -577,6 +629,8 @@ news = false
         assert_eq!(settings.mode_label(), "Stock API");
         assert!(rendered.contains("stock_api_url"));
         assert!(rendered.contains("stock_api_news"));
+        assert!(!rendered.contains("private-test-token"));
+        assert!(!rendered.contains("stock_api_token"));
         assert!(!rendered.contains("data.alpaca.markets"));
         assert!(!rendered.contains("paper-api.alpaca.markets"));
         assert!(!rendered.contains("feed:"));

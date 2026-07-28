@@ -29,7 +29,7 @@ Credential lookup is narrower and applies only when `provider = "alpaca"`:
 3. Interactive onboarding for a normal online launch
 
 Values from different sources are never combined. `--demo`, `--offline`,
-`--print-config`, and the credential-free `stock-api` adapter do not launch
+`--print-config`, and the non-interactive `stock-api` adapter do not launch
 Alpaca onboarding or read its managed credential file.
 
 ## Credentials
@@ -142,6 +142,7 @@ selected database is intentionally a demo cache.
 | `STOCK_TUI_PROVIDER` | `alpaca` | Selects `alpaca` or `stock-api`. |
 | `STOCK_TUI_STOCK_API_URL` | `https://stock.chatcode.dev/api` | Provider-neutral HTTP service base; HTTPS except for loopback development. |
 | `STOCK_TUI_STOCK_API_NEWS` | `true` | Registers and requests the optional `/v1/news` capability. |
+| `STOCK_TUI_STOCK_API_TOKEN` | Unset | Optional bearer token sent only to the selected `stock-api` base URL; environment or private untracked `.env` only. |
 | `STOCK_TUI_FEED` | `iex` | `iex`, `delayed_sip`, or `sip`; entitlement remains provider-controlled. |
 | `STOCK_TUI_REFRESH_SECONDS` | `300` | Equivalent to `--refresh-seconds`; clamped to 30..86,400. |
 | `STOCK_TUI_CATALOG_URL` | `https://stock.chatcode.dev/catalog/sec-catalog.json` | Compact SEC-derived catalog; HTTPS is required except for loopback tests. |
@@ -156,8 +157,13 @@ provider URLs must use HTTPS; plain HTTP is accepted only for local fixture
 servers. Only point a live build at infrastructure you trust and control. URL
 overrides do not waive provider terms or create redistribution rights.
 
-The `stock-api` adapter never sends Alpaca credentials or any other application
-authorization header. Its service base still needs to be trusted because it
+The `stock-api` adapter never sends Alpaca credentials. When
+`STOCK_TUI_STOCK_API_TOKEN` is set, it sends only
+`Authorization: Bearer <token>` to the configured `stock-api` base URL and
+refuses HTTP redirects. When unset, it sends no authorization header, preserving
+compatibility with unauthenticated services. The token has no CLI or TOML
+setting and is omitted entirely from `--print-config`, debug output, and logs.
+The service base still needs to be trusted because it receives that token and
 controls the observations written to the local cache.
 
 ## TOML File
@@ -294,6 +300,22 @@ stock-tui --db "$HOME/.local/share/stock-tui/alpaca-iex.sqlite3" --feed iex
 stock-tui --provider stock-api --stock-api-url http://127.0.0.1:8787 \
   --db "$HOME/.local/share/stock-tui/stock-api.sqlite3"
 ```
+
+Authorized private endpoint test:
+
+```bash
+read -rsp "Stock API token: " STOCK_TUI_STOCK_API_TOKEN
+printf '\n'
+export STOCK_TUI_STOCK_API_TOKEN
+stock-tui --provider stock-api \
+  --stock-api-url https://stock.chatcode.dev/api \
+  --db "$HOME/.local/share/stock-tui/stock-api.sqlite3"
+unset STOCK_TUI_STOCK_API_TOKEN
+```
+
+The private project endpoint limits each bearer-token fingerprint to 120
+requests per rolling 60-second window and returns `429` with `Retry-After` when
+the limit is exceeded. The client applies its bounded retry policy.
 
 Paths shown are Linux examples. Quote paths containing spaces. The parent
 directory is created automatically.

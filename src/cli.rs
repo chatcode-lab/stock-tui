@@ -73,6 +73,7 @@ mod tests {
             assert!(help.contains("--offline"));
             assert!(help.contains("--catalog-url"));
             assert!(help.contains("--stock-api-url"));
+            assert!(!help.contains("--stock-api-token"));
         }
     }
 

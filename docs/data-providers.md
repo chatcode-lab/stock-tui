@@ -193,10 +193,12 @@ while demo data is active.
 
 ## Provider-Neutral Stock API
 
-The `stock-api` adapter is a credential-free HTTP client for assets,
-snapshots, adjusted bars, and optional news. It is selected explicitly with
-`--provider stock-api` and a provider-specific base URL. It does not send
-Alpaca keys, cookies, generic bearer tokens, or API-key headers.
+The `stock-api` adapter is an optionally bearer-authenticated HTTP client for
+assets, snapshots, adjusted bars, and optional news. It is selected explicitly
+with `--provider stock-api` and a provider-specific base URL. It never sends
+Alpaca keys, cookies, or generic API-key headers. When
+`STOCK_TUI_STOCK_API_TOKEN` is set it sends that secret only as a bearer token
+through `StockApiProvider`; when unset it sends no authorization header.
 
 The routes and payloads do not name or assume an upstream vendor. They include
 generic `source` fields where provenance must survive normalization. The full
@@ -204,8 +206,9 @@ request/response schema, pagination, validation, timeout, body limits, errors,
 and cache semantics are specified in
 [Stock API HTTP Contract](stock-api-contract.md).
 
-`https://stock.chatcode.dev/api` is reserved as the configuration default but
-is not currently deployed as a licensed public market-data service. A local
+`https://stock.chatcode.dev/api` is the private project development endpoint
+and configuration default, not a licensed public market-data service. It
+requires an out-of-band bearer token for authorized remote tests. A local
 Cloudflare Worker can be tested at `http://127.0.0.1:8787`; other non-loopback
 deployments must use HTTPS.
 
@@ -267,7 +270,12 @@ The catalog builder:
    valid base symbol of four or fewer characters when the source-preferred
    unseparated sibling shares that prefix, then preserving SEC file order.
    Explicit share-class suffixes remain source-selected because classes can
-   have different per-share economics.
+   have different per-share economics. The reviewed issuer-specific exception
+   is Molson Coors (CIK `0000024545`): `TAP` Class B is selected over `TAP-A`
+   Class A because the classes share dividend and undistributed-earnings
+   economics, Class A converts one-for-one into Class B, and Class B is the
+   substantially larger listed class. Their voting rights still differ, so
+   this economic/liquidity choice does not relax the general share-class rule.
 3. Takes the newest SIC observation from the requested recent Financial
    Statement Data Set quarters.
 4. Searches recent quarterly XBRL frames, independently of the newest available

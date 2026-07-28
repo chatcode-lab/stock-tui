@@ -975,6 +975,7 @@ mod tests {
             catalog_refresh_interval: Duration::from_secs(24 * 60 * 60),
             stock_api_url: crate::config::DEFAULT_STOCK_API_URL.to_owned(),
             stock_api_news: true,
+            stock_api_token: None,
             data_url: base_url.to_owned(),
             trading_url: base_url.to_owned(),
             feed: "iex".to_owned(),

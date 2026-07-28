@@ -239,11 +239,12 @@ headers, and error redaction stay inside the Alpaca adapter. Future providers
 must add their own onboarding/credential path rather than reusing Alpaca
 assumptions.
 
-The `stock-api` adapter demonstrates the credential-free path. It maps the
-versioned [Stock API HTTP Contract](stock-api-contract.md) into the same domain
-types, validates HTTPS/loopback transport and bounded responses, and can omit
-the news capability. Its separately operated service remains responsible for
-data provenance and redistribution rights.
+The `stock-api` adapter demonstrates an isolated optional-authentication path.
+It maps the versioned [Stock API HTTP Contract](stock-api-contract.md) into the
+same domain types, validates HTTPS/loopback transport and bounded responses,
+can omit the news capability, and owns its environment-only bearer header.
+Alpaca and other adapters never receive that token. Its separately operated
+service remains responsible for data provenance and redistribution rights.
 
 Adding a provider requires more than implementing HTTP calls. Contributors
 must document provenance, timestamp and adjustment semantics, entitlements,

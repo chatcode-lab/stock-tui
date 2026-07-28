@@ -5,9 +5,10 @@ separately operated HTTP service. The contract is intentionally independent of
 any upstream vendor. Implementing the HTTP shape does not grant the operator
 rights to collect, cache, display, or redistribute any underlying data.
 
-The client does not send credentials, cookies, API keys, or authorization
-headers to this service. A deployment that needs authentication requires a
-future, explicitly designed client contract.
+The client does not send Alpaca credentials, cookies, or generic API-key
+headers to this service. It optionally sends a service-specific bearer token
+from the environment-only `STOCK_TUI_STOCK_API_TOKEN`; when unset, no
+authorization header is sent.
 
 ## Base URL And Versioning
 
@@ -60,8 +61,19 @@ Accept: application/json
 User-Agent: stock-tui/<version>
 ```
 
-It deliberately sends no application authentication header. Responses should
-use `Content-Type: application/json`.
+When `STOCK_TUI_STOCK_API_TOKEN` is set, it additionally sends:
+
+```http
+Authorization: Bearer <token>
+```
+
+There is deliberately no CLI or TOML token setting. The token and even its
+presence are excluded from `--print-config`, debug output, and logs. It is used
+only by `StockApiProvider`, never by Alpaca or another adapter. Redirects are
+disabled so a configured endpoint cannot forward the header to another URL.
+When the variable is unset, the header is absent and unauthenticated compatible
+services continue to work. Responses should use `Content-Type:
+application/json`.
 
 ## Active Assets
 
@@ -244,10 +256,14 @@ their data licenses and the time sensitivity of each endpoint.
 
 ## Deployment Status
 
-`https://stock.chatcode.dev/api` is the reserved default base URL. It is not
-currently a deployed or licensed public market-data service. Selecting
-`stock-api` will fail until the user points it at a compatible deployment.
-For local Cloudflare Worker development, use:
+`https://stock.chatcode.dev/api` is the project-operated private development
+endpoint and default base URL. It requires a bearer token distributed out of
+band to authorized testers and is not a licensed public market-data service.
+Its downstream limiter allows 120 requests per rolling 60-second window per
+SHA-256 token fingerprint. Responses are cached by complete request identity;
+the service returns `429` plus `Retry-After` after the limit is exhausted.
+
+For local Cloudflare Worker development without downstream authentication, use:
 
 ```bash
 stock-tui \

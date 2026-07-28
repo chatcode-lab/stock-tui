@@ -356,6 +356,7 @@ mod tests {
             catalog_refresh_interval: Duration::from_secs(12 * 60 * 60),
             stock_api_url: DEFAULT_STOCK_API_URL.to_owned(),
             stock_api_news: true,
+            stock_api_token: None,
             data_url: String::new(),
             trading_url: String::new(),
             feed: "managed".to_owned(),

@@ -4,7 +4,12 @@ use std::{collections::HashSet, fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
-use reqwest::{Client, Response, StatusCode, Url, header::HeaderMap};
+use reqwest::{
+    Client, Response, StatusCode, Url,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue},
+    redirect::Policy,
+};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, de::DeserializeOwned};
 
 use super::{AssetProvider, MarketDataProvider, NewsProvider, ProviderError, ProviderSet};
@@ -26,6 +31,7 @@ const MAX_ERROR_LENGTH: usize = 240;
 const MAX_NAME_LENGTH: usize = 512;
 const MAX_HEADLINE_LENGTH: usize = 2_048;
 const MAX_SUMMARY_LENGTH: usize = 16_384;
+const MAX_BEARER_TOKEN_LENGTH: usize = 4_096;
 
 #[derive(Debug, Clone, Copy)]
 struct RetryPolicy {
@@ -65,6 +71,7 @@ pub struct StockApiProvider {
     client: Client,
     base_url: Url,
     news_enabled: bool,
+    authorization: Option<HeaderValue>,
     retry: RetryPolicy,
 }
 
@@ -83,15 +90,25 @@ impl StockApiProvider {
     pub const DISPLAY_NAME: &'static str = "Stock API";
 
     pub fn new(base_url: &str, news_enabled: bool) -> Result<Self, ProviderError> {
+        Self::new_authenticated(base_url, news_enabled, None)
+    }
+
+    /// Construct an adapter with an optional service-specific bearer token.
+    pub fn new_authenticated(
+        base_url: &str,
+        news_enabled: bool,
+        bearer_token: Option<SecretString>,
+    ) -> Result<Self, ProviderError> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = Client::builder()
             .timeout(DEFAULT_TIMEOUT)
+            .redirect(Policy::none())
             .user_agent(concat!("stock-tui/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|_| ProviderError::Transport {
                 kind: "client setup",
             })?;
-        Self::with_client(base_url, news_enabled, client)
+        Self::with_client_and_token(base_url, news_enabled, client, bearer_token)
     }
 
     /// Construct with a controlled HTTP client, primarily for local fixtures.
@@ -100,10 +117,20 @@ impl StockApiProvider {
         news_enabled: bool,
         client: Client,
     ) -> Result<Self, ProviderError> {
+        Self::with_client_and_token(base_url, news_enabled, client, None)
+    }
+
+    fn with_client_and_token(
+        base_url: &str,
+        news_enabled: bool,
+        client: Client,
+        bearer_token: Option<SecretString>,
+    ) -> Result<Self, ProviderError> {
         Ok(Self {
             client,
             base_url: validate_base_url(base_url)?,
             news_enabled,
+            authorization: bearer_header(bearer_token.as_ref())?,
             retry: RetryPolicy::default(),
         })
     }
@@ -141,13 +168,15 @@ impl StockApiProvider {
     {
         let url = self.endpoint(path)?;
         for attempt in 0..=self.retry.max_retries {
-            let response = self
+            let mut request = self
                 .client
                 .get(url.clone())
                 .header(reqwest::header::ACCEPT, "application/json")
-                .query(query)
-                .send()
-                .await;
+                .query(query);
+            if let Some(authorization) = &self.authorization {
+                request = request.header(AUTHORIZATION, authorization);
+            }
+            let response = request.send().await;
             let response = match response {
                 Ok(response) => response,
                 Err(error) if attempt < self.retry.max_retries => {
@@ -767,6 +796,22 @@ fn retryable_status(status: StatusCode) -> bool {
     )
 }
 
+fn bearer_header(token: Option<&SecretString>) -> Result<Option<HeaderValue>, ProviderError> {
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    let token = token.expose_secret();
+    if token.trim().is_empty() || token.len() > MAX_BEARER_TOKEN_LENGTH {
+        return Err(ProviderError::InvalidRequest(
+            "invalid stock API bearer token".to_owned(),
+        ));
+    }
+    let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|_| ProviderError::InvalidRequest("invalid stock API bearer token".to_owned()))?;
+    value.set_sensitive(true);
+    Ok(Some(value))
+}
+
 fn parse_retry_after(value: &str) -> Option<Duration> {
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(Duration::from_secs(seconds));
@@ -882,6 +927,25 @@ mod tests {
         provider
     }
 
+    fn authenticated_provider(base_url: &str, news_enabled: bool, token: &str) -> StockApiProvider {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(2))
+            .redirect(Policy::none())
+            .build()
+            .expect("fixture client");
+        let mut provider = StockApiProvider::with_client_and_token(
+            base_url,
+            news_enabled,
+            client,
+            Some(SecretString::from(token.to_owned())),
+        )
+        .expect("authenticated provider");
+        provider.retry.base_delay = Duration::ZERO;
+        provider.retry.max_delay = Duration::ZERO;
+        provider
+    }
+
     #[tokio::test]
     async fn maps_the_versioned_contract_without_sending_credentials() {
         let (base_url, requests, server) = fixture_server(vec![
@@ -950,6 +1014,46 @@ mod tests {
             assert!(!lower.contains("authorization:"));
             assert!(!lower.contains("apca-api"));
             assert!(!lower.contains("api-key"));
+        }
+    }
+
+    #[tokio::test]
+    async fn sends_only_the_configured_stock_api_bearer_token() {
+        let (base_url, requests, server) = fixture_server(vec![response(
+            r#"{"schema_version":1,"data":[],"next_page_token":null}"#,
+        )]);
+        let token = "private-stock-api-test-token";
+        let provider = authenticated_provider(&base_url, false, token);
+
+        provider.fetch_assets().await.expect("authenticated assets");
+        server.join().expect("fixture server");
+
+        let requests = requests.lock().expect("requests");
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0].contains("authorization: Bearer private-stock-api-test-token\r\n")
+                || requests[0].contains("Authorization: Bearer private-stock-api-test-token\r\n")
+        );
+        let rendered = format!("{provider:?}");
+        assert!(!rendered.contains(token));
+        assert!(!rendered.contains("authorization"));
+    }
+
+    #[test]
+    fn rejects_invalid_bearer_tokens_without_echoing_them() {
+        for token in [
+            "line-one\r\nX-Leaked: value".to_owned(),
+            "x".repeat(MAX_BEARER_TOKEN_LENGTH + 1),
+        ] {
+            let error = StockApiProvider::new_authenticated(
+                "https://example.com/api",
+                false,
+                Some(SecretString::from(token.clone())),
+            )
+            .expect_err("invalid token");
+            let rendered = error.to_string();
+            assert!(!rendered.contains(&token));
+            assert!(rendered.contains("invalid stock API bearer token"));
         }
     }
 

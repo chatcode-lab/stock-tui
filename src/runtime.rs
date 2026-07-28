@@ -276,9 +276,10 @@ fn bootstrap_companies(storage: &Storage, mut candidates: Vec<Company>) -> Resul
 fn configured_providers(settings: &Settings) -> Result<ProviderSet> {
     match settings.provider {
         ProviderKind::Alpaca => Ok(AlpacaProvider::new(settings)?.into_provider_set()),
-        ProviderKind::StockApi => Ok(StockApiProvider::new(
+        ProviderKind::StockApi => Ok(StockApiProvider::new_authenticated(
             &settings.stock_api_url,
             settings.stock_api_news,
+            settings.stock_api_token.clone(),
         )?
         .into_provider_set()),
     }

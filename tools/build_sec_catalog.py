@@ -72,6 +72,15 @@ REVIEWED_HIGH_PRICE_CIKS = {
 }
 REVIEWED_LARGE_FLOAT_WITHOUT_AFS_CIKS: frozenset[int] = frozenset()
 
+# Canonical display/provider symbols with issuer-specific economic review.
+# Molson Coors Class A converts one-for-one into Class B and shares its dividend
+# economics, while Class B is the substantially larger listed class. Voting
+# rights still differ, so this exception must remain scoped to this CIK.
+# https://www.sec.gov/Archives/edgar/data/24545/000002454526000006/tap-20251231.htm
+REVIEWED_CANONICAL_SYMBOLS = {
+    24545: "TAP",
+}
+
 # These issuers have reviewed classes with equivalent per-share economics for
 # market-cap purposes. The exact member set is deliberate: a new or renamed
 # class makes the aggregation fail closed until the policy is reviewed.
@@ -436,7 +445,7 @@ def load_tickers(client: SecClient) -> tuple[dict[int, dict[str, Any]], str]:
         )
 
     identities = {
-        cik: canonical_identity(values) for cik, values in grouped.items()
+        cik: canonical_identity(values, cik=cik) for cik, values in grouped.items()
     }
     return identities, "sec_company_tickers_exchange"
 
@@ -452,7 +461,19 @@ def valid_ticker_symbol(symbol: str) -> bool:
     )
 
 
-def canonical_identity(identities: list[dict[str, Any]]) -> dict[str, Any]:
+def canonical_identity(
+    identities: list[dict[str, Any]], cik: int | None = None
+) -> dict[str, Any]:
+    reviewed_symbol = REVIEWED_CANONICAL_SYMBOLS.get(cik)
+    if reviewed_symbol is not None:
+        reviewed_matches = [
+            identity
+            for identity in identities
+            if str(identity["symbol"]) == reviewed_symbol
+        ]
+        if reviewed_matches:
+            return min(reviewed_matches, key=lambda identity: int(identity["ordinal"]))
+
     sibling_symbols = {str(identity["symbol"]) for identity in identities}
     source_preferred = min(
         identities,
