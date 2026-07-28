@@ -910,6 +910,9 @@ Wrangler OAuth storage, or shell history.
 - [`59bd27f` - Deploy the private authenticated stock gateway][private-commit-59bd27f]
 - [`75e605b` - Fix deploy workflow temporary config path][private-commit-75e605b]
 - [`210886a` - Optimize cached response delivery][private-commit-210886a]
+- [`31901f8` - Fail fast on invalid upstream credentials][private-commit-31901f8]
+- [`6bf23bb` - Preserve the Worker fetch receiver][private-commit-6bf23bb]
+- [`cc1f6ca` - Use Worker-compatible manual redirects][private-commit-cc1f6ca]
 
 **Summary**
 
@@ -949,6 +952,15 @@ listed. Its classes share the reviewed economic rights and one-for-one
 conversion but retain different voting rights. The ten remaining long symbols
 are valid listings or explicit share classes and are never truncated into
 nonexistent tickers.
+
+The live deployment exposed two edge-runtime assumptions that Node fixtures
+did not: a stored host `fetch` function must retain direct-call semantics, and
+Cloudflare Workerd rejects `redirect: "error"`. A local Workerd reproduction
+isolated the latter before the provider switched to manual redirect handling,
+which never forwards credentials. The deployment workflow now validates
+upstream access before provisioning and reports only stable error codes. Its
+final smoke test passed authenticated health, live `NVDA` pricing, SEC
+market-cap enrichment, and a repeat R2 response-cache hit.
 
 ## Maintenance Outside the Prompt Loop
 
@@ -1003,6 +1015,9 @@ implementation work.
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
 [private-commit-210886a]: https://github.com/chatcode-lab/stock-api/commit/210886afc358d75efec0f1977831cd4ed0d4f6d7
+[private-commit-31901f8]: https://github.com/chatcode-lab/stock-api/commit/31901f89d924373f9fa76f09d581c18d8ba4149c
+[private-commit-6bf23bb]: https://github.com/chatcode-lab/stock-api/commit/6bf23bb3c765ee871d5ef3e63ea5c8f91d3d6c40
+[private-commit-cc1f6ca]: https://github.com/chatcode-lab/stock-api/commit/cc1f6ca2a0aaadc5a76dbd99b942e49f6aa58b1d
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
