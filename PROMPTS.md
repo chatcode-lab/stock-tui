@@ -962,6 +962,52 @@ upstream access before provisioning and reports only stable error codes. Its
 final smoke test passed authenticated health, live `NVDA` pricing, SEC
 market-cap enrichment, and a repeat R2 response-cache hit.
 
+## 34. Configure the HTTP Provider and Sign macOS Builds
+
+> Make the Stock API provider values configurable in the application
+> configuration file and clarify whether that provider is hardcoded.
+>
+> Review and address the open Dependabot pull requests. Then make the macOS
+> release builds signed and notarized; signing credentials can be supplied
+> when the workflow is ready.
+>
+> Compare the implementation with the existing signing and notarization
+> workflow in the private `tractorfm/chatcode` repository where useful.
+
+**Committed changes**
+
+- [`d9a9eef` - Merge Dependabot's actions/checkout 7.0.1 update][commit-d9a9eef]
+- [`9604731` - Merge Dependabot's base64 0.23.0 update][commit-9604731]
+- [`82ad218` - Configure authenticated Stock API providers][commit-82ad218]
+- [`cf5fc4e` - Use the safe base64 implementation][commit-cf5fc4e]
+- [`685cdd9` - Sign and notarize macOS release builds][commit-685cdd9]
+
+**Summary**
+
+The provider choice, Stock API base URL, optional news capability, and bearer
+token can now live together in the platform `config.toml`; the environment
+token remains the higher-precedence override. The token is validated against
+the standard token68 alphabet, sent only to the selected non-redirecting HTTP
+adapter, and omitted from printed configuration, debug output, and parser
+errors. The endpoint is not fixed: any compatible implementation of the
+versioned Stock API contract can be selected by configuration. Provider IDs and
+wire-protocol adapters remain compiled Rust implementations behind the
+provider-neutral capability traits.
+
+Dependabot's checkout and Base64 updates were reviewed, tested, and merged.
+The application disables Base64 0.23's new optional unsafe SIMD default because
+OSC 52 clipboard output needs only the scalar standard implementation.
+
+The release workflow isolates Apple credentials in a macOS-only
+`macos-release` environment. Both Apple Silicon and Intel binaries receive a
+Developer ID Application signature, hardened runtime, and secure timestamp.
+Signed disk images must pass integrity checks, return an explicit `Accepted`
+notarization result and log without error-level issues, staple successfully,
+and pass Gatekeeper before publication. Manual workflow runs exercise the same
+path without publishing a release. The secret names match the proven private
+Chatcode workflow, while the public project adds mandatory notarization,
+stapled disk images, and fail-closed verification.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1011,6 +1057,11 @@ implementation work.
 [commit-3e89a7f]: https://github.com/chatcode-lab/stock-tui/commit/3e89a7f9134f2e7246f8bb9a55a30cff4c74d936
 [commit-0b6e198]: https://github.com/chatcode-lab/stock-tui/commit/0b6e1980466415a54e0c64e4395fe7d0684db2b3
 [commit-ce13883]: https://github.com/chatcode-lab/stock-tui/commit/ce13883ecfe36219679e398385dcb0a905002431
+[commit-d9a9eef]: https://github.com/chatcode-lab/stock-tui/commit/d9a9eefd69120181a85af31e5b27190acc7673e3
+[commit-9604731]: https://github.com/chatcode-lab/stock-tui/commit/9604731bcc01bdf44131cd1601632858e71ee65f
+[commit-82ad218]: https://github.com/chatcode-lab/stock-tui/commit/82ad218df44c445db35832434c04e58d5613e1f4
+[commit-cf5fc4e]: https://github.com/chatcode-lab/stock-tui/commit/cf5fc4e23e04d6ab60e6de70729076c423de44a9
+[commit-685cdd9]: https://github.com/chatcode-lab/stock-tui/commit/685cdd9f4dd8d62ce43dbfa66a94d5d4f141b34f
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
