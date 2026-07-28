@@ -22,15 +22,32 @@ clients receive JSON after transparent decompression.
 
 ## One-Time Provisioning
 
-Prerequisites are Node/npm, `jq`, Wrangler 4.114.0, access to the Cloudflare
-account containing the `chatcode.dev` zone, and its zone ID.
+Prerequisites are Node/npm, `jq`, access to the Cloudflare account containing
+the `chatcode.dev` zone, and its account and zone IDs.
+
+Do not use `wrangler login` from a remote terminal. Its OAuth callback listens
+on the remote machine's `localhost`, and browser bot challenges can prevent the
+authorization page from returning JSON. Instead, open
+<https://dash.cloudflare.com/profile/api-tokens> in your normal browser and
+create a temporary **custom API token** with:
+
+- Account / Workers R2 Storage / Edit for the intended account.
+- Zone / Zone / Read for the `chatcode.dev` zone.
+
+This is a Cloudflare REST API token, not an R2 S3 Access Key ID and Secret
+Access Key pair. Wrangler reads it from `CLOUDFLARE_API_TOKEN`.
+
+Run the provisioning script directly:
 
 ```bash
-npx --yes wrangler@4.114.0 login
-npx --yes wrangler@4.114.0 whoami
-CLOUDFLARE_ZONE_ID=<chatcode-dev-zone-id> \
-  infra/cloudflare/provision-catalog-r2.sh
+infra/cloudflare/provision-catalog-r2.sh
 ```
+
+It securely prompts for the token without echoing it, then asks for the
+account and zone IDs. The values exist only in the script process and are not
+written to the repository, Wrangler OAuth storage, or shell history. For
+non-interactive automation, export `CLOUDFLARE_API_TOKEN`,
+`CLOUDFLARE_ACCOUNT_ID`, and `CLOUDFLARE_ZONE_ID` before invoking the script.
 
 The provisioning script idempotently creates `stock-tui-catalog` and attaches
 `stock.chatcode.dev` with TLS 1.2 or newer. Keep the account's `r2.dev`
@@ -78,7 +95,7 @@ repository secrets:
 | Secret | Required scope |
 | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | The account containing `stock-tui-catalog` |
-| `CLOUDFLARE_API_TOKEN` | R2 object read/write for this account or, preferably, this bucket only |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare REST token with Workers R2 Storage Write for the publishing account |
 | `SEC_USER_AGENT` | Truthful application and maintainer contact required by SEC fair-access policy |
 
 The recurring token does not need DNS, zone, Worker script, D1, or general
