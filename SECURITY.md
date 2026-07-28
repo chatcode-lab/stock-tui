@@ -95,11 +95,11 @@ site is not proof that `chatcode-lab` produced it.
 
 Every macOS release-workflow build fails closed unless it can apply a Developer
 ID Application signature with the hardened runtime and secure timestamp,
-receive Apple notarization approval, and obtain an online Gatekeeper assessment
-with `source=Notarized Developer ID`. The published tarball is checksummed but
-is not itself an Apple code object; it contains the byte-verified signed and
-notarized executable. Standalone executables and tar or ZIP transports cannot
-carry stapled tickets.
+receive Apple notarization approval, and satisfy the `notarized` code-signing
+requirement through Apple's online ticket check. The published tarball is
+checksummed but is not itself an Apple code object; it contains the
+byte-verified signed and notarized executable. Standalone executables and tar
+or ZIP transports cannot carry stapled tickets.
 Signing certificates, private keys, and notarization credentials belong only
 in the protected `macos-release` GitHub Actions environment and an appropriate
 maintainer secret manager. See [Release Process](docs/releasing.md) for the

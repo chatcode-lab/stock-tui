@@ -26,8 +26,8 @@ pre-1.0 releases.
 - Added deterministic compact SEC catalog packaging and a daily GitHub Actions
   publisher for versioned Cloudflare R2 objects and manifests.
 - Added Developer ID signing, hardened runtime, secure timestamps, Apple
-  notarization, online Gatekeeper verification, and macOS release archives
-  whose extracted executable is byte-checked against the accepted binary.
+  notarization, online ticket verification, and macOS release archives whose
+  extracted executable is byte-checked against the accepted binary.
 
 ### Changed
 

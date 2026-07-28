@@ -207,21 +207,21 @@ jobs:
           cmp -s dist/stock-tui "$verification_directory/stock-tui"
           codesign --verify --strict --verbose=2 "$verification_directory/stock-tui"
 
-          if ! gatekeeper_output="$(
-            spctl --assess --type execute --verbose=2 \
+          if ! notarization_output="$(
+            codesign --verify --strict --verbose=4 \
+              --check-notarization -R='notarized' \
               "$verification_directory/stock-tui" 2>&1
           )"; then
-            printf '%s\n' "$gatekeeper_output" \
-              | sed -n -e '/: rejected$/p' -e '/^source=/p' >&2
+            printf '%s\n' "$notarization_output" \
+              | sed -n \
+                  -e '/valid on disk/p' \
+                  -e '/satisfies/p' \
+                  -e '/notariz/p' \
+                  -e '/invalid/p' \
+                  -e '/failed/p' >&2
             exit 1
           fi
-          if ! grep -Fxq 'source=Notarized Developer ID' \
-            <<<"$gatekeeper_output"; then
-            printf '%s\n' "$gatekeeper_output" \
-              | sed -n -e '/: accepted$/p' -e '/^source=/p' >&2
-            exit 1
-          fi
-          printf 'Archived executable assessment: source=Notarized Developer ID.\n'
+          printf 'Archived executable satisfies Apple notarization requirement.\n'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}

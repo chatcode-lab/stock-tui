@@ -53,9 +53,11 @@ class MacosReleasePolicyTests(unittest.TestCase):
             macos_build,
         )
         self.assertIn(
-            "Archived executable assessment: source=Notarized Developer ID.",
+            "Archived executable satisfies Apple notarization requirement.",
             macos_build,
         )
+        self.assertIn("--check-notarization -R='notarized'", macos_build)
+        self.assertNotIn("spctl", macos_build)
 
     def test_release_script_enforces_apple_distribution_controls(self) -> None:
         script = SIGNING_SCRIPT.read_text(encoding="utf-8")
@@ -68,7 +70,8 @@ class MacosReleasePolicyTests(unittest.TestCase):
             "/usr/bin/ditto -c -k --keepParent",
             "xcrun notarytool submit",
             "xcrun notarytool log",
-            "spctl",
+            "--check-notarization",
+            "-R='notarized'",
         ):
             with self.subTest(required_command=required_command):
                 self.assertIn(required_command, script)
@@ -85,19 +88,13 @@ class MacosReleasePolicyTests(unittest.TestCase):
         self.assertIn('notary_status" != "Accepted"', script)
         self.assertIn('notary_log_status" != "Accepted"', script)
         self.assertIn('notary_error_count" -ne 0', script)
-        self.assertIn(
-            "grep -Fxq 'source=Notarized Developer ID'",
-            script,
-        )
-        self.assertIn(
-            "Gatekeeper assessment: source=Notarized Developer ID.",
-            script,
-        )
+        self.assertIn("Online notarization requirement accepted.", script)
         self.assertIn("for attempt in 1 2 3 4 5 6", script)
         self.assertIn('sleep 10', script)
         self.assertIn("trap cleanup EXIT HUP INT TERM", script)
         self.assertNotIn("stapler", script)
         self.assertNotIn("hdiutil", script)
+        self.assertNotIn("spctl", script)
         self.assertLess(
             script.index("/usr/bin/ditto -c -k --keepParent"),
             script.index("xcrun notarytool submit"),
@@ -108,7 +105,7 @@ class MacosReleasePolicyTests(unittest.TestCase):
         )
         self.assertLess(
             script.index("xcrun notarytool log"),
-            script.index("gatekeeper_accepted="),
+            script.index("notarization_accepted="),
         )
 
 

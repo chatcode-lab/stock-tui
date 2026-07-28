@@ -7,7 +7,7 @@ Usage: sign-notarize-macos.sh <binary>
 
 Signs a macOS command-line binary with Developer ID and the hardened runtime,
 submits a transient ZIP to Apple's notary service, and validates the binary
-against Gatekeeper's online notarization ticket.
+against Apple's online notarization requirement.
 EOF
 }
 
@@ -51,7 +51,7 @@ fi
 
 require_environment
 
-for command in codesign jq openssl plutil security spctl xcrun; do
+for command in codesign jq openssl plutil security xcrun; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'Required macOS release tool %s is not available.\n' "$command" >&2
     exit 69
@@ -76,7 +76,7 @@ notary_stderr_path="$work_directory/notary-submit.stderr"
 notary_log_path="$work_directory/notary-log.json"
 notary_log_stderr_path="$work_directory/notary-log.stderr"
 notary_zip_path="$work_directory/stock-tui-notarization.zip"
-gatekeeper_output_path="$work_directory/gatekeeper-assessment.txt"
+notarization_check_output_path="$work_directory/notarization-check.txt"
 entitlements_path="$work_directory/binary-entitlements.plist"
 entitlements_stderr_path="$work_directory/binary-entitlements.stderr"
 keychain_path="$work_directory/signing.keychain-db"
@@ -263,36 +263,38 @@ then
   exit 65
 fi
 
-printf 'Validating the executable against Gatekeeper online.\n'
-gatekeeper_accepted="false"
+printf "Validating the executable against Apple's online notarization requirement.\n"
+notarization_accepted="false"
 for attempt in 1 2 3 4 5 6; do
-  if spctl \
-    --assess \
-    --type execute \
-    --verbose=2 \
+  if codesign \
+    --verify \
+    --strict \
+    --verbose=4 \
+    --check-notarization \
+    -R='notarized' \
     "$binary_path" \
-    >"$gatekeeper_output_path" \
+    >"$notarization_check_output_path" \
     2>&1
   then
-    if grep -Fxq 'source=Notarized Developer ID' "$gatekeeper_output_path"; then
-      gatekeeper_accepted="true"
-      break
-    fi
+    notarization_accepted="true"
+    break
   fi
   if [[ "$attempt" -lt 6 ]]; then
     sleep 10
   fi
 done
-if [[ "$gatekeeper_accepted" != "true" ]]; then
-  printf 'Gatekeeper did not accept the notarized executable online.\n' >&2
+if [[ "$notarization_accepted" != "true" ]]; then
+  printf "The executable did not satisfy Apple's online notarization requirement.\n" >&2
   sed -n \
-    -e '/: accepted$/p' \
-    -e '/: rejected$/p' \
-    -e '/^source=/p' \
-    "$gatekeeper_output_path" >&2
+    -e '/valid on disk/p' \
+    -e '/satisfies/p' \
+    -e '/notariz/p' \
+    -e '/invalid/p' \
+    -e '/failed/p' \
+    "$notarization_check_output_path" >&2
   exit 65
 fi
-printf 'Gatekeeper assessment: source=Notarized Developer ID.\n'
+printf 'Online notarization requirement accepted.\n'
 
-printf 'Signed and notarized %s; Gatekeeper accepted its online ticket.\n' \
+printf 'Signed and notarized %s; Apple accepted its online ticket.\n' \
   "$binary_path"

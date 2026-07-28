@@ -24,8 +24,8 @@ an upload transport under `RUNNER_TEMP`; it is never a workflow artifact or
 release asset. Neither a standalone Mach-O executable nor a ZIP or tar archive
 can carry a stapled ticket. The first Gatekeeper assessment therefore needs
 network access to retrieve the ticket from Apple. The workflow validates that
-online path before archiving the executable and does not publish a disk image
-solely as a ticket container.
+online ticket before archiving the executable and does not publish a disk
+image solely as a ticket container.
 
 Apple requires directly distributed macOS software to use a Developer ID
 certificate, a secure timestamp, and the hardened runtime before
@@ -112,7 +112,7 @@ gh secret set APPLE_NOTARY_ISSUER_ID \
 4. Watch the `Release` workflow. A missing or invalid Apple credential fails
    both macOS release jobs before publication.
 5. Confirm that both macOS jobs report accepted notarization and successful
-   online Gatekeeper assessment before treating the GitHub release as complete.
+   online ticket verification before treating the GitHub release as complete.
 
 The workflow imports the signing identity into an ephemeral keychain,
 temporarily registers it in the runner's user search list, signs the executable
@@ -120,12 +120,15 @@ with a stable identifier, secure timestamp, and hardened runtime, and rejects a
 true `com.apple.security.get-task-allow` entitlement. It submits a transient ZIP
 with `notarytool`, then downloads the JSON submission log. It requires
 `Accepted` in both responses, rejects any error-level issue, and retries an
-online `spctl` assessment up to six times, ten seconds apart, until it
-explicitly reports `source=Notarized Developer ID`. After creating the tarball,
-the workflow extracts it to a temporary directory, byte-compares its executable
-with the accepted source file, then repeats the signature and online Gatekeeper
-checks. The original search list is restored, and the temporary ZIP, key
-material, response logs, and keychain are removed when the step exits.
+online `codesign --check-notarization` verification up to six times, ten
+seconds apart, until the executable satisfies the `notarized` requirement.
+Apple documents that command for standalone "other code"; `spctl --type
+execute` is intended for app bundles and can reject a valid command-line tool
+because it is not an app. After creating the tarball, the workflow extracts it
+to a temporary directory, byte-compares its executable with the accepted source
+file, then repeats the signature and online ticket checks. The original search
+list is restored, and the temporary ZIP, key material, response logs, and
+keychain are removed when the step exits.
 
 ## Independent Verification
 
@@ -145,12 +148,13 @@ ticket:
 codesign --verify --strict --verbose=2 stock-tui-release-check/stock-tui
 codesign --display --verbose=4 stock-tui-release-check/stock-tui
 codesign --display --entitlements :- stock-tui-release-check/stock-tui
-spctl --assess --type execute --verbose=2 stock-tui-release-check/stock-tui
+codesign --verify --strict --verbose=4 --check-notarization \
+  -R='notarized' stock-tui-release-check/stock-tui
 ```
 
 The signature details should identify a Developer ID Application authority,
 show the `runtime` flag, include a timestamp, and omit a true
-`com.apple.security.get-task-allow` entitlement. The Gatekeeper output must
-include `source=Notarized Developer ID`; a generic Developer ID acceptance is
-not sufficient proof of the online notarization ticket. Do not publish a macOS
-release when any of these checks fail.
+`com.apple.security.get-task-allow` entitlement. The final command must exit
+successfully; signature validity alone is not sufficient proof of the online
+notarization ticket. Do not publish a macOS release when any of these checks
+fail.
