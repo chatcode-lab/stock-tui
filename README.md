@@ -191,10 +191,23 @@ available for compatible separately operated services:
 stock-tui --provider stock-api --stock-api-url http://127.0.0.1:8787
 ```
 
-Compatible services may be unauthenticated, or may require the optional
-environment-only `STOCK_TUI_STOCK_API_TOKEN` bearer token. There is no CLI or
-TOML token setting, and `--print-config` omits both its value and presence.
-For the private development endpoint:
+Compatible services may be unauthenticated, or may require an optional bearer
+token. Provider selection, base URL, optional news, and token can be kept in
+the platform `config.toml` shown by `stock-tui --print-config`:
+
+```toml
+provider = "stock-api"
+
+[providers.stock_api]
+base_url = "https://stock.chatcode.dev/api"
+news = true
+token = "replace-with-an-out-of-band-token"
+```
+
+Keep a token-bearing file private and never commit it. The higher-precedence
+`STOCK_TUI_STOCK_API_TOKEN` environment variable is useful for temporary
+overrides. There is no CLI token flag, and `--print-config` omits both its
+value and presence. For a one-session private endpoint test:
 
 ```bash
 read -rsp "Stock API token: " STOCK_TUI_STOCK_API_TOKEN
@@ -231,18 +244,23 @@ populate a live cache, or use `--demo` for a self-contained experience.
 
 ### Prebuilt Binaries
 
-Download the archive for your operating system and CPU from
+Download the release asset for your operating system and CPU from
 [GitHub Releases](https://github.com/chatcode-lab/stock-tui/releases), verify
-the archive against the attached `SHA256SUMS`, extract it, and place `stock-tui`
+it against the attached `SHA256SUMS`, open or extract it, and place `stock-tui`
 (or `stock-tui.exe`) on `PATH`.
 
 | Platform | Release asset |
 | --- | --- |
 | Linux x86_64 | `stock-tui-v<VERSION>-x86_64-unknown-linux-musl.tar.gz` |
 | Linux ARM64 | `stock-tui-v<VERSION>-aarch64-unknown-linux-musl.tar.gz` |
-| macOS Apple Silicon | `stock-tui-v<VERSION>-aarch64-apple-darwin.tar.gz` |
-| macOS Intel | `stock-tui-v<VERSION>-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `stock-tui-v<VERSION>-aarch64-apple-darwin.dmg` |
+| macOS Intel | `stock-tui-v<VERSION>-x86_64-apple-darwin.dmg` |
 | Windows x86_64 | `stock-tui-v<VERSION>-x86_64-pc-windows-msvc.zip` |
+
+Tagged releases provide Developer ID-signed, notarized, and stapled macOS disk
+images. Signed `tar.gz` alternatives remain available for scripted installs;
+the disk images provide offline notarization-ticket verification. Maintainer
+details are in [Release Process](docs/releasing.md).
 
 The GitHub CLI can display and download the latest available assets:
 

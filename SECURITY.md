@@ -93,6 +93,15 @@ prebuilt binaries only from the repository's GitHub Releases page and verify
 published checksums when available. The existence of an archive on another
 site is not proof that `chatcode-lab` produced it.
 
+Every macOS release-workflow build fails closed unless it can apply a Developer
+ID Application signature with the hardened runtime and secure timestamp,
+receive Apple notarization approval, and staple and validate the disk-image
+ticket.
+Signing certificates, private keys, and notarization credentials belong only
+in the protected `macos-release` GitHub Actions environment and an appropriate
+maintainer secret manager. See [Release Process](docs/releasing.md) for the
+credential and verification model.
+
 Security-sensitive dependency updates should include the reason, affected
 surface, and normal format/lint/test results. Reports about a dependency should
 identify whether the vulnerable code path is enabled or reachable in this

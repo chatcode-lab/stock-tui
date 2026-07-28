@@ -28,6 +28,8 @@ jobs:
           package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
           test "v${package_version}" = "${GITHUB_REF_NAME}"
       - run: cargo test --locked --all-targets
+      - name: Validate release scripts
+        run: bash -n tools/release/sign-notarize-macos.sh
 
   catalog:
     needs: verify
@@ -85,19 +87,12 @@ jobs:
             artifact: stock-tui-aarch64-unknown-linux-musl
             binary: stock-tui
             target: aarch64-unknown-linux-musl
-          - os: macos-latest
-            artifact: stock-tui-aarch64-apple-darwin
-            binary: stock-tui
-            target: aarch64-apple-darwin
-          - os: macos-15-intel
-            artifact: stock-tui-x86_64-apple-darwin
-            binary: stock-tui
-            target: x86_64-apple-darwin
           - os: windows-latest
             artifact: stock-tui-x86_64-pc-windows-msvc
             binary: stock-tui.exe
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -124,8 +119,8 @@ jobs:
           echo "CC_${target_key}=musl-gcc" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_${target_upper}_LINKER=musl-gcc" >> "$GITHUB_ENV"
       - run: cargo build --locked --release --target "${{ matrix.target }}"
-      - name: Stage Unix artifact
-        if: runner.os != 'Windows'
+      - name: Stage Linux artifact
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
@@ -153,8 +148,74 @@ jobs:
             stock-tui-v*-${{ matrix.target }}.zip
           if-no-files-found: error
 
+  build-macos:
+    needs: [verify, catalog]
+    environment: macos-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: stock-tui-aarch64-apple-darwin
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            artifact: stock-tui-x86_64-apple-darwin
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-sec-catalog
+          path: data
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.95"
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: cargo build --locked --release --target "${{ matrix.target }}"
+      - name: Stage macOS payload
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/stock-tui" dist/
+          cp README.md LICENSE CHANGELOG.md config.example.toml .env.example dist/
+          ./dist/stock-tui --version
+      - name: Sign, notarize, and staple macOS release
+        shell: bash
+        env:
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          MACOS_SIGNING_CERT_P12_BASE64: ${{ secrets.MACOS_SIGNING_CERT_P12_BASE64 }}
+          MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+        run: |
+          package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
+          architecture="${{ matrix.target }}"
+          architecture="${architecture%%-*}"
+          tools/release/sign-notarize-macos.sh \
+            dist/stock-tui \
+            dist \
+            "stock-tui-v${package_version}-${{ matrix.target }}.dmg" \
+            "stock-tui ${package_version} ${architecture}"
+      - name: Archive signed macOS artifact
+        shell: bash
+        run: |
+          package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
+          tar -C dist -czf "stock-tui-v${package_version}-${{ matrix.target }}.tar.gz" .
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            stock-tui-v*-${{ matrix.target }}.tar.gz
+            stock-tui-v*-${{ matrix.target }}.dmg
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build, build-macos]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:

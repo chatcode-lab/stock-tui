@@ -20,11 +20,13 @@ pre-1.0 releases.
   and diluted securities.
 - Added provider-neutral asset, market-data, and optional-news capabilities,
   with adapter selection through CLI, environment, or namespaced TOML.
-- Added the credential-free `stock-api` HTTP adapter, including a versioned
-  interoperability contract, bounded validation/retries, and local-development
-  configuration for compatible operator-supplied services.
+- Added the optionally bearer-authenticated `stock-api` HTTP adapter, including
+  a versioned interoperability contract, bounded validation/retries, and
+  namespaced TOML configuration for compatible operator-supplied services.
 - Added deterministic compact SEC catalog packaging and a daily GitHub Actions
   publisher for versioned Cloudflare R2 objects and manifests.
+- Added Developer ID signing, hardened runtime, secure timestamps, Apple
+  notarization, and stapled disk images for macOS release-workflow builds.
 
 ### Changed
 
@@ -71,6 +73,8 @@ pre-1.0 releases.
 - Confirmed bring-your-own-key as the project architecture under ordinary
   Alpaca terms and added a public-display licensing inquiry checklist and
   ready-to-send request template.
+- Documented Apple release credentials, secret-safe GitHub setup, and
+  independent signature, notarization-ticket, and Gatekeeper verification.
 
 ## [0.1.1] - 2026-07-24
 
