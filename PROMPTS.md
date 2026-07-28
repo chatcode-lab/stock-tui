@@ -13,11 +13,10 @@ omitted. Attached StockTouch and work-in-progress screenshots are described
 but not republished here. Every commit link is immutable; links into private
 infrastructure repositories require collaborator access.
 
-The chronology covers product-development prompts through the `v0.1.1`
-release and the first post-release provider, onboarding, market-cap, and SEC
-catalog pipeline, plus the first private development-provider prototype. It
-excludes session-management instructions and this document's own editorial
-requests.
+The chronology covers product-development prompts through the `v0.2.0`
+release, including the provider, onboarding, market-cap, SEC catalog, private
+development-provider, UI refinement, and signed distribution work. It excludes
+session-management instructions and this document's own editorial requests.
 
 ## 1. Build a StockTouch-Inspired Market TUI
 
@@ -1062,6 +1061,111 @@ inactive local secret-bearing state, and malformed typed environment values
 fail by variable name instead of silently falling through or exposing their
 contents.
 
+## 36. Honor the Configured Provider During Startup
+
+> I configured `provider = "stock-api"` in `config.toml`, but a normal
+> `cargo run --release` still says that it is checking Alpaca credentials.
+> Make the selected provider effective during startup.
+
+**Committed changes**
+
+- [`976c207` - Prepare stock-tui 0.2.0][commit-976c207]
+
+**Summary**
+
+Startup now resolves the provider before credential handling and reports
+provider-neutral initialization progress. An explicit Stock API choice skips
+Alpaca credential loading, validation, and onboarding even when Alpaca values
+exist in `.env` or the user's configuration directory. CLI and environment
+provider overrides retain their documented precedence over platform TOML.
+
+## 37. Refine Status, Help, and Heatmap Controls
+
+> Before the next release, improve the UI and UX:
+>
+> - Show detailed startup and synchronization progress with numeric counts.
+> - Left-align the Help and Data Status columns.
+> - Display the application version below the keyboard hints.
+> - Underline only a stale ticker symbol, not its entire cell contents.
+> - Vertically center Sector cells and show one selectable metric beneath each
+>   ticker. Let `i` cycle price, relative gain, absolute gain, sector-relative
+>   gain, market cap, and volume.
+> - Let `o` reverse the current ordering and `v` switch between the normal grid
+>   and StockTouch's clockwise center-out spiral layout.
+> - Draw thin frames around favorite cells when space permits.
+
+**Committed changes**
+
+- [`976c207` - Prepare stock-tui 0.2.0][commit-976c207]
+
+**Summary**
+
+The status chrome now exposes bounded phase counts and percentages, overlays
+use scan-friendly left-aligned columns, and the action rail includes the
+package version. Staleness styling is scoped to the ticker span.
+
+Sector and Starred cells use stable equal dimensions, vertically center a
+ticker plus one width-aware metric, preserve signs and units at the minimum
+supported viewport, and frame favorites without changing layout. `i` cycles
+the six requested metrics. `o` reverses each loaded group in memory while
+preserving selection, and `v` maps ranks through a tested clockwise spiral
+shared by rendering, keyboard navigation, and mouse hit targets. Detail
+headers and chart endpoints also resolve price, volume, and freshness from one
+coherent cached observation.
+
+## 38. Expose Overview Controls and Add a Volume Palette
+
+> The `o` control works on the main screen but is not shown as a hint. The `v`
+> control is neither active nor shown there; make both available.
+>
+> The original StockTouch used a different palette when sorting by volume.
+> Consider coloring high-to-low volume by brightness while giving each sector
+> its own hue.
+
+**Committed changes**
+
+- [`976c207` - Prepare stock-tui 0.2.0][commit-976c207]
+
+**Summary**
+
+Overview now exposes clickable and keyboard-driven Order and View controls,
+and grid/spiral presentation is consistent at every heatmap level. Volume
+ordering uses log-percentile normalization within each sector to reduce
+outlier domination, distinct sector hues in color mode, and brightness for
+relative activity. Missing volume remains neutral, focus colors remain
+legible, and monochrome terminals retain the same intensity ordering without
+hue.
+
+## 39. Consolidate Credentials, Add Range Zoom, and Release 0.2.0
+
+> Allow Alpaca keys in `config.toml` instead of requiring a separate
+> `credentials.env`; splitting these settings has no clear benefit.
+>
+> Add `=`/`+` and `-` shortcuts that zoom in to the next shorter date range and
+> out to the next longer range. Address both changes and build a new release.
+
+**Committed changes**
+
+- [`976c207` - Prepare stock-tui 0.2.0][commit-976c207]
+- [`v0.2.0` release][release-v0.2.0]
+
+**Summary**
+
+`[providers.alpaca]` now accepts `api_key` and `api_secret`, and successful
+onboarding writes that pair into the platform `config.toml` while preserving
+comments and unrelated settings. Complete process or `.env` values remain the
+highest-precedence pair. The former `credentials.env` location is read only as
+an upgrade fallback, so existing users do not need to re-enter credentials.
+Secret values stay redacted from errors and debug output, and onboarding makes
+the TOML owner-only on Unix.
+
+`=` and `+` zoom toward the next shorter range, while `-` zooms toward the next
+longer range across Overview, Sector, Starred, and Detail routes. Search and
+modal overlays retain ownership of their input. The `v0.2.0` release packages
+five locked cross-platform builds, with signed and notarized Intel and Apple
+Silicon macOS executables, plus checksums; publication filters out the
+build-only catalog artifact and requires the exact archive count.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1120,6 +1224,7 @@ implementation work.
 [commit-eba5667]: https://github.com/chatcode-lab/stock-tui/commit/eba566713605468353c9e488e0ffeac634d2ebc6
 [commit-8660af2]: https://github.com/chatcode-lab/stock-tui/commit/8660af2152dca79a804479e1eea36e94d21a9aa8
 [commit-d7e2290]: https://github.com/chatcode-lab/stock-tui/commit/d7e22905ccd0a2236c0779b73c0ecd3330764c81
+[commit-976c207]: https://github.com/chatcode-lab/stock-tui/commit/976c207d02ead76ccbfebc2e275ffac3dfdf4999
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1130,3 +1235,4 @@ implementation work.
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
+[release-v0.2.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.0
