@@ -1017,6 +1017,42 @@ then the original search list is restored during cleanup. Local PKCS#12
 certificate exports and standard App Store Connect private-key filenames are
 also ignored defensively so credential setup cannot accidentally stage them.
 
+## 35. Prefer CLI Archives and Explicit Provider Precedence
+
+> Are DMGs really needed for a console application? They do not look like the
+> right distribution format. If they are needed only for notarization, omit
+> them for now or notarize an archive if Apple supports that.
+>
+> The `provider` value in `config.toml` should remain effective even when
+> Alpaca credentials exist in the user's home configuration. Also add a TOML
+> comment explaining where those credentials are stored.
+
+**Committed changes**
+
+- [`8660af2` - Prefer configured providers and macOS archives][commit-8660af2]
+
+**Summary**
+
+macOS releases now use the conventional `tar.gz` CLI artifact only. The
+workflow signs the standalone executable with Developer ID and the hardened
+runtime, places it in a temporary ZIP accepted by Apple's notarization service,
+and deletes that upload container with the ephemeral keychain material. It
+requires accepted submit and log responses, then waits for Gatekeeper to report
+the exact `source=Notarized Developer ID` result. The published tarball is
+extracted again, and its executable is byte-compared, signature-verified, and
+Gatekeeper-assessed before upload. This retains online notarization without
+publishing a DMG solely to carry a stapled ticket; standalone executables and
+tar or ZIP transports do not provide offline stapling.
+
+Provider choice is now resolved explicitly before any managed credential
+lookup: CLI, then environment or `.env`, then platform `config.toml`, then the
+Alpaca default. A stored `<config_dir>/credentials.env` pair therefore cannot
+select Alpaca or override `provider = "stock-api"`. The example configuration
+names both platform paths, the repository-root `config.toml` is ignored as
+inactive local secret-bearing state, and malformed typed environment values
+fail by variable name instead of silently falling through or exposing their
+contents.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1073,6 +1109,7 @@ implementation work.
 [commit-685cdd9]: https://github.com/chatcode-lab/stock-tui/commit/685cdd9f4dd8d62ce43dbfa66a94d5d4f141b34f
 [commit-9eaf576]: https://github.com/chatcode-lab/stock-tui/commit/9eaf57695ef6061c4e3c28a9b9f072baa9441d4f
 [commit-eba5667]: https://github.com/chatcode-lab/stock-tui/commit/eba566713605468353c9e488e0ffeac634d2ebc6
+[commit-8660af2]: https://github.com/chatcode-lab/stock-tui/commit/8660af2152dca79a804479e1eea36e94d21a9aa8
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
