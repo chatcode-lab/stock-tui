@@ -184,7 +184,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/stock-tui" dist/
           cp README.md LICENSE CHANGELOG.md config.example.toml .env.example dist/
           ./dist/stock-tui --version
-      - name: Sign, notarize, and staple macOS release
+      - name: Sign and notarize macOS release
         shell: bash
         env:
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
@@ -193,25 +193,39 @@ jobs:
           MACOS_SIGNING_CERT_P12_BASE64: ${{ secrets.MACOS_SIGNING_CERT_P12_BASE64 }}
           MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
         run: |
-          package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
-          architecture="${{ matrix.target }}"
-          architecture="${architecture%%-*}"
-          tools/release/sign-notarize-macos.sh \
-            dist/stock-tui \
-            dist \
-            "stock-tui-v${package_version}-${{ matrix.target }}.dmg" \
-            "stock-tui ${package_version} ${architecture}"
-      - name: Archive signed macOS artifact
+          tools/release/sign-notarize-macos.sh dist/stock-tui
+      - name: Archive signed macOS executable
         shell: bash
         run: |
           package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
-          tar -C dist -czf "stock-tui-v${package_version}-${{ matrix.target }}.tar.gz" .
+          archive="stock-tui-v${package_version}-${{ matrix.target }}.tar.gz"
+          tar -C dist -czf "$archive" .
+
+          verification_directory="$(mktemp -d "${RUNNER_TEMP%/}/stock-tui-archive.XXXXXX")"
+          trap 'rm -rf "$verification_directory"' EXIT
+          tar -C "$verification_directory" -xzf "$archive"
+          cmp -s dist/stock-tui "$verification_directory/stock-tui"
+          codesign --verify --strict --verbose=2 "$verification_directory/stock-tui"
+
+          if ! gatekeeper_output="$(
+            spctl --assess --type execute --verbose=2 \
+              "$verification_directory/stock-tui" 2>&1
+          )"; then
+            printf '%s\n' "$gatekeeper_output" \
+              | sed -n -e '/: rejected$/p' -e '/^source=/p' >&2
+            exit 1
+          fi
+          if ! grep -Fxq 'source=Notarized Developer ID' \
+            <<<"$gatekeeper_output"; then
+            printf '%s\n' "$gatekeeper_output" \
+              | sed -n -e '/: accepted$/p' -e '/^source=/p' >&2
+            exit 1
+          fi
+          printf 'Archived executable assessment: source=Notarized Developer ID.\n'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            stock-tui-v*-${{ matrix.target }}.tar.gz
-            stock-tui-v*-${{ matrix.target }}.dmg
+          path: stock-tui-v*-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
   publish:

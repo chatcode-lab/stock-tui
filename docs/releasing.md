@@ -5,20 +5,27 @@ Local source builds do not require signing credentials.
 
 ## Release Outputs
 
-The release workflow builds five target archives. Every run also produces one
-signed, notarized, and stapled disk image for each macOS architecture:
+The release workflow builds five target archives. Every macOS archive contains
+a Developer ID-signed, notarized command-line executable:
 
-| Target | Archive | Signed disk image |
-| --- | --- | --- |
-| Apple Silicon | `stock-tui-v<VERSION>-aarch64-apple-darwin.tar.gz` | `stock-tui-v<VERSION>-aarch64-apple-darwin.dmg` |
-| Intel | `stock-tui-v<VERSION>-x86_64-apple-darwin.tar.gz` | `stock-tui-v<VERSION>-x86_64-apple-darwin.dmg` |
+| Target | Archive containing signed executable |
+| --- | --- |
+| Apple Silicon | `stock-tui-v<VERSION>-aarch64-apple-darwin.tar.gz` |
+| Intel | `stock-tui-v<VERSION>-x86_64-apple-darwin.tar.gz` |
 
-The macOS tarballs and disk images contain the same Developer ID-signed
-command-line binary. The disk images carry stapled notarization tickets and
-are the preferred macOS downloads. Tag runs publish all artifacts and a
-`SHA256SUMS` file to GitHub Releases. Manually dispatched runs perform the same
-signing and Apple validation but retain the results as short-lived workflow
-artifacts instead of publishing a release.
+Tag runs publish all archives and a `SHA256SUMS` file to GitHub Releases.
+Manually dispatched runs perform the same signing and Apple validation but
+retain the results as short-lived workflow artifacts instead of publishing a
+release.
+
+Apple's notary service accepts a temporary ZIP containing the signed
+executable and publishes a ticket for its code-directory hash. The ZIP is only
+an upload transport under `RUNNER_TEMP`; it is never a workflow artifact or
+release asset. Neither a standalone Mach-O executable nor a ZIP or tar archive
+can carry a stapled ticket. The first Gatekeeper assessment therefore needs
+network access to retrieve the ticket from Apple. The workflow validates that
+online path before archiving the executable and does not publish a disk image
+solely as a ticket container.
 
 Apple requires directly distributed macOS software to use a Developer ID
 certificate, a secure timestamp, and the hardened runtime before
@@ -32,7 +39,8 @@ and
 Create a `Developer ID Application` certificate and export the identity,
 including its private key, from Xcode or Keychain Access as a
 password-protected PKCS#12 file. A `Developer ID Installer` certificate is not
-needed because releases use disk images rather than installer packages.
+needed because releases are command-line archives rather than installer
+packages.
 Apple documents certificate creation in
 [Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates)
 and PKCS#12 export in
@@ -104,39 +112,45 @@ gh secret set APPLE_NOTARY_ISSUER_ID \
 4. Watch the `Release` workflow. A missing or invalid Apple credential fails
    both macOS release jobs before publication.
 5. Confirm that both macOS jobs report accepted notarization and successful
-   stapling before treating the GitHub release as complete.
+   online Gatekeeper assessment before treating the GitHub release as complete.
 
 The workflow imports the signing identity into an ephemeral keychain,
 temporarily registers it in the runner's user search list, signs the executable
 with a stable identifier, secure timestamp, and hardened runtime, and rejects a
-true `com.apple.security.get-task-allow` entitlement. It creates and signs the
-disk image, verifies its UDIF structure, submits it with `notarytool`, then
-downloads the JSON submission log. It requires `Accepted` in both responses
-and rejects any error-level issue before stapling and validating the ticket.
-The original search list is restored, and temporary key material, response
-logs, and the keychain are removed when the step exits.
+true `com.apple.security.get-task-allow` entitlement. It submits a transient ZIP
+with `notarytool`, then downloads the JSON submission log. It requires
+`Accepted` in both responses, rejects any error-level issue, and retries an
+online `spctl` assessment up to six times, ten seconds apart, until it
+explicitly reports `source=Notarized Developer ID`. After creating the tarball,
+the workflow extracts it to a temporary directory, byte-compares its executable
+with the accepted source file, then repeats the signature and online Gatekeeper
+checks. The original search list is restored, and the temporary ZIP, key
+material, response logs, and keychain are removed when the step exits.
 
 ## Independent Verification
 
-Download a macOS disk image and `SHA256SUMS`, then verify them on macOS:
+Download a macOS archive and `SHA256SUMS`, then verify them on macOS:
 
 ```bash
-artifact=stock-tui-v<VERSION>-aarch64-apple-darwin.dmg
+artifact=stock-tui-v<VERSION>-aarch64-apple-darwin.tar.gz
 grep "  ${artifact}$" SHA256SUMS | shasum -a 256 --check
-xcrun stapler validate "$artifact"
-spctl --assess --type open --context context:primary-signature \
-  --verbose=2 "$artifact"
+mkdir stock-tui-release-check
+tar -C stock-tui-release-check -xzf "$artifact"
 ```
 
-Mount the image and inspect the command-line executable:
+Inspect the command-line executable and ask Gatekeeper to retrieve its online
+ticket:
 
 ```bash
-codesign --verify --strict --verbose=2 /Volumes/stock-tui*/stock-tui
-codesign --display --verbose=4 /Volumes/stock-tui*/stock-tui
-codesign --display --entitlements :- /Volumes/stock-tui*/stock-tui
+codesign --verify --strict --verbose=2 stock-tui-release-check/stock-tui
+codesign --display --verbose=4 stock-tui-release-check/stock-tui
+codesign --display --entitlements :- stock-tui-release-check/stock-tui
+spctl --assess --type execute --verbose=2 stock-tui-release-check/stock-tui
 ```
 
 The signature details should identify a Developer ID Application authority,
 show the `runtime` flag, include a timestamp, and omit a true
-`com.apple.security.get-task-allow` entitlement. Do not publish a macOS release
-when any of these checks fail.
+`com.apple.security.get-task-allow` entitlement. The Gatekeeper output must
+include `source=Notarized Developer ID`; a generic Developer ID acceptance is
+not sufficient proof of the online notarization ticket. Do not publish a macOS
+release when any of these checks fail.

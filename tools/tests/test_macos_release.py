@@ -27,8 +27,8 @@ class MacosReleasePolicyTests(unittest.TestCase):
             maxsplit=1,
         )[0]
         self.assertLess(
-            workflow.index("name: Sign, notarize, and staple macOS release"),
-            workflow.index("name: Archive signed macOS artifact"),
+            workflow.index("name: Sign and notarize macOS release"),
+            workflow.index("name: Archive signed macOS executable"),
         )
         self.assertIn("needs: [build, build-macos]", workflow)
         self.assertIn(
@@ -43,7 +43,19 @@ class MacosReleasePolicyTests(unittest.TestCase):
         )
         self.assertNotIn("MACOS_SIGNING_CERT_P12_BASE64", non_macos_build)
         self.assertIn("MACOS_SIGNING_CERT_P12_BASE64", macos_build)
-        self.assertIn("stock-tui-v*-${{ matrix.target }}.dmg", workflow)
+        self.assertNotIn(".dmg", workflow)
+        self.assertIn(
+            "path: stock-tui-v*-${{ matrix.target }}.tar.gz",
+            macos_build,
+        )
+        self.assertIn(
+            'cmp -s dist/stock-tui "$verification_directory/stock-tui"',
+            macos_build,
+        )
+        self.assertIn(
+            "Archived executable assessment: source=Notarized Developer ID.",
+            macos_build,
+        )
 
     def test_release_script_enforces_apple_distribution_controls(self) -> None:
         script = SIGNING_SCRIPT.read_text(encoding="utf-8")
@@ -53,11 +65,9 @@ class MacosReleasePolicyTests(unittest.TestCase):
             "--options runtime",
             "--timestamp",
             "codesign --display --entitlements :-",
+            "/usr/bin/ditto -c -k --keepParent",
             "xcrun notarytool submit",
             "xcrun notarytool log",
-            "xcrun stapler staple",
-            "xcrun stapler validate",
-            "hdiutil verify",
             "spctl",
         ):
             with self.subTest(required_command=required_command):
@@ -75,9 +85,21 @@ class MacosReleasePolicyTests(unittest.TestCase):
         self.assertIn('notary_status" != "Accepted"', script)
         self.assertIn('notary_log_status" != "Accepted"', script)
         self.assertIn('notary_error_count" -ne 0', script)
+        self.assertIn(
+            "grep -Fxq 'source=Notarized Developer ID'",
+            script,
+        )
+        self.assertIn(
+            "Gatekeeper assessment: source=Notarized Developer ID.",
+            script,
+        )
+        self.assertIn("for attempt in 1 2 3 4 5 6", script)
+        self.assertIn('sleep 10', script)
         self.assertIn("trap cleanup EXIT HUP INT TERM", script)
+        self.assertNotIn("stapler", script)
+        self.assertNotIn("hdiutil", script)
         self.assertLess(
-            script.index('hdiutil verify "$dmg_path"'),
+            script.index("/usr/bin/ditto -c -k --keepParent"),
             script.index("xcrun notarytool submit"),
         )
         self.assertLess(
@@ -86,7 +108,7 @@ class MacosReleasePolicyTests(unittest.TestCase):
         )
         self.assertLess(
             script.index("xcrun notarytool log"),
-            script.index("xcrun stapler staple"),
+            script.index("gatekeeper_accepted="),
         )
 
 

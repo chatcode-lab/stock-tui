@@ -4,6 +4,7 @@
 .env-*
 !.env.example
 credentials.env
+/config.toml
 *.p12
 AuthKey_*.p8
 

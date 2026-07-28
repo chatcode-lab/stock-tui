@@ -13,13 +13,19 @@ For settings that exist in more than one place, the effective order is:
 4. Built-in default
 
 An already exported process variable wins over the corresponding value in
-`.env`. TOML rejects unknown keys to catch spelling mistakes. Use:
+`.env`. A malformed higher-precedence value is reported instead of silently
+falling through to TOML or a built-in default. TOML rejects unknown keys to
+catch spelling mistakes. Use:
 
 ```bash
 stock-tui --print-config
 ```
 
 to show resolved paths and non-secret values. Credential values are redacted.
+Provider selection is resolved before credential lookup. The presence of
+`<config_dir>/credentials.env` never selects Alpaca or overrides an explicit
+`provider = "stock-api"`; only a CLI or environment provider override has
+higher precedence than TOML.
 
 Credential lookup is narrower and applies only when `provider = "alpaca"`:
 
@@ -89,8 +95,8 @@ explicitly selected another path.
 On macOS and Linux, the managed file is forced to owner read/write permissions
 (`0600`). On Windows it is kept below the current user's platform configuration
 directory. The file contains the two raw dotenv values; it is not encrypted.
-Do not share, synchronize, or commit it. Credentials are never written to
-SQLite, `config.toml`, logs, or terminal output.
+Do not share, synchronize, or commit it. Alpaca credentials are never written
+to SQLite, `config.toml`, logs, or terminal output.
 
 Only an Alpaca `401` response proves that a configured pair is invalid.
 Provider downtime, rate limits, malformed responses, and entitlement errors do
@@ -102,8 +108,9 @@ still be removed or updated.
 Debug and release binaries use the same environment variable names and `.env`
 format. The dotenv loader starts at the process working directory and searches
 its parents; it does not search beside an installed executable automatically.
-Keep that file private and outside version control. Do not put credentials in
-`config.toml`, command history, screenshots, issues, or release assets.
+Keep that file private and outside version control. Do not put Alpaca
+credentials in `config.toml`, command history, screenshots, issues, or release
+assets.
 
 For an interactive installation, export both variables in the launching shell,
 start `stock-tui` from a dedicated private directory containing `.env`, or use
@@ -172,8 +179,11 @@ controls the observations written to the local cache.
 
 ## TOML File
 
-The file is `config.toml` in the platform configuration directory. Find the
-exact `config_dir` with `--print-config`.
+The active file is `<config_dir>/config.toml` in the platform configuration
+directory. Find the exact `config_dir` with `--print-config`. A `config.toml`
+in the current working directory or beside the executable is not loaded
+automatically. Alpaca onboarding writes credentials to the separate
+`<config_dir>/credentials.env` file; it does not modify `config.toml`.
 
 ```toml
 provider = "alpaca"

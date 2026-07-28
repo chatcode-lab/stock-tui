@@ -3,11 +3,11 @@ set -Eeuo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: sign-notarize-macos.sh <binary> <payload-directory> <output.dmg> <volume-name>
+Usage: sign-notarize-macos.sh <binary>
 
 Signs a macOS command-line binary with Developer ID and the hardened runtime,
-creates a signed disk image, submits it to Apple's notary service, and staples
-and validates the resulting ticket.
+submits a transient ZIP to Apple's notary service, and validates the binary
+against Gatekeeper's online notarization ticket.
 EOF
 }
 
@@ -32,7 +32,7 @@ if [[ "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-if [[ "$#" -ne 4 ]]; then
+if [[ "$#" -ne 1 ]]; then
   usage >&2
   exit 64
 fi
@@ -43,36 +43,24 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 binary_path="$1"
-payload_directory="$2"
-dmg_path="$3"
-volume_name="$4"
 
 if [[ ! -f "$binary_path" || ! -x "$binary_path" ]]; then
   printf 'Expected an executable binary at %s.\n' "$binary_path" >&2
   exit 66
 fi
 
-if [[ ! -d "$payload_directory" ]]; then
-  printf 'Expected a payload directory at %s.\n' "$payload_directory" >&2
-  exit 66
-fi
-
-case "$dmg_path" in
-  *.dmg) ;;
-  *)
-    printf 'Disk image output must end in .dmg.\n' >&2
-    exit 64
-    ;;
-esac
-
 require_environment
 
-for command in codesign hdiutil jq openssl plutil security spctl xcrun; do
+for command in codesign jq openssl plutil security spctl xcrun; do
   if ! command -v "$command" >/dev/null 2>&1; then
     printf 'Required macOS release tool %s is not available.\n' "$command" >&2
     exit 69
   fi
 done
+if [[ ! -x /usr/bin/ditto ]]; then
+  printf 'Required macOS release tool /usr/bin/ditto is unavailable.\n' >&2
+  exit 69
+fi
 if [[ ! -x /usr/libexec/PlistBuddy ]]; then
   printf 'Required macOS release tool /usr/libexec/PlistBuddy is unavailable.\n' >&2
   exit 69
@@ -87,6 +75,8 @@ notary_result_path="$work_directory/notary-submit.json"
 notary_stderr_path="$work_directory/notary-submit.stderr"
 notary_log_path="$work_directory/notary-log.json"
 notary_log_stderr_path="$work_directory/notary-log.stderr"
+notary_zip_path="$work_directory/stock-tui-notarization.zip"
+gatekeeper_output_path="$work_directory/gatekeeper-assessment.txt"
 entitlements_path="$work_directory/binary-entitlements.plist"
 entitlements_stderr_path="$work_directory/binary-entitlements.stderr"
 keychain_path="$work_directory/signing.keychain-db"
@@ -187,28 +177,10 @@ if [[ -s "$entitlements_path" ]]; then
   esac
 fi
 
-mkdir -p "$(dirname "$dmg_path")"
-rm -f "$dmg_path"
-hdiutil create \
-  -fs HFS+ \
-  -format UDZO \
-  -ov \
-  -srcfolder "$payload_directory" \
-  -volname "$volume_name" \
-  "$dmg_path"
-
-codesign \
-  --force \
-  --keychain "$keychain_path" \
-  --sign "$signing_identity" \
-  --timestamp \
-  "$dmg_path"
-codesign --verify --strict --verbose=2 "$dmg_path"
-hdiutil verify "$dmg_path"
-
-printf 'Submitting %s to Apple notarization.\n' "$dmg_path"
+/usr/bin/ditto -c -k --keepParent "$binary_path" "$notary_zip_path"
+printf 'Submitting a transient ZIP to Apple notarization.\n'
 set +e
-xcrun notarytool submit "$dmg_path" \
+xcrun notarytool submit "$notary_zip_path" \
   --issuer "$APPLE_NOTARY_ISSUER_ID" \
   --key "$notary_key_path" \
   --key-id "$APPLE_NOTARY_KEY_ID" \
@@ -291,14 +263,36 @@ then
   exit 65
 fi
 
-xcrun stapler staple -v "$dmg_path"
-xcrun stapler validate -v "$dmg_path"
-hdiutil verify "$dmg_path"
-spctl \
-  --assess \
-  --context context:primary-signature \
-  --type open \
-  --verbose=2 \
-  "$dmg_path"
+printf 'Validating the executable against Gatekeeper online.\n'
+gatekeeper_accepted="false"
+for attempt in 1 2 3 4 5 6; do
+  if spctl \
+    --assess \
+    --type execute \
+    --verbose=2 \
+    "$binary_path" \
+    >"$gatekeeper_output_path" \
+    2>&1
+  then
+    if grep -Fxq 'source=Notarized Developer ID' "$gatekeeper_output_path"; then
+      gatekeeper_accepted="true"
+      break
+    fi
+  fi
+  if [[ "$attempt" -lt 6 ]]; then
+    sleep 10
+  fi
+done
+if [[ "$gatekeeper_accepted" != "true" ]]; then
+  printf 'Gatekeeper did not accept the notarized executable online.\n' >&2
+  sed -n \
+    -e '/: accepted$/p' \
+    -e '/: rejected$/p' \
+    -e '/^source=/p' \
+    "$gatekeeper_output_path" >&2
+  exit 65
+fi
+printf 'Gatekeeper assessment: source=Notarized Developer ID.\n'
 
-printf 'Signed, notarized, and stapled %s.\n' "$dmg_path"
+printf 'Signed and notarized %s; Gatekeeper accepted its online ticket.\n' \
+  "$binary_path"

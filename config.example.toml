@@ -1,4 +1,7 @@
-# Copy to the platform config directory shown by `stock-tui --print-config`.
+# Install as <config_dir>/config.toml; `stock-tui --print-config` shows the path.
+# A working-directory config.toml is not loaded automatically.
+# Alpaca onboarding stores keys separately in <config_dir>/credentials.env.
+# That file never selects Alpaca or overrides the provider chosen below.
 provider = "alpaca"
 refresh_seconds = 300
 catalog_url = "https://stock.chatcode.dev/catalog/sec-catalog.json"

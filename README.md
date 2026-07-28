@@ -104,7 +104,9 @@ URL as a highlighted OSC 8 terminal link and waits: press `Enter` to open it,
 to continue directly to credential entry. It accepts the key ID and secret
 through hidden terminal input, validates the pair, and stores it in
 `credentials.env` below the platform configuration directory. Existing
-environment or working-directory `.env` values skip onboarding.
+environment or working-directory `.env` values skip onboarding. This managed
+credential file does not select a provider or override `provider = "stock-api"`
+in the platform `config.toml`.
 
 Use the simulated market explicitly when testing without provider data:
 
@@ -193,7 +195,8 @@ stock-tui --provider stock-api --stock-api-url http://127.0.0.1:8787
 
 Compatible services may be unauthenticated, or may require an optional bearer
 token. Provider selection, base URL, optional news, and token can be kept in
-the platform `config.toml` shown by `stock-tui --print-config`:
+`<config_dir>/config.toml`; `stock-tui --print-config` shows that directory.
+A working-directory `config.toml` is not loaded automatically:
 
 ```toml
 provider = "stock-api"
@@ -253,14 +256,15 @@ it against the attached `SHA256SUMS`, open or extract it, and place `stock-tui`
 | --- | --- |
 | Linux x86_64 | `stock-tui-v<VERSION>-x86_64-unknown-linux-musl.tar.gz` |
 | Linux ARM64 | `stock-tui-v<VERSION>-aarch64-unknown-linux-musl.tar.gz` |
-| macOS Apple Silicon | `stock-tui-v<VERSION>-aarch64-apple-darwin.dmg` |
-| macOS Intel | `stock-tui-v<VERSION>-x86_64-apple-darwin.dmg` |
+| macOS Apple Silicon | `stock-tui-v<VERSION>-aarch64-apple-darwin.tar.gz` |
+| macOS Intel | `stock-tui-v<VERSION>-x86_64-apple-darwin.tar.gz` |
 | Windows x86_64 | `stock-tui-v<VERSION>-x86_64-pc-windows-msvc.zip` |
 
-Tagged releases provide Developer ID-signed, notarized, and stapled macOS disk
-images. Signed `tar.gz` alternatives remain available for scripted installs;
-the disk images provide offline notarization-ticket verification. Maintainer
-details are in [Release Process](docs/releasing.md).
+Tagged macOS archives contain Developer ID-signed, hardened-runtime binaries
+accepted by Apple's notary service. A standalone command-line executable and
+its tar or ZIP transport cannot carry a stapled ticket, so Gatekeeper retrieves
+the notarization ticket online. Maintainer details are in
+[Release Process](docs/releasing.md).
 
 The GitHub CLI can display and download the latest available assets:
 

@@ -210,13 +210,17 @@ impl Settings {
         fs::create_dir_all(&data_dir).context("could not create application data directory")?;
 
         let file = read_file_config(&config_dir.join("config.toml"))?;
-        let provider_name = cli
-            .provider
-            .clone()
-            .or_else(|| env::var("STOCK_TUI_PROVIDER").ok())
-            .or_else(|| file.provider.clone())
-            .unwrap_or_else(|| "alpaca".to_owned());
-        let provider = ProviderKind::parse(&provider_name)?;
+        let environment_provider = if cli.provider.is_none() {
+            environment_value("STOCK_TUI_PROVIDER")?
+        } else {
+            None
+        };
+        let provider = select_provider(
+            cli.provider.as_deref(),
+            environment_provider.as_deref(),
+            file.provider.as_deref(),
+        )?;
+        // A saved Alpaca pair is considered only after provider precedence is resolved.
         let resolve_credentials = should_resolve_credentials(provider, cli.demo, cli.offline);
         let environment = if resolve_credentials {
             credentials_from_env()
@@ -259,18 +263,26 @@ impl Settings {
         } else {
             "managed".to_owned()
         };
-        let refresh_seconds = cli
-            .refresh_seconds
-            .or_else(|| env_u64("STOCK_TUI_REFRESH_SECONDS"))
-            .or(file.refresh_seconds)
-            .unwrap_or(300)
-            .clamp(30, 86_400);
-        let catalog_refresh_hours = cli
-            .catalog_refresh_hours
-            .or_else(|| env_u64("STOCK_TUI_CATALOG_REFRESH_HOURS"))
-            .or(file.catalog_refresh_hours)
-            .unwrap_or(12)
-            .clamp(1, 168);
+        let refresh_seconds = match cli.refresh_seconds {
+            Some(value) => value,
+            None => env_u64("STOCK_TUI_REFRESH_SECONDS")?
+                .or(file.refresh_seconds)
+                .unwrap_or(300),
+        }
+        .clamp(30, 86_400);
+        let catalog_refresh_hours = match cli.catalog_refresh_hours {
+            Some(value) => value,
+            None => env_u64("STOCK_TUI_CATALOG_REFRESH_HOURS")?
+                .or(file.catalog_refresh_hours)
+                .unwrap_or(12),
+        }
+        .clamp(1, 168);
+        let stock_api_news = match cli.stock_api_news {
+            Some(value) => value,
+            None => env_bool("STOCK_TUI_STOCK_API_NEWS")?
+                .or(file.providers.stock_api.news)
+                .unwrap_or(true),
+        };
         let demo = resolve_demo_mode(cli.demo);
         let db_path = cli
             .db
@@ -314,11 +326,7 @@ impl Settings {
                 })
                 .or(file.providers.stock_api.base_url)
                 .unwrap_or_else(|| DEFAULT_STOCK_API_URL.to_owned()),
-            stock_api_news: cli
-                .stock_api_news
-                .or_else(|| env_bool("STOCK_TUI_STOCK_API_NEWS"))
-                .or(file.providers.stock_api.news)
-                .unwrap_or(true),
+            stock_api_news,
             stock_api_token: select_stock_api_token(
                 provider,
                 demo,
@@ -465,16 +473,50 @@ fn credentials_from_env() -> EnvironmentCredentials {
     }
 }
 
-fn env_u64(key: &str) -> Option<u64> {
-    env::var(key).ok()?.parse().ok()
+fn environment_value(key: &str) -> Result<Option<String>> {
+    match env::var(key) {
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => bail!("invalid non-Unicode value in {key}"),
+    }
 }
 
-fn env_bool(key: &str) -> Option<bool> {
-    match env::var(key).ok()?.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
+fn env_u64(key: &str) -> Result<Option<u64>> {
+    parse_env_u64(key, environment_value(key)?)
+}
+
+fn parse_env_u64(key: &str, value: Option<String>) -> Result<Option<u64>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    value
+        .parse()
+        .map(Some)
+        .map_err(|_| anyhow::anyhow!("invalid unsigned integer in {key}"))
+}
+
+fn env_bool(key: &str) -> Result<Option<bool>> {
+    parse_env_bool(key, environment_value(key)?)
+}
+
+fn parse_env_bool(key: &str, value: Option<String>) -> Result<Option<bool>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(Some(true)),
+        "0" | "false" | "no" | "off" => Ok(Some(false)),
+        _ => bail!("invalid boolean in {key}"),
     }
+}
+
+fn select_provider(
+    cli: Option<&str>,
+    environment: Option<&str>,
+    file: Option<&str>,
+) -> Result<ProviderKind> {
+    let selected = cli.or(environment).or(file).unwrap_or("alpaca");
+    ProviderKind::parse(selected)
 }
 
 fn select_stock_api_token(
@@ -563,6 +605,75 @@ mod tests {
             ProviderKind::StockApi
         );
         assert!(ProviderKind::parse("unknown").is_err());
+    }
+
+    #[test]
+    fn provider_precedence_is_independent_of_managed_alpaca_credentials() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let credentials_path = temp.path().join(CREDENTIALS_FILE_NAME);
+        crate::credentials::save(
+            &credentials_path,
+            &Credentials {
+                key: SecretString::from("managed-key".to_owned()),
+                secret: SecretString::from("managed-secret".to_owned()),
+            },
+        )
+        .expect("managed credentials");
+        assert!(
+            crate::credentials::load(&credentials_path)
+                .expect("read managed credentials")
+                .is_some()
+        );
+
+        let file: FileConfig =
+            toml::from_str(r#"provider = "stock-api""#).expect("provider configuration");
+        let provider =
+            select_provider(None, None, file.provider.as_deref()).expect("file-selected provider");
+        assert_eq!(provider, ProviderKind::StockApi);
+        assert!(!should_resolve_credentials(provider, false, false));
+
+        assert_eq!(
+            select_provider(None, Some("alpaca"), Some("stock-api"))
+                .expect("environment-selected provider"),
+            ProviderKind::Alpaca
+        );
+        assert_eq!(
+            select_provider(Some("stock-api"), Some("alpaca"), Some("alpaca"))
+                .expect("CLI-selected provider"),
+            ProviderKind::StockApi
+        );
+        assert_eq!(
+            select_provider(None, None, None).expect("default provider"),
+            ProviderKind::Alpaca
+        );
+        assert!(select_provider(Some("unknown"), Some("stock-api"), Some("stock-api")).is_err());
+    }
+
+    #[test]
+    fn malformed_typed_environment_values_never_fall_through_or_echo() {
+        let invalid = "do-not-echo-this-value";
+        let error = parse_env_u64("STOCK_TUI_REFRESH_SECONDS", Some(invalid.to_owned()))
+            .expect_err("invalid integer");
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("STOCK_TUI_REFRESH_SECONDS"));
+        assert!(!rendered.contains(invalid));
+
+        let error = parse_env_bool("STOCK_TUI_STOCK_API_NEWS", Some(invalid.to_owned()))
+            .expect_err("invalid boolean");
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("STOCK_TUI_STOCK_API_NEWS"));
+        assert!(!rendered.contains(invalid));
+
+        assert_eq!(
+            parse_env_u64("STOCK_TUI_REFRESH_SECONDS", Some("600".to_owned()))
+                .expect("valid integer"),
+            Some(600)
+        );
+        assert_eq!(
+            parse_env_bool("STOCK_TUI_STOCK_API_NEWS", Some("yes".to_owned()))
+                .expect("valid boolean"),
+            Some(true)
+        );
     }
 
     #[test]
