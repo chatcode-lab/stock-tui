@@ -1166,6 +1166,30 @@ five locked cross-platform builds, with signed and notarized Intel and Apple
 Silicon macOS executables, plus checksums; publication filters out the
 build-only catalog artifact and requires the exact archive count.
 
+## 40. Refresh the Documentation and Screenshots
+
+> Update the README and supporting documentation, and replace its screenshots
+> with current captures of the Overview, Sector, and Ticker Detail interfaces.
+
+**Committed changes**
+
+- [`b83cda0` - Refresh v0.2.0 documentation and screenshots][commit-b83cda0]
+
+**Summary**
+
+The README now presents consistent 140x42 captures from the deterministic
+v0.2.0 demo, showing the complete nine-sector wall, equal centered Technology
+tiles with a starred ticker and single selected metric, and the one-year NVDA
+detail chart with its cursor, axes, volume, statistics, news, rank, and version
+chrome. The accompanying prose documents overlay-owned controls, numeric
+synchronization progress, ticker-only stale underlining, cached-company search,
+sort-direction defaults, and the private development provider boundary.
+
+Supporting architecture, cache, provider, and HTTP-contract documents now use
+provider-neutral lifecycle terminology where appropriate and name the actual
+`stock-api` news settings. The Unreleased changelog records the post-v0.2.0
+documentation refresh.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1225,6 +1249,7 @@ implementation work.
 [commit-8660af2]: https://github.com/chatcode-lab/stock-tui/commit/8660af2152dca79a804479e1eea36e94d21a9aa8
 [commit-d7e2290]: https://github.com/chatcode-lab/stock-tui/commit/d7e22905ccd0a2236c0779b73c0ecd3330764c81
 [commit-976c207]: https://github.com/chatcode-lab/stock-tui/commit/976c207d02ead76ccbfebc2e275ffac3dfdf4999
+[commit-b83cda0]: https://github.com/chatcode-lab/stock-tui/commit/b83cda0724af86ed7f504d2efdbba3958427a9cc
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
