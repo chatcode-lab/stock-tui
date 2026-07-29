@@ -53,6 +53,22 @@ ASCII, case-insensitive on input, at most 32 characters, and limited to
 letters, digits, `.` and `-`; the service should return canonical uppercase
 symbols.
 
+## Market Context
+
+The current `stock-api` v1 client assigns this adapter the `us-equities` market
+context: US equity symbols, USD, `America/New_York`, and a regular session from
+09:30 through 16:00 local exchange time. A v1 service used with this client
+must return observations compatible with that single context. The free-text
+asset `exchange` field is listing metadata; it does not create separate caches
+for NASDAQ, NYSE, or ARCA.
+
+The configured base URL and contract version are part of the client's cache
+namespace. Changing the base URL therefore clears unattributable provider rows
+before the new service is used. A future service that exposes non-US markets,
+another currency, an independent symbol namespace, or different session rules
+needs a versioned context-negotiation extension and corresponding client
+support. It must not place those observations into the current v1 US context.
+
 ## Request Headers
 
 The client sends:

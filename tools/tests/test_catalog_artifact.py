@@ -71,7 +71,7 @@ def sample_catalog() -> dict[str, object]:
                 },
             },
             {
-                "rank": 2,
+                "rank": 101,
                 "cik": "0000000002",
                 "symbol": "TWO",
                 "name": "Two Corp.",
@@ -240,6 +240,35 @@ class CatalogArtifactTests(unittest.TestCase):
                     "sec-catalog.manifest.json",
                 ],
             )
+
+    def test_package_only_rejects_an_unresolved_top_100_company(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "audit-catalog.json"
+            artifact = root / "sec-catalog.json.gz"
+            payload = sample_catalog()
+            payload["companies"][1]["rank"] = 2
+            source.write_text(json.dumps(payload), encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--package-only",
+                    "--output",
+                    str(source),
+                    "--artifact-output",
+                    str(artifact),
+                ],
+                cwd=SCRIPT.parents[1],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("top-100 share coverage regression", result.stderr)
+            self.assertFalse(artifact.exists())
 
     def test_shares_value_and_provenance_must_match(self) -> None:
         source = sample_catalog()

@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "catalog_version": "sec-universe-v2-fsds-2026q1-frames-2026q2",
-  "generated_at": "2026-07-24T23:03:49Z",
+  "catalog_version": "sec-universe-v2-fsds-2026q1-frames-2026q3",
+  "generated_at": "2026-07-29T22:08:45Z",
   "as_of": "2026-06-30",
   "selection": {
     "latest_fsds": "2026Q1",
-    "frame_search_through": "2026Q2",
+    "frame_search_through": "2026Q3",
     "minimum_companies_per_sector": 100,
     "target_companies_per_sector": 250,
     "issuer_identity": "unique SEC CIK with one deterministic canonical exchange ticker; prefer common-shaped symbols, then a concise source-prefix base, then SEC order",
@@ -16,7 +16,17 @@
       "public_float_and_shares": "public float and an SEC shares estimate were available",
       "public_float_only": "ranking fact available; shares fact unavailable"
     },
-    "shares_fallback": "SEC DEI issuer total; reviewed DEI class sum; US-GAAP common-stock issuer total; reviewed equal-economic class sum; filer-reported equivalent class; basic weighted-average shares. Preferred and diluted securities are excluded.",
+    "shares_fallback": "Recent filing-level SEC cover facts with exact reviewed class signatures; SEC DEI issuer total; reviewed DEI class sum; US-GAAP common-stock issuer total; reviewed equal-economic class sum; filer-reported equivalent class; basic weighted-average common shares or partnership units. Preferred and diluted securities are excluded.",
+    "reviewed_share_policy_registry": "data/sec_share_policies.json",
+    "share_coverage": {
+      "catalog_companies": 1880,
+      "catalog_resolved": 1880,
+      "catalog_unresolved": 0,
+      "top_100_companies": 900,
+      "top_100_resolved": 900,
+      "top_100_unresolved": 0,
+      "unresolved": []
+    },
     "quality_screening": "Excludes non-positive facts, extreme absolute values, implausible public-float/filer-status combinations, and isolated greater-than-100x upward year-over-year jumps. Downward corrections are retained, and a $2,000 implied-price gross-error guard has reviewed high-price issuer exceptions. Screening does not alter reported SEC values."
   },
   "sources": [
@@ -34,6 +44,11 @@
       "id": "sec_fsds_2025q4_sub",
       "url": "https://www.sec.gov/files/dera/data/financial-statement-data-sets/2025q4.zip",
       "retrieved_at": "2026-07-13T20:59:52Z"
+    },
+    {
+      "id": "sec_frame_entity_public_float_CY2026Q3I",
+      "url": "https://data.sec.gov/api/xbrl/frames/dei/EntityPublicFloat/USD/CY2026Q3I.json",
+      "retrieved_at": "2026-07-29T21:58:28Z"
     },
     {
       "id": "sec_frame_entity_public_float_CY2026Q2I",
@@ -88,11 +103,6 @@
     {
       "id": "sec_frame_entity_public_float_CY2023Q4I",
       "url": "https://data.sec.gov/api/xbrl/frames/dei/EntityPublicFloat/USD/CY2023Q4I.json",
-      "retrieved_at": "2026-07-13T20:59:54Z"
-    },
-    {
-      "id": "sec_frame_entity_public_float_CY2023Q3I",
-      "url": "https://data.sec.gov/api/xbrl/frames/dei/EntityPublicFloat/USD/CY2023Q3I.json",
       "retrieved_at": "2026-07-13T20:59:54Z"
     },
     {
@@ -151,9 +161,59 @@
       "retrieved_at": "2026-07-13T20:59:56Z"
     },
     {
-      "id": "sec_frame_entity_common_stock_shares_outstanding_CY2023Q3I",
-      "url": "https://data.sec.gov/api/xbrl/frames/dei/EntityCommonStockSharesOutstanding/shares/CY2023Q3I.json",
-      "retrieved_at": "2026-07-13T20:59:56Z"
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2026Q2I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2026Q2I.json",
+      "retrieved_at": "2026-07-29T20:24:36Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2026Q1I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2026Q1I.json",
+      "retrieved_at": "2026-07-29T20:24:36Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2025Q4I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2025Q4I.json",
+      "retrieved_at": "2026-07-29T20:24:37Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2025Q3I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2025Q3I.json",
+      "retrieved_at": "2026-07-29T20:24:37Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2025Q2I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2025Q2I.json",
+      "retrieved_at": "2026-07-29T20:24:37Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2025Q1I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2025Q1I.json",
+      "retrieved_at": "2026-07-29T20:24:38Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2024Q4I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2024Q4I.json",
+      "retrieved_at": "2026-07-29T20:24:38Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2024Q3I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2024Q3I.json",
+      "retrieved_at": "2026-07-29T20:24:38Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2024Q2I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2024Q2I.json",
+      "retrieved_at": "2026-07-29T20:24:39Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2024Q1I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2024Q1I.json",
+      "retrieved_at": "2026-07-29T20:24:39Z"
+    },
+    {
+      "id": "sec_frame_us-gaap_common_stock_shares_outstanding_CY2023Q4I",
+      "url": "https://data.sec.gov/api/xbrl/frames/us-gaap/CommonStockSharesOutstanding/shares/CY2023Q4I.json",
+      "retrieved_at": "2026-07-29T20:24:39Z"
     },
     {
       "id": "sec_fsds_2026q1_num",
@@ -164,6 +224,526 @@
       "id": "sec_fsds_2025q4_num",
       "url": "https://www.sec.gov/files/dera/data/financial-statement-data-sets/2025q4.zip",
       "retrieved_at": "2026-07-13T20:59:52Z"
+    },
+    {
+      "id": "sec_submissions_0000004457",
+      "url": "https://data.sec.gov/submissions/CIK0000004457.json",
+      "retrieved_at": "2026-07-29T21:12:52Z"
+    },
+    {
+      "id": "sec_submissions_0000008063",
+      "url": "https://data.sec.gov/submissions/CIK0000008063.json",
+      "retrieved_at": "2026-07-29T21:12:52Z"
+    },
+    {
+      "id": "sec_submissions_0000014693",
+      "url": "https://data.sec.gov/submissions/CIK0000014693.json",
+      "retrieved_at": "2026-07-29T21:12:52Z"
+    },
+    {
+      "id": "sec_submissions_0000016918",
+      "url": "https://data.sec.gov/submissions/CIK0000016918.json",
+      "retrieved_at": "2026-07-29T21:12:52Z"
+    },
+    {
+      "id": "sec_submissions_0000028917",
+      "url": "https://data.sec.gov/submissions/CIK0000028917.json",
+      "retrieved_at": "2026-07-29T21:12:52Z"
+    },
+    {
+      "id": "sec_submissions_0000047111",
+      "url": "https://data.sec.gov/submissions/CIK0000047111.json",
+      "retrieved_at": "2026-07-29T21:12:52Z"
+    },
+    {
+      "id": "sec_submissions_0000100493",
+      "url": "https://data.sec.gov/submissions/CIK0000100493.json",
+      "retrieved_at": "2026-07-29T21:12:52Z"
+    },
+    {
+      "id": "sec_submissions_0000105016",
+      "url": "https://data.sec.gov/submissions/CIK0000105016.json",
+      "retrieved_at": "2026-07-29T21:12:53Z"
+    },
+    {
+      "id": "sec_submissions_0000317540",
+      "url": "https://data.sec.gov/submissions/CIK0000317540.json",
+      "retrieved_at": "2026-07-29T21:12:53Z"
+    },
+    {
+      "id": "sec_submissions_0000320187",
+      "url": "https://data.sec.gov/submissions/CIK0000320187.json",
+      "retrieved_at": "2026-07-29T21:45:06Z"
+    },
+    {
+      "id": "sec_submissions_0000880117",
+      "url": "https://data.sec.gov/submissions/CIK0000880117.json",
+      "retrieved_at": "2026-07-29T21:12:53Z"
+    },
+    {
+      "id": "sec_submissions_0000920760",
+      "url": "https://data.sec.gov/submissions/CIK0000920760.json",
+      "retrieved_at": "2026-07-29T21:12:53Z"
+    },
+    {
+      "id": "sec_submissions_0000922621",
+      "url": "https://data.sec.gov/submissions/CIK0000922621.json",
+      "retrieved_at": "2026-07-29T21:12:53Z"
+    },
+    {
+      "id": "sec_submissions_0001056288",
+      "url": "https://data.sec.gov/submissions/CIK0001056288.json",
+      "retrieved_at": "2026-07-29T21:12:53Z"
+    },
+    {
+      "id": "sec_submissions_0001063761",
+      "url": "https://data.sec.gov/submissions/CIK0001063761.json",
+      "retrieved_at": "2026-07-29T21:12:53Z"
+    },
+    {
+      "id": "sec_submissions_0001067983",
+      "url": "https://data.sec.gov/submissions/CIK0001067983.json",
+      "retrieved_at": "2026-07-29T21:45:06Z"
+    },
+    {
+      "id": "sec_submissions_0001090727",
+      "url": "https://data.sec.gov/submissions/CIK0001090727.json",
+      "retrieved_at": "2026-07-29T21:12:54Z"
+    },
+    {
+      "id": "sec_submissions_0001141391",
+      "url": "https://data.sec.gov/submissions/CIK0001141391.json",
+      "retrieved_at": "2026-07-29T21:45:07Z"
+    },
+    {
+      "id": "sec_submissions_0001166691",
+      "url": "https://data.sec.gov/submissions/CIK0001166691.json",
+      "retrieved_at": "2026-07-29T21:12:54Z"
+    },
+    {
+      "id": "sec_submissions_0001319161",
+      "url": "https://data.sec.gov/submissions/CIK0001319161.json",
+      "retrieved_at": "2026-07-29T21:12:54Z"
+    },
+    {
+      "id": "sec_submissions_0001321655",
+      "url": "https://data.sec.gov/submissions/CIK0001321655.json",
+      "retrieved_at": "2026-07-29T21:45:07Z"
+    },
+    {
+      "id": "sec_submissions_0001326801",
+      "url": "https://data.sec.gov/submissions/CIK0001326801.json",
+      "retrieved_at": "2026-07-29T21:45:07Z"
+    },
+    {
+      "id": "sec_submissions_0001403161",
+      "url": "https://data.sec.gov/submissions/CIK0001403161.json",
+      "retrieved_at": "2026-07-29T21:45:07Z"
+    },
+    {
+      "id": "sec_submissions_0001433642",
+      "url": "https://data.sec.gov/submissions/CIK0001433642.json",
+      "retrieved_at": "2026-07-29T21:12:54Z"
+    },
+    {
+      "id": "sec_submissions_0001468174",
+      "url": "https://data.sec.gov/submissions/CIK0001468174.json",
+      "retrieved_at": "2026-07-29T21:12:54Z"
+    },
+    {
+      "id": "sec_submissions_0001552275",
+      "url": "https://data.sec.gov/submissions/CIK0001552275.json",
+      "retrieved_at": "2026-07-29T21:12:54Z"
+    },
+    {
+      "id": "sec_submissions_0001560385",
+      "url": "https://data.sec.gov/submissions/CIK0001560385.json",
+      "retrieved_at": "2026-07-29T21:12:54Z"
+    },
+    {
+      "id": "sec_submissions_0001570585",
+      "url": "https://data.sec.gov/submissions/CIK0001570585.json",
+      "retrieved_at": "2026-07-29T21:12:54Z"
+    },
+    {
+      "id": "sec_submissions_0001571996",
+      "url": "https://data.sec.gov/submissions/CIK0001571996.json",
+      "retrieved_at": "2026-07-29T21:12:55Z"
+    },
+    {
+      "id": "sec_submissions_0001596967",
+      "url": "https://data.sec.gov/submissions/CIK0001596967.json",
+      "retrieved_at": "2026-07-29T21:12:55Z"
+    },
+    {
+      "id": "sec_submissions_0001611983",
+      "url": "https://data.sec.gov/submissions/CIK0001611983.json",
+      "retrieved_at": "2026-07-29T21:12:55Z"
+    },
+    {
+      "id": "sec_submissions_0001621434",
+      "url": "https://data.sec.gov/submissions/CIK0001621434.json",
+      "retrieved_at": "2026-07-29T21:12:55Z"
+    },
+    {
+      "id": "sec_submissions_0001626115",
+      "url": "https://data.sec.gov/submissions/CIK0001626115.json",
+      "retrieved_at": "2026-07-29T21:12:55Z"
+    },
+    {
+      "id": "sec_submissions_0001637207",
+      "url": "https://data.sec.gov/submissions/CIK0001637207.json",
+      "retrieved_at": "2026-07-29T21:12:55Z"
+    },
+    {
+      "id": "sec_submissions_0001652044",
+      "url": "https://data.sec.gov/submissions/CIK0001652044.json",
+      "retrieved_at": "2026-07-29T21:45:07Z"
+    },
+    {
+      "id": "sec_submissions_0001657788",
+      "url": "https://data.sec.gov/submissions/CIK0001657788.json",
+      "retrieved_at": "2026-07-29T21:12:55Z"
+    },
+    {
+      "id": "sec_submissions_0001687187",
+      "url": "https://data.sec.gov/submissions/CIK0001687187.json",
+      "retrieved_at": "2026-07-29T21:12:56Z"
+    },
+    {
+      "id": "sec_submissions_0001693256",
+      "url": "https://data.sec.gov/submissions/CIK0001693256.json",
+      "retrieved_at": "2026-07-29T21:12:56Z"
+    },
+    {
+      "id": "sec_submissions_0001697500",
+      "url": "https://data.sec.gov/submissions/CIK0001697500.json",
+      "retrieved_at": "2026-07-29T21:12:56Z"
+    },
+    {
+      "id": "sec_submissions_0001699136",
+      "url": "https://data.sec.gov/submissions/CIK0001699136.json",
+      "retrieved_at": "2026-07-29T21:12:56Z"
+    },
+    {
+      "id": "sec_submissions_0001703056",
+      "url": "https://data.sec.gov/submissions/CIK0001703056.json",
+      "retrieved_at": "2026-07-29T21:12:56Z"
+    },
+    {
+      "id": "sec_submissions_0001800227",
+      "url": "https://data.sec.gov/submissions/CIK0001800227.json",
+      "retrieved_at": "2026-07-29T21:12:56Z"
+    },
+    {
+      "id": "sec_submissions_0001805521",
+      "url": "https://data.sec.gov/submissions/CIK0001805521.json",
+      "retrieved_at": "2026-07-29T21:12:56Z"
+    },
+    {
+      "id": "sec_submissions_0001806837",
+      "url": "https://data.sec.gov/submissions/CIK0001806837.json",
+      "retrieved_at": "2026-07-29T21:12:56Z"
+    },
+    {
+      "id": "sec_submissions_0001809104",
+      "url": "https://data.sec.gov/submissions/CIK0001809104.json",
+      "retrieved_at": "2026-07-29T21:12:56Z"
+    },
+    {
+      "id": "sec_submissions_0001841425",
+      "url": "https://data.sec.gov/submissions/CIK0001841425.json",
+      "retrieved_at": "2026-07-29T21:12:57Z"
+    },
+    {
+      "id": "sec_submissions_0001846416",
+      "url": "https://data.sec.gov/submissions/CIK0001846416.json",
+      "retrieved_at": "2026-07-29T21:12:57Z"
+    },
+    {
+      "id": "sec_submissions_0001849253",
+      "url": "https://data.sec.gov/submissions/CIK0001849253.json",
+      "retrieved_at": "2026-07-29T21:12:57Z"
+    },
+    {
+      "id": "sec_submissions_0001856314",
+      "url": "https://data.sec.gov/submissions/CIK0001856314.json",
+      "retrieved_at": "2026-07-29T21:12:57Z"
+    },
+    {
+      "id": "sec_submissions_0001883685",
+      "url": "https://data.sec.gov/submissions/CIK0001883685.json",
+      "retrieved_at": "2026-07-29T21:12:57Z"
+    },
+    {
+      "id": "sec_submissions_0001937926",
+      "url": "https://data.sec.gov/submissions/CIK0001937926.json",
+      "retrieved_at": "2026-07-29T21:12:57Z"
+    },
+    {
+      "id": "sec_submissions_0001958140",
+      "url": "https://data.sec.gov/submissions/CIK0001958140.json",
+      "retrieved_at": "2026-07-29T21:12:58Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000119312526241850",
+      "url": "https://www.sec.gov/Archives/edgar/data/4457/000119312526241850/uhal-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:58Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000000806326000025",
+      "url": "https://www.sec.gov/Archives/edgar/data/8063/000000806326000025/atro-20260404_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:58Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000001469326000024",
+      "url": "https://www.sec.gov/Archives/edgar/data/14693/000001469326000024/bfb-20260430_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:58Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000001691826000029",
+      "url": "https://www.sec.gov/Archives/edgar/data/16918/000001691826000029/stz-20260531_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:58Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000002891726000019",
+      "url": "https://www.sec.gov/Archives/edgar/data/28917/000002891726000019/dds-20260502x10q_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:58Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026028682",
+      "url": "https://www.sec.gov/Archives/edgar/data/47111/000162828026028682/hsy-20260329_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:59Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000010049326000020",
+      "url": "https://www.sec.gov/Archives/edgar/data/100493/000010049326000020/tsn-20260328_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:59Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000119312526214570",
+      "url": "https://www.sec.gov/Archives/edgar/data/105016/000119312526214570/wso-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:59Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026031302",
+      "url": "https://www.sec.gov/Archives/edgar/data/317540/000162828026031302/coke-20260403_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:59Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000032018726000088",
+      "url": "https://www.sec.gov/Archives/edgar/data/320187/000032018726000088/nke-20260531_htm.xml",
+      "retrieved_at": "2026-07-29T21:45:08Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000119312526191644",
+      "url": "https://www.sec.gov/Archives/edgar/data/880117/000119312526191644/jbss-20260326_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:59Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026046019",
+      "url": "https://www.sec.gov/Archives/edgar/data/920760/000162828026046019/len-20260531_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:59Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026026866",
+      "url": "https://www.sec.gov/Archives/edgar/data/922621/000162828026026866/erie-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:12:59Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000105628826000018",
+      "url": "https://www.sec.gov/Archives/edgar/data/1056288/000105628826000018/fhi-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:00Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000110465926058640",
+      "url": "https://www.sec.gov/Archives/edgar/data/1063761/000110465926058640/spg-20260331x10q_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:00Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000119312526202243",
+      "url": "https://www.sec.gov/Archives/edgar/data/1067983/000119312526202243/brka-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:45:09Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026031154",
+      "url": "https://www.sec.gov/Archives/edgar/data/1090727/000162828026031154/ups-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:00Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000114139126000031",
+      "url": "https://www.sec.gov/Archives/edgar/data/1141391/000114139126000031/ma-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:45:09Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026049360",
+      "url": "https://www.sec.gov/Archives/edgar/data/1166691/000162828026049360/cmcsa-20260630_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:00Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000131916126000022",
+      "url": "https://www.sec.gov/Archives/edgar/data/1319161/000131916126000022/wmg-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:00Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000132165526000028",
+      "url": "https://www.sec.gov/Archives/edgar/data/1321655/000132165526000028/pltr-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:45:10Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026028526",
+      "url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026028526/meta-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:45:10Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000140316126000104",
+      "url": "https://www.sec.gov/Archives/edgar/data/1403161/000140316126000104/v-20260630_htm.xml",
+      "retrieved_at": "2026-07-29T21:45:10Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000143364226000019",
+      "url": "https://www.sec.gov/Archives/edgar/data/1433642/000143364226000019/hlne-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:00Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000146817426000017",
+      "url": "https://www.sec.gov/Archives/edgar/data/1468174/000146817426000017/h-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:00Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000155227526000047",
+      "url": "https://www.sec.gov/Archives/edgar/data/1552275/000155227526000047/sun-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:01Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000110465926056984",
+      "url": "https://www.sec.gov/Archives/edgar/data/1560385/000110465926056984/lmca-20260331x10q_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:01Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000157058526000109",
+      "url": "https://www.sec.gov/Archives/edgar/data/1570585/000157058526000109/lbtya-20260630_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:01Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000157199626000030",
+      "url": "https://www.sec.gov/Archives/edgar/data/1571996/000157199626000030/dell-20260501_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:01Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000119312526192462",
+      "url": "https://www.sec.gov/Archives/edgar/data/1596967/000119312526192462/mc-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:01Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000110465926088133",
+      "url": "https://www.sec.gov/Archives/edgar/data/1611983/000110465926088133/lbrda-20260630x10q_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:01Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026030534",
+      "url": "https://www.sec.gov/Archives/edgar/data/1621434/000162828026030534/bsm-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:02Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000119312526197485",
+      "url": "https://www.sec.gov/Archives/edgar/data/1626115/000119312526197485/pjt-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:02Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000163720726000030",
+      "url": "https://www.sec.gov/Archives/edgar/data/1637207/000163720726000030/plnt-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:02Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000165204426000071",
+      "url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000071/goog-20260630_htm.xml",
+      "retrieved_at": "2026-07-29T21:45:11Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000110465926057112",
+      "url": "https://www.sec.gov/Archives/edgar/data/1657788/000110465926057112/krp-20260331x10q_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:02Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000110465926086668",
+      "url": "https://www.sec.gov/Archives/edgar/data/1687187/000110465926086668/metc-20251231x10ka_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:02Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000110465926056298",
+      "url": "https://www.sec.gov/Archives/edgar/data/1693256/000110465926056298/wttr-20260331x10q_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:02Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026029046",
+      "url": "https://www.sec.gov/Archives/edgar/data/1697500/000162828026029046/sei-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:02Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026032636",
+      "url": "https://www.sec.gov/Archives/edgar/data/1699136/000162828026032636/whd-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:03Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000170305626000059",
+      "url": "https://www.sec.gov/Archives/edgar/data/1703056/000170305626000059/adt-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:03Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026029798",
+      "url": "https://www.sec.gov/Archives/edgar/data/1800227/000162828026029798/iaci-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:03Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026035138",
+      "url": "https://www.sec.gov/Archives/edgar/data/1805521/000162828026035138/ffie-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:03Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000110465926057207",
+      "url": "https://www.sec.gov/Archives/edgar/data/1806837/000110465926057207/verx-20260331x10q_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:03Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026030596",
+      "url": "https://www.sec.gov/Archives/edgar/data/1809104/000162828026030596/alit-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:03Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026033746",
+      "url": "https://www.sec.gov/Archives/edgar/data/1841425/000162828026033746/vgasw-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:03Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000149315226022633",
+      "url": "https://www.sec.gov/Archives/edgar/data/1846416/000149315226022633/form10-q_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:04Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000184925326000026",
+      "url": "https://www.sec.gov/Archives/edgar/data/1849253/000184925326000026/ryan-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:04Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026030937",
+      "url": "https://www.sec.gov/Archives/edgar/data/1856314/000162828026030937/you-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:04Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000188368526000020",
+      "url": "https://www.sec.gov/Archives/edgar/data/1883685/000188368526000020/dkng-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:04Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000162828026033010",
+      "url": "https://www.sec.gov/Archives/edgar/data/1937926/000162828026033010/bam-20260331_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:04Z"
+    },
+    {
+      "id": "sec_filing_xbrl_000110465926058558",
+      "url": "https://www.sec.gov/Archives/edgar/data/1958140/000110465926058558/batra-20260331x10q_htm.xml",
+      "retrieved_at": "2026-07-29T21:13:05Z"
     }
   ],
   "companies": [
@@ -424,11 +1004,11 @@
       "proxy_as_of": "2024-11-30",
       "proxy_confidence": "low",
       "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
-      "shares_outstanding": 1480000000,
-      "shares_source": "sec_fsds_2025q4_num",
-      "shares_as_of": "2025-11-30",
-      "shares_confidence": "medium",
-      "shares_method": "fsds_reviewed_equal_class_sum",
+      "shares_outstanding": 1483498703,
+      "shares_source": "sec_filing_xbrl_000032018726000088",
+      "shares_as_of": "2026-07-08",
+      "shares_confidence": "high",
+      "shares_method": "fsds_dei_reviewed_class_sum",
       "as_of": "2024-11-30",
       "quality": "public_float_and_shares",
       "provenance": {
@@ -451,20 +1031,20 @@
           "sanity_screen": "absolute_filer_status_and_implied_price"
         },
         "shares_outstanding": {
-          "source": "sec_fsds_2025q4_num",
-          "accession": "0000320187-25-000151",
-          "end": "2025-11-30",
-          "method": "fsds_reviewed_equal_class_sum",
-          "confidence": "medium",
-          "filed": "20251230",
-          "form": "10-Q",
+          "source": "sec_filing_xbrl_000032018726000088",
+          "accession": "0000320187-26-000088",
+          "end": "2026-07-08",
+          "method": "fsds_dei_reviewed_class_sum",
+          "confidence": "high",
+          "filed": "20260715",
+          "form": "10-K",
           "basis": "one-to-one common-share economic equivalent",
           "policy_source": "https://www.sec.gov/Archives/edgar/data/320187/000032018725000151/nke-20251130.htm",
           "components": [
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2024",
-              "value": 289000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 281387752,
               "quarters": 0,
               "segments": [
                 {
@@ -473,12 +1053,12 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 289000000.0
+              "equivalent_shares": 281387752.0
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2024",
-              "value": 1191000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 1202110951,
               "quarters": 0,
               "segments": [
                 {
@@ -487,7 +1067,7 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 1191000000.0
+              "equivalent_shares": 1202110951.0
             }
           ]
         }
@@ -1152,14 +1732,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q3I",
       "proxy_as_of": "2025-08-31",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 170778434,
+      "shares_source": "sec_filing_xbrl_000001691826000029",
+      "shares_as_of": "2026-06-26",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-08-31",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -1177,7 +1757,48 @@
           "frame": "CY2025Q3I",
           "end": "2025-08-31",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000001691826000029",
+          "accession": "0000016918-26-000029",
+          "end": "2026-06-26",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260701",
+          "form": "10-Q",
+          "basis": "Class A and convertible common shares are counted on a one-for-one conversion-equivalent basis.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/16918/000001691826000005/stz-20251130.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 170752511,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 170752511.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 25923,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "ConvertibleCommonStock"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 25923.0
+            }
+          ]
         }
       },
       "rank": 20
@@ -1193,14 +1814,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-27",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 202843372,
+      "shares_source": "sec_filing_xbrl_000162828026028682",
+      "shares_as_of": "2026-04-27",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-27",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -1218,7 +1839,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-27",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026028682",
+          "accession": "0001628280-26-028682",
+          "end": "2026-04-27",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260430",
+          "form": "10-Q",
+          "basis": "Common stock and Class B common stock are both included in the issuer capitalization.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/47111/000162828026008586/hsy-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 54613514,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 54613514.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 148229858,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonStock"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 148229858.0
+            }
+          ]
         }
       },
       "rank": 21
@@ -1538,14 +2200,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q1I",
       "proxy_as_of": "2025-03-29",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 352129402,
+      "shares_source": "sec_filing_xbrl_000010049326000020",
+      "shares_as_of": "2026-03-28",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-03-29",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -1563,7 +2225,48 @@
           "frame": "CY2025Q1I",
           "end": "2025-03-29",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000010049326000020",
+          "accession": "0000100493-26-000020",
+          "end": "2026-03-28",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260504",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are counted on a one-for-one conversion-equivalent basis.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/100493/000010049326000007/tsn-20251227.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 282120397,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 282120397.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 70009005,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 70009005.0
+            }
+          ]
         }
       },
       "rank": 28
@@ -2202,14 +2905,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2026Q1I",
       "proxy_as_of": "2026-04-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 458864265,
+      "shares_source": "sec_filing_xbrl_000001469326000024",
+      "shares_as_of": "2026-06-09",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2026-04-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -2227,7 +2930,48 @@
           "frame": "CY2026Q1I",
           "end": "2026-04-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000001469326000024",
+          "accession": "0000014693-26-000024",
+          "end": "2026-06-09",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260612",
+          "form": "10-K",
+          "basis": "Class A and non-voting common shares are included using the listed Class A price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/14693/000001469326000010/bfb-20260131.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 168480849,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 168480849.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 290383416,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "NonvotingCommonStock"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 290383416.0
+            }
+          ]
         }
       },
       "rank": 41
@@ -2753,14 +3497,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-27",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 66564294,
+      "shares_source": "sec_filing_xbrl_000162828026031302",
+      "shares_as_of": "2026-04-24",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-27",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -2778,7 +3522,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-27",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026031302",
+          "accession": "0001628280-26-031302",
+          "end": "2026-04-24",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260506",
+          "form": "10-Q",
+          "basis": "Class B and filer-designated undefined common shares are both included in the issuer capitalization.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/317540/000162828026009057/coke-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 10046960,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 10046960.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 56517334,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassUndefined"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 56517334.0
+            }
+          ]
         }
       },
       "rank": 52
@@ -5593,14 +6378,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2024Q4I",
       "proxy_as_of": "2024-12-26",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 11689575,
+      "shares_source": "sec_filing_xbrl_000119312526191644",
+      "shares_as_of": "2026-04-23",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2024-12-26",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -5618,7 +6403,48 @@
           "frame": "CY2024Q4I",
           "end": "2024-12-26",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000119312526191644",
+          "accession": "0001193125-26-191644",
+          "end": "2026-04-23",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260429",
+          "form": "10-Q",
+          "basis": "Noncumulative common stock and Class A common shares are included using the canonical listed price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/880117/000119312526029438/jbss-20251225.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 2597426,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 2597426.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 9092149,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "NoncumulativeCommonStock"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 9092149.0
+            }
+          ]
         }
       },
       "rank": 109
@@ -6708,14 +7534,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 303904146,
+      "shares_source": "sec_filing_xbrl_000162828026035138",
+      "shares_as_of": "2026-05-08",
+      "shares_confidence": "low",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -6733,7 +7559,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026035138",
+          "accession": "0001628280-26-035138",
+          "end": "2026-05-08",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "low",
+          "filed": "20260514",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are aggregated using the canonical listed price as an approximate proxy.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1805521/000162828026022509/ffie-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 303897479,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 303897479.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 6667,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 6667.0
+            }
+          ]
         }
       },
       "rank": 131
@@ -10245,9 +11112,9 @@
       "proxy_as_of": "2025-03-31",
       "proxy_confidence": "low",
       "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
-      "shares_outstanding": 1907637500,
-      "shares_source": "sec_fsds_2026q1_num",
-      "shares_as_of": "2025-12-31",
+      "shares_outstanding": 1867047259.5289001,
+      "shares_source": "sec_filing_xbrl_000140316126000104",
+      "shares_as_of": "2026-07-21",
       "shares_confidence": "medium",
       "shares_method": "fsds_reviewed_class_conversion",
       "as_of": "2025-03-31",
@@ -10272,20 +11139,20 @@
           "sanity_screen": "absolute_filer_status_and_implied_price"
         },
         "shares_outstanding": {
-          "source": "sec_fsds_2026q1_num",
-          "accession": "0001403161-26-000045",
-          "end": "2025-12-31",
+          "source": "sec_filing_xbrl_000140316126000104",
+          "accession": "0001403161-26-000104",
+          "end": "2026-07-21",
           "method": "fsds_reviewed_class_conversion",
           "confidence": "medium",
-          "filed": "20260130",
+          "filed": "20260729",
           "form": "10-Q",
           "basis": "Class A equivalent",
-          "policy_source": "https://www.sec.gov/Archives/edgar/data/1403161/000140316126000045/v-20251231.htm",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1403161/000140316126000104/v-20260630.htm",
           "components": [
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 1683000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 1704112694,
               "quarters": 0,
               "segments": [
                 {
@@ -10294,12 +11161,12 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 1683000000.0
+              "equivalent_shares": 1704112694.0
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 5000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 2180148,
               "quarters": 0,
               "segments": [
                 {
@@ -10307,13 +11174,13 @@
                   "member": "CommonClassB1"
                 }
               ],
-              "multiplier": 1.5475,
-              "equivalent_shares": 7737500.000000001
+              "multiplier": 1.5445,
+              "equivalent_shares": 3367238.586
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 120000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 486669,
               "quarters": 0,
               "segments": [
                 {
@@ -10321,13 +11188,27 @@
                   "member": "CommonClassB2"
                 }
               ],
-              "multiplier": 1.5075,
-              "equivalent_shares": 180900000.0
+              "multiplier": 1.5014,
+              "equivalent_shares": 730684.8366
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 9000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 60589871,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB3"
+                }
+              ],
+              "multiplier": 1.4953,
+              "equivalent_shares": 90600034.10630001
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 17059152,
               "quarters": 0,
               "segments": [
                 {
@@ -10336,7 +11217,7 @@
                 }
               ],
               "multiplier": 4.0,
-              "equivalent_shares": 36000000.0
+              "equivalent_shares": 68236608.0
             }
           ]
         }
@@ -10404,11 +11285,11 @@
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
       "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
-      "shares_outstanding": 894000000,
-      "shares_source": "sec_fsds_2026q1_num",
-      "shares_as_of": "2025-12-31",
-      "shares_confidence": "medium",
-      "shares_method": "fsds_reviewed_equal_class_sum",
+      "shares_outstanding": 883583855,
+      "shares_source": "sec_filing_xbrl_000114139126000031",
+      "shares_as_of": "2026-04-27",
+      "shares_confidence": "high",
+      "shares_method": "fsds_dei_reviewed_class_sum",
       "as_of": "2025-06-30",
       "quality": "public_float_and_shares",
       "provenance": {
@@ -10431,20 +11312,20 @@
           "sanity_screen": "absolute_filer_status_and_implied_price"
         },
         "shares_outstanding": {
-          "source": "sec_fsds_2026q1_num",
-          "accession": "0001141391-26-000013",
-          "end": "2025-12-31",
-          "method": "fsds_reviewed_equal_class_sum",
-          "confidence": "medium",
-          "filed": "20260211",
-          "form": "10-K",
+          "source": "sec_filing_xbrl_000114139126000031",
+          "accession": "0001141391-26-000031",
+          "end": "2026-04-27",
+          "method": "fsds_dei_reviewed_class_sum",
+          "confidence": "high",
+          "filed": "20260430",
+          "form": "10-Q",
           "basis": "one-to-one common-share economic equivalent",
           "policy_source": "https://www.sec.gov/Archives/edgar/data/1141391/000114139126000013/ma-20251231.htm",
           "components": [
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 887000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 877036230,
               "quarters": 0,
               "segments": [
                 {
@@ -10453,12 +11334,12 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 887000000.0
+              "equivalent_shares": 877036230.0
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 7000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 6547625,
               "quarters": 0,
               "segments": [
                 {
@@ -10467,7 +11348,7 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 7000000.0
+              "equivalent_shares": 6547625.0
             }
           ]
         }
@@ -11083,14 +11964,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 3548636573,
+      "shares_source": "sec_filing_xbrl_000162828026049360",
+      "shares_as_of": "2026-07-15",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -11108,7 +11989,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026049360",
+          "accession": "0001628280-26-049360",
+          "end": "2026-07-15",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260723",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are counted on a one-for-one economic basis.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1166691/000162828026004994/cmcsa-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 3539192198,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 3539192198.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 9444375,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 9444375.0
+            }
+          ]
         }
       },
       "rank": 17
@@ -12899,14 +13821,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 250605708,
+      "shares_source": "sec_filing_xbrl_000110465926056984",
+      "shares_as_of": "2026-04-30",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -12924,7 +13846,62 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000110465926056984",
+          "accession": "0001104659-26-056984",
+          "end": "2026-04-30",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260507",
+          "form": "10-Q",
+          "basis": "Only Formula One Group Class A, Class B, and Class C shares are included; Liberty Live tracking shares are excluded.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1560385/000110465926020653/lmca-20251231x10k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 23991058,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "LibertyFormulaOneGroupCommonClass"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 23991058.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 2381188,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "LibertyFormulaOneGroupCommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 2381188.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 224233462,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "LibertyFormulaOneGroupCommonClassC"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 224233462.0
+            }
+          ]
         }
       },
       "rank": 53
@@ -13842,14 +14819,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 889142768,
+      "shares_source": "sec_filing_xbrl_000188368526000020",
+      "shares_as_of": "2026-05-06",
+      "shares_confidence": "low",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -13867,7 +14844,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000188368526000020",
+          "accession": "0001883685-26-000020",
+          "end": "2026-05-06",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "low",
+          "filed": "20260508",
+          "form": "10-Q",
+          "basis": "Class A and voting-only Class B shares are aggregated to match the total-common-share convention used by some market-data providers; this is not a listed-class or dividend-equivalent capitalization.; provider_total_common_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1883685/000188368526000013/dkng-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 496128817,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 496128817.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 393013951,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 393013951.0
+            }
+          ]
         }
       },
       "rank": 72
@@ -14275,14 +15293,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 40657534,
+      "shares_source": "sec_filing_xbrl_000119312526214570",
+      "shares_as_of": "2026-05-05",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -14300,7 +15318,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000119312526214570",
+          "accession": "0001193125-26-214570",
+          "end": "2026-05-05",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260508",
+          "form": "10-Q",
+          "basis": "Common stock and Class B common stock are counted on a one-for-one economic basis.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/105016/000119312526082486/wso-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 5653741,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 5653741.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 35003793,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonStock"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 35003793.0
+            }
+          ]
         }
       },
       "rank": 81
@@ -14929,14 +15988,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 143497730,
+      "shares_source": "sec_filing_xbrl_000110465926088133",
+      "shares_as_of": "2026-06-30",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -14954,7 +16013,62 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000110465926088133",
+          "accession": "0001104659-26-088133",
+          "end": "2026-06-30",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260729",
+          "form": "10-Q",
+          "basis": "Class A, Class B, and Class C common shares are included using the listed Class A price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1611983/000110465926010397/lbrda-20251231x10k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 18254690,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 18254690.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 386988,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 386988.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 124856052,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassC"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 124856052.0
+            }
+          ]
         }
       },
       "rank": 94
@@ -15892,14 +17006,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 79442777,
+      "shares_source": "sec_filing_xbrl_000163720726000030",
+      "shares_as_of": "2026-05-04",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -15917,7 +17031,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000163720726000030",
+          "accession": "0001637207-26-000030",
+          "end": "2026-05-04",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260507",
+          "form": "10-Q",
+          "basis": "Class A shares and Class B shares paired with economic interests are counted on a fully converted basis.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1637207/000163720726000011/plnt-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 79126649,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 79126649.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 316128,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 316128.0
+            }
+          ]
         }
       },
       "rank": 113
@@ -17487,14 +18642,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 94161606,
+      "shares_source": "sec_filing_xbrl_000146817426000017",
+      "shares_as_of": "2026-04-24",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -17512,7 +18667,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000146817426000017",
+          "accession": "0001468174-26-000017",
+          "end": "2026-04-24",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260430",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are counted using the canonical listed price as a reviewed proxy.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1468174/000146817426000007/h-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 41030133,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 41030133.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 53131473,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 53131473.0
+            }
+          ]
         }
       },
       "rank": 145
@@ -18043,14 +19239,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q3I",
       "proxy_as_of": "2025-09-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 196077880,
+      "shares_source": "sec_filing_xbrl_000119312526241850",
+      "shares_as_of": "2026-05-27",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-09-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -18068,7 +19264,48 @@
           "frame": "CY2025Q3I",
           "end": "2025-09-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000119312526241850",
+          "accession": "0001193125-26-241850",
+          "end": "2026-05-27",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260527",
+          "form": "10-K",
+          "basis": "Voting Class A and non-voting common shares are included using the canonical listed price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/4457/000119312526037685/uhal-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 19607788,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 19607788.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 176470092,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "NonvotingCommonStock"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 176470092.0
+            }
+          ]
         }
       },
       "rank": 156
@@ -18437,14 +19674,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q1I",
       "proxy_as_of": "2025-03-31",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 521615528,
+      "shares_source": "sec_filing_xbrl_000131916126000022",
+      "shares_as_of": "2026-05-04",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-03-31",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -18462,7 +19699,48 @@
           "frame": "CY2025Q1I",
           "end": "2025-03-31",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000131916126000022",
+          "accession": "0001319161-26-000022",
+          "end": "2026-05-04",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260507",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are included using the canonical Class A price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1319161/000131916126000010/wmg-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 146235215,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 146235215.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 375380313,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 375380313.0
+            }
+          ]
         }
       },
       "rank": 164
@@ -18782,14 +20060,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 791494313,
+      "shares_source": "sec_filing_xbrl_000170305626000059",
+      "shares_as_of": "2026-04-23",
+      "shares_confidence": "low",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -18807,7 +20085,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000170305626000059",
+          "accession": "0001703056-26-000059",
+          "end": "2026-04-23",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "low",
+          "filed": "20260430",
+          "form": "10-Q",
+          "basis": "Common stock and Class B common stock are aggregated on a fully converted basis using the canonical listed price as an approximate proxy.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1703056/000170305626000022/adt-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 54744525,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 54744525.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 736749788,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonStock"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 736749788.0
+            }
+          ]
         }
       },
       "rank": 171
@@ -19588,14 +20907,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-08-02",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 15619471,
+      "shares_source": "sec_filing_xbrl_000002891726000019",
+      "shares_as_of": "2026-05-30",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-08-02",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -19613,7 +20932,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-08-02",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000002891726000019",
+          "accession": "0000028917-26-000019",
+          "end": "2026-05-30",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260605",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are included using the canonical listed price as a reviewed proxy.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/28917/000002891726000006/dds-20260131x10k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 11633238,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 11633238.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 3986233,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 3986233.0
+            }
+          ]
         }
       },
       "rank": 187
@@ -20541,14 +21901,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 341087566,
+      "shares_source": "sec_filing_xbrl_000157058526000109",
+      "shares_as_of": "2026-07-17",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -20566,7 +21926,62 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000157058526000109",
+          "accession": "0001570585-26-000109",
+          "end": "2026-07-17",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260724",
+          "form": "10-Q",
+          "basis": "Class A, Class B, and Class C common shares are included using the canonical Class A price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1570585/000157058526000014/lbtya-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 176722235,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 176722235.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 12968658,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 12968658.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 151396673,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassC"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 151396673.0
+            }
+          ]
         }
       },
       "rank": 206
@@ -20925,14 +22340,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 537241981,
+      "shares_source": "sec_filing_xbrl_000162828026030596",
+      "shares_as_of": "2026-04-30",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -20950,7 +22365,76 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026030596",
+          "accession": "0001628280-26-030596",
+          "end": "2026-04-30",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260505",
+          "form": "10-Q",
+          "basis": "Class A and Class V interests that proxy paired economic units are aggregated; contingent Class B-1 and Class B-2 earnout shares remain included as an approximate fully converted scope.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1809104/000162828026011108/alit-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 526847029,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 526847029.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 4955297,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassBOne"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 4955297.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 4955297,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassBTwo"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 4955297.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 484358,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassV"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 484358.0
+            }
+          ]
         }
       },
       "rank": 214
@@ -21368,14 +22852,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 64143821,
+      "shares_source": "sec_filing_xbrl_000110465926058558",
+      "shares_as_of": "2026-04-30",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -21393,7 +22877,62 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000110465926058558",
+          "accession": "0001104659-26-058558",
+          "end": "2026-04-30",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260511",
+          "form": "10-Q",
+          "basis": "Atlanta Braves Class A, Class B, and Class C common shares are included using the canonical Class A price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1958140/000110465926020650/batra-20251231x10k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 10318187,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 10318187.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 977751,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 977751.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 52847883,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassC"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 52847883.0
+            }
+          ]
         }
       },
       "rank": 223
@@ -36024,14 +37563,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 136894754,
+      "shares_source": "sec_filing_xbrl_000155227526000047",
+      "shares_as_of": "2026-05-01",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -36049,7 +37588,62 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000155227526000047",
+          "accession": "0001552275-26-000047",
+          "end": "2026-05-01",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260507",
+          "form": "10-Q",
+          "basis": "The displayed listed-unit capitalization uses public common units; separately held Class C and Class D units are tracked but excluded.; canonical_common_unit",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1552275/000155227526000047/sun-20260331.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 16410780,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassC"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 51517198,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassDUnits"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 136894754,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonUnits"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 136894754.0
+            }
+          ]
         }
       },
       "rank": 19
@@ -37016,14 +38610,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 212499331,
+      "shares_source": "sec_filing_xbrl_000162828026030534",
+      "shares_as_of": "2026-05-01",
+      "shares_confidence": "high",
+      "shares_method": "filing_cover_single_class",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -37041,7 +38635,30 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026030534",
+          "accession": "0001628280-26-030534",
+          "end": "2026-05-01",
+          "method": "filing_cover_single_class",
+          "confidence": "high",
+          "filed": "20260505",
+          "form": "10-Q",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 212499331,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonUnits"
+                }
+              ]
+            }
+          ]
         }
       },
       "rank": 39
@@ -37606,14 +39223,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 107774590,
+      "shares_source": "sec_filing_xbrl_000110465926057112",
+      "shares_as_of": "2026-05-01",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -37631,7 +39248,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000110465926057112",
+          "accession": "0001104659-26-057112",
+          "end": "2026-05-01",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260507",
+          "form": "10-Q",
+          "basis": "Common units and Class B common units are counted on a fully converted one-for-one basis.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1657788/000110465926020477/krp-20251231x10k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 9122322,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 9122322.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 98652268,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonUnits"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 98652268.0
+            }
+          ]
         }
       },
       "rank": 51
@@ -37794,14 +39452,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2024Q2I",
       "proxy_as_of": "2024-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 138144812,
+      "shares_source": "sec_filing_xbrl_000110465926056298",
+      "shares_as_of": "2026-05-04",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2024-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -37819,7 +39477,48 @@
           "frame": "CY2024Q2I",
           "end": "2024-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000110465926056298",
+          "accession": "0001104659-26-056298",
+          "end": "2026-05-04",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260506",
+          "form": "10-Q",
+          "basis": "Class A shares and Class B shares paired with economic interests are counted on a fully converted basis.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1693256/000110465926017085/wttr-20251231x10k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 124353951,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 124353951.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 13790861,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 13790861.0
+            }
+          ]
         }
       },
       "rank": 55
@@ -38472,14 +40171,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 67119305,
+      "shares_source": "sec_filing_xbrl_000110465926086668",
+      "shares_as_of": "2026-02-25",
+      "shares_confidence": "low",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -38497,7 +40196,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000110465926086668",
+          "accession": "0001104659-26-086668",
+          "end": "2026-02-25",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "low",
+          "filed": "20260724",
+          "form": "10-K/A",
+          "basis": "Class A and separately traded Class B shares are aggregated using the canonical Class A price as an approximate proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1687187/000110465926020479/metc-20251231x10k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 55963520,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 55963520.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 11155785,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 11155785.0
+            }
+          ]
         }
       },
       "rank": 69
@@ -40955,11 +42695,11 @@
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
       "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
-      "shares_outstanding": 12088000000,
-      "shares_source": "sec_fsds_2026q1_num",
-      "shares_as_of": "2025-12-31",
-      "shares_confidence": "medium",
-      "shares_method": "fsds_reviewed_equal_class_sum",
+      "shares_outstanding": 12230000000,
+      "shares_source": "sec_filing_xbrl_000165204426000071",
+      "shares_as_of": "2026-07-15",
+      "shares_confidence": "high",
+      "shares_method": "fsds_dei_reviewed_class_sum",
       "as_of": "2025-06-30",
       "quality": "public_float_and_shares",
       "provenance": {
@@ -40982,20 +42722,20 @@
           "sanity_screen": "absolute_filer_status_and_implied_price"
         },
         "shares_outstanding": {
-          "source": "sec_fsds_2026q1_num",
-          "accession": "0001652044-26-000018",
-          "end": "2025-12-31",
-          "method": "fsds_reviewed_equal_class_sum",
-          "confidence": "medium",
-          "filed": "20260205",
-          "form": "10-K",
+          "source": "sec_filing_xbrl_000165204426000071",
+          "accession": "0001652044-26-000071",
+          "end": "2026-07-15",
+          "method": "fsds_dei_reviewed_class_sum",
+          "confidence": "high",
+          "filed": "20260723",
+          "form": "10-Q",
           "basis": "one-to-one common-share economic equivalent",
           "policy_source": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
           "components": [
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 5429000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 5527000000,
               "quarters": 0,
               "segments": [
                 {
@@ -41004,12 +42744,12 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 5429000000.0
+              "equivalent_shares": 5527000000.0
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 5822000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 5868000000,
               "quarters": 0,
               "segments": [
                 {
@@ -41018,12 +42758,12 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 5822000000.0
+              "equivalent_shares": 5868000000.0
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 837000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 835000000,
               "quarters": 0,
               "segments": [
                 {
@@ -41032,7 +42772,7 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 837000000.0
+              "equivalent_shares": 835000000.0
             }
           ]
         }
@@ -41051,11 +42791,11 @@
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
       "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
-      "shares_outstanding": 2530000000,
-      "shares_source": "sec_fsds_2026q1_num",
-      "shares_as_of": "2025-12-31",
-      "shares_confidence": "medium",
-      "shares_method": "fsds_reviewed_equal_class_sum",
+      "shares_outstanding": 2538423304,
+      "shares_source": "sec_filing_xbrl_000162828026028526",
+      "shares_as_of": "2026-04-24",
+      "shares_confidence": "high",
+      "shares_method": "fsds_dei_reviewed_class_sum",
       "as_of": "2025-06-30",
       "quality": "public_float_and_shares",
       "provenance": {
@@ -41078,20 +42818,20 @@
           "sanity_screen": "absolute_filer_status_and_implied_price"
         },
         "shares_outstanding": {
-          "source": "sec_fsds_2026q1_num",
-          "accession": "0001628280-26-003942",
-          "end": "2025-12-31",
-          "method": "fsds_reviewed_equal_class_sum",
-          "confidence": "medium",
-          "filed": "20260129",
-          "form": "10-K",
+          "source": "sec_filing_xbrl_000162828026028526",
+          "accession": "0001628280-26-028526",
+          "end": "2026-04-24",
+          "method": "fsds_dei_reviewed_class_sum",
+          "confidence": "high",
+          "filed": "20260430",
+          "form": "10-Q",
           "basis": "one-to-one common-share economic equivalent",
           "policy_source": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
           "components": [
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 2187000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 2196045588,
               "quarters": 0,
               "segments": [
                 {
@@ -41100,12 +42840,12 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 2187000000.0
+              "equivalent_shares": 2196045588.0
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 343000000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 342377716,
               "quarters": 0,
               "segments": [
                 {
@@ -41114,7 +42854,7 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 343000000.0
+              "equivalent_shares": 342377716.0
             }
           ]
         }
@@ -41231,11 +42971,11 @@
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
       "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
-      "shares_outstanding": 2391192000,
-      "shares_source": "sec_fsds_2026q1_num",
-      "shares_as_of": "2025-12-31",
-      "shares_confidence": "medium",
-      "shares_method": "fsds_reviewed_equal_class_sum",
+      "shares_outstanding": 2397311977,
+      "shares_source": "sec_filing_xbrl_000132165526000028",
+      "shares_as_of": "2026-04-27",
+      "shares_confidence": "high",
+      "shares_method": "fsds_dei_reviewed_class_sum",
       "as_of": "2025-06-30",
       "quality": "public_float_and_shares",
       "provenance": {
@@ -41258,20 +42998,20 @@
           "sanity_screen": "absolute_filer_status_and_implied_price"
         },
         "shares_outstanding": {
-          "source": "sec_fsds_2026q1_num",
-          "accession": "0001321655-26-000011",
-          "end": "2025-12-31",
-          "method": "fsds_reviewed_equal_class_sum",
-          "confidence": "medium",
-          "filed": "20260217",
-          "form": "10-K",
+          "source": "sec_filing_xbrl_000132165526000028",
+          "accession": "0001321655-26-000028",
+          "end": "2026-04-27",
+          "method": "fsds_dei_reviewed_class_sum",
+          "confidence": "high",
+          "filed": "20260505",
+          "form": "10-Q",
           "basis": "one-to-one common-share economic equivalent",
           "policy_source": "https://www.sec.gov/Archives/edgar/data/1321655/000132165526000011/pltr-20251231.htm",
           "components": [
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 2290987000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 2296071334,
               "quarters": 0,
               "segments": [
                 {
@@ -41280,12 +43020,12 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 2290987000.0
+              "equivalent_shares": 2296071334.0
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
-              "value": 99200000,
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 100235643,
               "quarters": 0,
               "segments": [
                 {
@@ -41294,11 +43034,11 @@
                 }
               ],
               "multiplier": 1.0,
-              "equivalent_shares": 99200000.0
+              "equivalent_shares": 100235643.0
             },
             {
-              "tag": "CommonStockSharesOutstanding",
-              "taxonomy": "us-gaap/2025",
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
               "value": 1005000,
               "quarters": 0,
               "segments": [
@@ -43621,14 +45361,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-08-01",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 648107991,
+      "shares_source": "sec_filing_xbrl_000157199626000030",
+      "shares_as_of": "2026-06-02",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-08-01",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -43646,7 +45386,62 @@
           "frame": "CY2025Q2I",
           "end": "2025-08-01",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000157199626000030",
+          "accession": "0001571996-26-000030",
+          "end": "2026-06-02",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260609",
+          "form": "10-Q",
+          "basis": "Class A, Class B, and Class C common shares have equal per-share economics and convert one-for-one into Class C.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1571996/000157199626000008/dell-20260130.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 276744341,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 276744341.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 46490010,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 46490010.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 324873640,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassC"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 324873640.0
+            }
+          ]
         }
       },
       "rank": 54
@@ -50695,14 +52490,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 74380054,
+      "shares_source": "sec_filing_xbrl_000162828026029798",
+      "shares_as_of": "2026-05-01",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -50720,7 +52515,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026029798",
+          "accession": "0001628280-26-029798",
+          "end": "2026-05-01",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260504",
+          "form": "10-Q",
+          "basis": "Class A and Class B are directly economic common shares with different voting rights and one-for-one conversion rights.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1800227/000162828026009997/iaci-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 68590555,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 68590555.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 5789499,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 5789499.0
+            }
+          ]
         }
       },
       "rank": 192
@@ -50883,14 +52719,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 100764255,
+      "shares_source": "sec_filing_xbrl_000162828026030937",
+      "shares_as_of": "2026-05-01",
+      "shares_confidence": "low",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -50908,7 +52744,76 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026030937",
+          "accession": "0001628280-26-030937",
+          "end": "2026-05-01",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "low",
+          "filed": "20260506",
+          "form": "10-Q",
+          "basis": "Class A and Class B shares define this capitalization scope; non-economic Class C and Class D shares are explicitly covered but excluded.; canonical_listed_class_scope",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1856314/000185631426000006/you-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 100612468,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 100612468.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 151787,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 151787.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 14246787,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassC"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 18630246,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassD"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            }
+          ]
         }
       },
       "rank": 196
@@ -50924,14 +52829,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 161816931,
+      "shares_source": "sec_filing_xbrl_000110465926057207",
+      "shares_as_of": "2026-05-04",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -50949,7 +52854,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000110465926057207",
+          "accession": "0001104659-26-057207",
+          "end": "2026-05-04",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260507",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are included using the canonical Class A price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1806837/000110465926019165/verx-20251231x10k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 79661290,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 79661290.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 82155641,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 82155641.0
+            }
+          ]
         }
       },
       "rank": 197
@@ -55853,14 +57799,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 324289912,
+      "shares_source": "sec_filing_xbrl_000110465926058640",
+      "shares_as_of": "2026-03-31",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -55878,7 +57824,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000110465926058640",
+          "accession": "0001104659-26-058640",
+          "end": "2026-03-31",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260511",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are counted on a one-for-one economic basis.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1063761/000110465926019419/spg-20251231x10k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 324281912,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 324281912.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 8000,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 8000.0
+            }
+          ]
         }
       },
       "rank": 44
@@ -57472,14 +59459,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 1596786435,
+      "shares_source": "sec_filing_xbrl_000162828026033010",
+      "shares_as_of": "2026-05-07",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -57497,7 +59484,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026033010",
+          "accession": "0001628280-26-033010",
+          "end": "2026-05-07",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260508",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are both included in the issuer capitalization.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1937926/000162828026013098/bam-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 1596765155,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 1596765155.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 21280,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 21280.0
+            }
+          ]
         }
       },
       "rank": 77
@@ -60798,14 +62826,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 52289868,
+      "shares_source": "sec_filing_xbrl_000162828026026866",
+      "shares_as_of": "2026-04-17",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -60823,7 +62851,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026026866",
+          "accession": "0001628280-26-026866",
+          "end": "2026-04-17",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260423",
+          "form": "10-Q",
+          "basis": "Class A shares and Class B shares converted at 2,400 Class A shares per Class B share are counted on a fully converted Class A-equivalent basis.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/922621/000162828026026866/erie-20260331.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 46189068,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 46189068.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 2542,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 2400.0,
+              "equivalent_shares": 6100800.0
+            }
+          ]
         }
       },
       "rank": 143
@@ -60888,14 +62957,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 129468136,
+      "shares_source": "sec_filing_xbrl_000184925326000026",
+      "shares_as_of": "2026-04-27",
+      "shares_confidence": "low",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -60913,7 +62982,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000184925326000026",
+          "accession": "0001849253-26-000026",
+          "end": "2026-04-27",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "low",
+          "filed": "20260501",
+          "form": "10-Q",
+          "basis": "Listed Class A shares define this capitalization scope; non-economic Class B shares are explicitly covered but excluded.; canonical_listed_class_scope",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1849253/000184925326000006/ryan-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 129468136,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 129468136.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 134191279,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            }
+          ]
         }
       },
       "rank": 145
@@ -62997,14 +65107,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q3I",
       "proxy_as_of": "2025-09-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 56140010,
+      "shares_source": "sec_filing_xbrl_000143364226000019",
+      "shares_as_of": "2026-03-31",
+      "shares_confidence": "low",
+      "shares_method": "filing_reviewed_fact_policy",
       "as_of": "2025-09-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -63022,7 +65132,66 @@
           "frame": "CY2025Q3I",
           "end": "2025-09-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000143364226000019",
+          "accession": "0001433642-26-000019",
+          "end": "2026-03-31",
+          "method": "filing_reviewed_fact_policy",
+          "confidence": "low",
+          "filed": "20260521",
+          "form": "10-K",
+          "basis": "Current Class A shares are combined with the filer-reported weighted-average Class B and Class C unit conversion amount; legal Class B cover shares are tracked but excluded to avoid double counting.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1433642/000143364226000019/hlne-20260331.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 43697364,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 43697364.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 11836450,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            },
+            {
+              "tag": "IncrementalCommonSharesAttributableToShareBasedPaymentArrangements",
+              "taxonomy": "http://fasb.org/us-gaap/2025#filing",
+              "value": 12442646,
+              "quarters": 4,
+              "segments": [
+                {
+                  "axis": "AwardType",
+                  "member": "ClassBAndClassCUnits"
+                },
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 12442646.0
+            }
+          ]
         }
       },
       "rank": 188
@@ -64126,14 +66295,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 81418458.76345,
+      "shares_source": "sec_filing_xbrl_000119312526192462",
+      "shares_as_of": "2026-03-31",
+      "shares_confidence": "medium",
+      "shares_method": "filing_reviewed_fact_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -64151,7 +66320,57 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000119312526192462",
+          "accession": "0001193125-26-192462",
+          "end": "2026-03-31",
+          "method": "filing_reviewed_fact_policy",
+          "confidence": "medium",
+          "filed": "20260430",
+          "form": "10-Q",
+          "basis": "Current Class A shares, outside Group LP units exchangeable one-for-one, and the residual 0.00055:1 economic interest of Class B shares are counted on a fully converted basis.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1596967/000119312526192462/mc-20260331.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 74374014,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 74374014.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 4190479,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 0.00055,
+              "equivalent_shares": 2304.76345
+            },
+            {
+              "tag": "PartnersCapitalAccountUnitsHeldByNoncontrollingInterestHolders",
+              "taxonomy": "http://www.moelis.com/20260331#filing",
+              "value": 7042140,
+              "quarters": 0,
+              "segments": [],
+              "multiplier": 1.0,
+              "equivalent_shares": 7042140.0
+            }
+          ]
         }
       },
       "rank": 211
@@ -65304,14 +67523,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 40771955,
+      "shares_source": "sec_filing_xbrl_000119312526197485",
+      "shares_as_of": "2026-03-31",
+      "shares_confidence": "low",
+      "shares_method": "filing_reviewed_fact_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -65329,7 +67548,62 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000119312526197485",
+          "accession": "0001193125-26-197485",
+          "end": "2026-03-31",
+          "method": "filing_reviewed_fact_policy",
+          "confidence": "low",
+          "filed": "20260430",
+          "form": "10-Q",
+          "basis": "The filer-reported weighted-average Class A share count assuming all partnership units were exchanged one-for-one is used; unvested restricted stock units are excluded.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1626115/000119312526197485/pjt-20260331.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 25824598,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 130,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            },
+            {
+              "tag": "NumberOfDilutedClassACommonSharesOutstandingIfHoldingPartnershipUnitsExchanged",
+              "taxonomy": "http://www.pjtpartners.com/20260331#filing",
+              "value": 40771955,
+              "quarters": 1,
+              "segments": [
+                {
+                  "axis": "AntidilutiveSecuritiesExcludedFromComputationOfEarningsPerShareByAntidilutiveSecurities",
+                  "member": "ParticipatingRestrictedStockUnits"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 40771955.0
+            }
+          ]
         }
       },
       "rank": 235
@@ -66081,14 +68355,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 75912653,
+      "shares_source": "sec_filing_xbrl_000105628826000018",
+      "shares_as_of": "2026-04-24",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -66106,7 +68380,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000105628826000018",
+          "accession": "0001056288-26-000018",
+          "end": "2026-04-24",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260501",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are both included in the issuer capitalization.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1056288/000105628826000007/fhi-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 9000,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 9000.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 75903653,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 75903653.0
+            }
+          ]
         }
       },
       "rank": 250
@@ -67004,14 +69319,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 850006279,
+      "shares_source": "sec_filing_xbrl_000162828026031154",
+      "shares_as_of": "2026-04-16",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -67029,7 +69344,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026031154",
+          "accession": "0001628280-26-031154",
+          "end": "2026-04-16",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260506",
+          "form": "10-Q",
+          "basis": "Class A and Class B common shares are counted on a one-for-one economic basis.; canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1090727/000162828026008432/ups-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 103424463,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 103424463.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 746581816,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 746581816.0
+            }
+          ]
         }
       },
       "rank": 19
@@ -68427,14 +70783,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-05-31",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 240895142,
+      "shares_source": "sec_filing_xbrl_000162828026046019",
+      "shares_as_of": "2026-05-31",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-05-31",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -68452,7 +70808,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-05-31",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026046019",
+          "accession": "0001628280-26-046019",
+          "end": "2026-05-31",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260629",
+          "form": "10-Q",
+          "basis": "Class A and separately traded Class B shares are aggregated using the canonical Class A price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/920760/000162828026003870/len-20251130.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 210506003,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 210506003.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 30389139,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 30389139.0
+            }
+          ]
         }
       },
       "rank": 48
@@ -73977,14 +76374,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 69418430,
+      "shares_source": "sec_filing_xbrl_000162828026032636",
+      "shares_as_of": "2026-05-06",
+      "shares_confidence": "low",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -74002,7 +76399,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026032636",
+          "accession": "0001628280-26-032636",
+          "end": "2026-05-06",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "low",
+          "filed": "20260508",
+          "form": "10-Q",
+          "basis": "Listed Class A shares define this capitalization scope; non-economic Class B shares are explicitly covered but excluded.; canonical_listed_class_scope",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1699136/000162828026012377/whd-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 69418430,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 69418430.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 10758435,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            }
+          ]
         }
       },
       "rank": 160
@@ -77057,14 +79495,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-28",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 35840355,
+      "shares_source": "sec_filing_xbrl_000000806326000025",
+      "shares_as_of": "2026-05-07",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-28",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -77082,7 +79520,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-28",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000000806326000025",
+          "accession": "0000008063-26-000025",
+          "end": "2026-05-07",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260513",
+          "form": "10-Q",
+          "basis": "Filer-designated undefined common shares and Class B shares are included using the canonical listed price as a multi-class proxy.; multi_class_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/8063/000000806326000021/atro-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 3800015,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 3800015.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 32040340,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassUndefined"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 32040340.0
+            }
+          ]
         }
       },
       "rank": 222
@@ -77353,14 +79832,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 73541989,
+      "shares_source": "sec_filing_xbrl_000162828026029046",
+      "shares_as_of": "2026-04-27",
+      "shares_confidence": "medium",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -77378,7 +79857,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026029046",
+          "accession": "0001628280-26-029046",
+          "end": "2026-04-27",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "medium",
+          "filed": "20260501",
+          "form": "10-Q",
+          "basis": "Class A shares and Class B shares paired with economic interests are counted on a fully converted basis.; fully_converted_canonical_symbol_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1697500/000162828026012501/sei-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 58402338,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 58402338.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 15139651,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 15139651.0
+            }
+          ]
         }
       },
       "rank": 228
@@ -88087,14 +90607,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 22049621,
+      "shares_source": "sec_filing_xbrl_000162828026033746",
+      "shares_as_of": "2026-05-11",
+      "shares_confidence": "low",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -88112,7 +90632,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000162828026033746",
+          "accession": "0001628280-26-033746",
+          "end": "2026-05-11",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "low",
+          "filed": "20260512",
+          "form": "10-Q",
+          "basis": "Listed Class A shares define this capitalization scope; non-economic Class C shares are explicitly covered but excluded.; canonical_listed_class_scope",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1841425/000162828026021763/vgasw-20251231.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 22049621,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 22049621.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 22500000,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassC"
+                }
+              ],
+              "multiplier": 0.0,
+              "equivalent_shares": 0.0
+            }
+          ]
         }
       },
       "rank": 196
@@ -93402,14 +95963,14 @@
       "proxy_source": "sec_frame_entity_public_float_CY2025Q2I",
       "proxy_as_of": "2025-06-30",
       "proxy_confidence": "low",
-      "proxy_sanity_screen": "absolute_and_filer_status",
-      "shares_outstanding": null,
-      "shares_source": null,
-      "shares_as_of": null,
-      "shares_confidence": null,
-      "shares_method": null,
+      "proxy_sanity_screen": "absolute_filer_status_and_implied_price",
+      "shares_outstanding": 26023333,
+      "shares_source": "sec_filing_xbrl_000149315226022633",
+      "shares_as_of": "2026-05-12",
+      "shares_confidence": "low",
+      "shares_method": "filing_cover_reviewed_policy",
       "as_of": "2025-06-30",
-      "quality": "public_float_only",
+      "quality": "public_float_and_shares",
       "provenance": {
         "identity": {
           "source": "sec_company_tickers_exchange"
@@ -93427,7 +95988,48 @@
           "frame": "CY2025Q2I",
           "end": "2025-06-30",
           "confidence": "low",
-          "sanity_screen": "absolute_and_filer_status"
+          "sanity_screen": "absolute_filer_status_and_implied_price"
+        },
+        "shares_outstanding": {
+          "source": "sec_filing_xbrl_000149315226022633",
+          "accession": "0001493152-26-022633",
+          "end": "2026-05-12",
+          "method": "filing_cover_reviewed_policy",
+          "confidence": "low",
+          "filed": "20260513",
+          "form": "10-Q",
+          "basis": "Public Class A and founder Class B common shares are aggregated as an approximate pre-combination capitalization.; public_and_founder_common_proxy",
+          "policy_source": "https://www.sec.gov/Archives/edgar/data/1846416/000149315226009187/form10-k.htm",
+          "components": [
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 19690000,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassA"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 19690000.0
+            },
+            {
+              "tag": "EntityCommonStockSharesOutstanding",
+              "taxonomy": "dei/filing",
+              "value": 6333333,
+              "quarters": 0,
+              "segments": [
+                {
+                  "axis": "ClassOfStock",
+                  "member": "CommonClassB"
+                }
+              ],
+              "multiplier": 1.0,
+              "equivalent_shares": 6333333.0
+            }
+          ]
         }
       },
       "rank": 90

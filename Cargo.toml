@@ -24,6 +24,7 @@ include = [
   "/README.md",
   "/SECURITY.md",
   "/config.example.toml",
+  "/data/sec_share_policies.json",
   "/data/sec_universe.json",
   "/deny.toml",
   "/docs/**",
@@ -41,6 +42,7 @@ anyhow = "1.0.102"
 async-trait = "0.1.89"
 base64 = { version = "0.23.0", default-features = false, features = ["std"] }
 chrono = { version = "0.4.45", features = ["serde"] }
+chrono-tz = "0.10.4"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 directories = "6.0.0"

@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -29,17 +30,25 @@ from typing import Any, Iterable
 
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+FILING_ARCHIVE_URL = (
+    "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{filename}"
+)
 FSDS_URL = (
     "https://www.sec.gov/files/dera/data/financial-statement-data-sets/"
     "{year}q{quarter}.zip"
 )
 FRAME_URL = (
-    "https://data.sec.gov/api/xbrl/frames/dei/{tag}/{unit}/CY{year}Q{quarter}I.json"
+    "https://data.sec.gov/api/xbrl/frames/{taxonomy}/{tag}/{unit}/"
+    "CY{year}Q{quarter}I.json"
 )
 PUBLIC_FLOAT_TAG = "EntityPublicFloat"
 SHARES_TAG = "EntityCommonStockSharesOutstanding"
 COMMON_SHARES_TAG = "CommonStockSharesOutstanding"
 BASIC_WEIGHTED_SHARES_TAG = "WeightedAverageNumberOfSharesOutstandingBasic"
+LIMITED_PARTNERS_WEIGHTED_UNITS_TAG = (
+    "WeightedAverageLimitedPartnershipUnitsOutstanding"
+)
 ELIGIBLE_FILING_FORMS = frozenset({"10-K", "10-Q", "20-F", "40-F"})
 SECTORS = (
     "consumer",
@@ -59,6 +68,7 @@ TARGET_COMPANIES_PER_SECTOR = 250
 MAX_REPORTED_PUBLIC_FLOAT = 5_000_000_000_000
 MAX_POINT_FACT_OVERRIDE_DAYS = 45
 MAX_WEIGHTED_FALLBACK_OVERRIDE_DAYS = 185
+MAX_SHARE_FACT_AGE_DAYS = 550
 MAX_UNREVIEWED_IMPLIED_SHARE_PRICE = 2_000
 # Gross-error guards set 100x above the SEC filer-status float boundaries. The
 # margin accommodates transition timing without rejecting legitimate issuers.
@@ -71,6 +81,30 @@ REVIEWED_HIGH_PRICE_CIKS = {
     1067983: "Berkshire Hathaway Class A or filer-reported equivalent",
 }
 REVIEWED_LARGE_FLOAT_WITHOUT_AFS_CIKS: frozenset[int] = frozenset()
+SHARE_POLICY_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "sec_share_policies.json"
+)
+SHARE_POLICY_PRICE_BASES = frozenset(
+    {
+        "canonical_common_unit",
+        "canonical_listed_class_scope",
+        "canonical_symbol_proxy",
+        "fully_converted_canonical_symbol_proxy",
+        "multi_class_canonical_symbol_proxy",
+        "provider_total_common_proxy",
+        "public_and_founder_common_proxy",
+    }
+)
+XBRLI_NAMESPACE = "http://www.xbrl.org/2003/instance"
+XBRLDI_NAMESPACE = "http://xbrl.org/2006/xbrldi"
+DEI_NAMESPACE_PREFIXES = (
+    "http://xbrl.sec.gov/dei/",
+    "https://xbrl.sec.gov/dei/",
+)
+US_GAAP_NAMESPACE_PREFIXES = (
+    "http://fasb.org/us-gaap/",
+    "https://fasb.org/us-gaap/",
+)
 
 # Canonical display/provider symbols with issuer-specific economic review.
 # Molson Coors Class A converts one-for-one into Class B and shares its dividend
@@ -133,6 +167,20 @@ REVIEWED_EQUAL_CLASS_POLICY_METADATA = {
     },
 }
 
+# Dell's filer-reported aggregate includes Class A, B, and C common shares.
+# Those classes share dividends and undistributed earnings equally, and Class A
+# and B convert into Class C one-for-one. Restrict the us-gaap Frame total to
+# this reviewed issuer instead of treating every multi-class aggregate as safe.
+REVIEWED_COMMON_FRAME_TOTAL_POLICIES = {
+    1571996: {
+        "basis": "one-to-one equal-economic Class A, B, and C common shares",
+        "policy_source": (
+            "https://www.sec.gov/Archives/edgar/data/1571996/"
+            "000157199626000030/dell-20260501.htm"
+        ),
+    }
+}
+
 # Visa reports several common classes with different Class A conversion ratios.
 # The combined B1/B2 member overlaps the individual members and is intentionally
 # ignored. Any other class member makes the policy fail closed.
@@ -165,6 +213,21 @@ REVIEWED_CLASS_CONVERSION_POLICIES = {
                     "000140316126000079/v-20260331.htm"
                 ),
             },
+            "0001403161-26-000104": {
+                "ratios": {
+                    "CommonClassA": 1.0,
+                    "CommonClassB1": 1.5445,
+                    "CommonClassB2": 1.5014,
+                    "CommonClassB3": 1.4953,
+                    "CommonClassC": 4.0,
+                },
+                "redundant_aggregates": {},
+                "basis": "Class A equivalent",
+                "policy_source": (
+                    "https://www.sec.gov/Archives/edgar/data/1403161/"
+                    "000140316126000104/v-20260630.htm"
+                ),
+            },
         },
         "redundant_aggregates": {
             "CommonClassB1AndB2": ("CommonClassB1", "CommonClassB2")
@@ -194,6 +257,9 @@ REPORTED_EQUIVALENT_CLASS_POLICIES = {
             ),
         },
     }
+}
+REPORTED_EQUIVALENT_COVER_MEMBERS = {
+    1067983: frozenset({"CommonClassA", "CommonClassB"}),
 }
 
 
@@ -262,6 +328,15 @@ class ShareComponent:
     taxonomy: str
     segments: tuple[tuple[str, str], ...]
     source: str
+
+
+@dataclass(frozen=True)
+class FilingContext:
+    start: str | None
+    end: str
+    quarters: int
+    segments: tuple[tuple[str, str], ...]
+    qualified_segments: tuple[tuple[str, str, str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -385,6 +460,214 @@ def json_payload(payload: bytes | None, url: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RuntimeError(f"SEC returned unexpected JSON shape: {url}")
     return value
+
+
+def load_reviewed_share_policies(
+    path: Path = SHARE_POLICY_PATH,
+) -> dict[int, dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as error:
+        raise RuntimeError(f"could not read share policy registry {path}: {error}") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"share policy registry {path} is invalid JSON") from error
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise RuntimeError("share policy registry must use schema version 1")
+    policies = payload.get("policies")
+    if not isinstance(policies, list):
+        raise RuntimeError("share policy registry policies must be a list")
+
+    parsed: dict[int, dict[str, Any]] = {}
+    for index, value in enumerate(policies):
+        location = f"share policy {index}"
+        if not isinstance(value, dict):
+            raise RuntimeError(f"{location} must be an object")
+        cik_text = str(value.get("cik") or "")
+        if len(cik_text) != 10 or not cik_text.isdigit() or int(cik_text) <= 0:
+            raise RuntimeError(f"{location} has an invalid CIK")
+        cik = int(cik_text)
+        if cik in parsed:
+            raise RuntimeError(f"share policy registry contains duplicate CIK {cik_text}")
+        symbol = str(value.get("symbol") or "")
+        confidence = str(value.get("confidence") or "")
+        basis = str(value.get("basis") or "")
+        price_basis = str(value.get("price_basis") or "")
+        policy_source = str(value.get("policy_source") or "")
+        members = value.get("members")
+        filing_facts = value.get("filing_facts", [])
+        if not valid_ticker_symbol(symbol):
+            raise RuntimeError(f"{location} has an invalid canonical symbol")
+        if confidence not in {"low", "medium"}:
+            raise RuntimeError(f"{location} confidence must be low or medium")
+        if not basis or price_basis not in SHARE_POLICY_PRICE_BASES:
+            raise RuntimeError(f"{location} must describe its basis and price basis")
+        parsed_source = urllib.parse.urlparse(policy_source)
+        if (
+            parsed_source.scheme != "https"
+            or parsed_source.hostname != "www.sec.gov"
+            or not parsed_source.path.startswith("/Archives/edgar/data/")
+        ):
+            raise RuntimeError(
+                f"{location} policy source must be an SEC filing HTTPS URL"
+            )
+        if not isinstance(members, dict) or not members:
+            raise RuntimeError(f"{location} members must be a non-empty object")
+        parsed_members: dict[str, float] = {}
+        for member, multiplier in members.items():
+            member_name = str(member)
+            if (
+                not member_name
+                or not member_name.isascii()
+                or len(member_name) > 128
+            ):
+                raise RuntimeError(f"{location} has an invalid member name")
+            if (
+                isinstance(multiplier, bool)
+                or not isinstance(multiplier, (int, float))
+                or not math.isfinite(float(multiplier))
+                or float(multiplier) < 0
+            ):
+                raise RuntimeError(f"{location} has an invalid member multiplier")
+            parsed_members[member_name] = float(multiplier)
+        if not isinstance(filing_facts, list):
+            raise RuntimeError(f"{location} filing_facts must be a list")
+        parsed_filing_facts: list[dict[str, Any]] = []
+        seen_filing_fact_selectors: set[tuple[Any, ...]] = set()
+        for fact_index, fact in enumerate(filing_facts):
+            fact_location = f"{location} filing fact {fact_index}"
+            if not isinstance(fact, dict):
+                raise RuntimeError(f"{fact_location} must be an object")
+            tag = str(fact.get("tag") or "")
+            accession = str(fact.get("accession") or "")
+            namespace = str(fact.get("namespace") or "")
+            unit = str(fact.get("unit") or "")
+            quarters = fact.get("quarters")
+            multiplier = fact.get("multiplier")
+            segments = fact.get("segments", [])
+            start = fact.get("start")
+            end = str(fact.get("end") or "")
+            parsed_namespace = urllib.parse.urlparse(namespace)
+            if (
+                not tag
+                or not tag.isascii()
+                or len(tag) > 160
+                or not tag[0].isalpha()
+                or not tag.replace("_", "").isalnum()
+            ):
+                raise RuntimeError(f"{fact_location} has an invalid tag")
+            if (
+                not valid_accession(accession)
+                or parsed_namespace.scheme not in {"http", "https"}
+                or not parsed_namespace.hostname
+            ):
+                raise RuntimeError(
+                    f"{fact_location} has an invalid accession or namespace"
+                )
+            if unit != "shares":
+                raise RuntimeError(f"{fact_location} must use shares")
+            if (
+                isinstance(quarters, bool)
+                or not isinstance(quarters, int)
+                or quarters < 0
+                or quarters > 8
+            ):
+                raise RuntimeError(f"{fact_location} has invalid quarters")
+            parsed_start = None if start is None else str(start)
+            try:
+                end_on = date.fromisoformat(end)
+                start_on = (
+                    date.fromisoformat(parsed_start)
+                    if parsed_start is not None
+                    else None
+                )
+            except ValueError as error:
+                raise RuntimeError(
+                    f"{fact_location} has an invalid period"
+                ) from error
+            if (
+                (quarters == 0 and start_on is not None)
+                or (quarters > 0 and start_on is None)
+                or (start_on is not None and start_on > end_on)
+            ):
+                raise RuntimeError(f"{fact_location} has an invalid period")
+            if accession.replace("-", "") not in parsed_source.path:
+                raise RuntimeError(
+                    f"{fact_location} accession must match the policy source"
+                )
+            if (
+                isinstance(multiplier, bool)
+                or not isinstance(multiplier, (int, float))
+                or not math.isfinite(float(multiplier))
+                or float(multiplier) <= 0
+            ):
+                raise RuntimeError(f"{fact_location} has an invalid multiplier")
+            if not isinstance(segments, list):
+                raise RuntimeError(f"{fact_location} segments must be a list")
+            parsed_segments: list[tuple[str, str]] = []
+            qualified_segments: list[tuple[str, str, str, str]] = []
+            for segment in segments:
+                if not isinstance(segment, dict):
+                    raise RuntimeError(
+                        f"{fact_location} has an invalid segment"
+                    )
+                axis_name = normalize_xbrl_axis(segment.get("axis"))
+                member_name = normalize_xbrl_member(segment.get("member"))
+                axis_namespace = str(segment.get("axis_namespace") or "")
+                member_namespace = str(segment.get("member_namespace") or "")
+                if (
+                    axis_name is None
+                    or member_name is None
+                    or not valid_xbrl_namespace(axis_namespace)
+                    or not valid_xbrl_namespace(member_namespace)
+                ):
+                    raise RuntimeError(
+                        f"{fact_location} has an invalid segment"
+                    )
+                parsed_segments.append((axis_name, member_name))
+                qualified_segments.append(
+                    (
+                        axis_namespace,
+                        axis_name,
+                        member_namespace,
+                        member_name,
+                    )
+                )
+            parsed_selector = {
+                "accession": accession,
+                "tag": tag,
+                "namespace": namespace,
+                "unit": unit,
+                "quarters": quarters,
+                "start": parsed_start,
+                "end": end,
+                "multiplier": float(multiplier),
+                "segments": tuple(sorted(parsed_segments)),
+                "qualified_segments": tuple(sorted(qualified_segments)),
+            }
+            selector_identity = filing_fact_selector_identity(parsed_selector)
+            if selector_identity in seen_filing_fact_selectors:
+                raise RuntimeError(
+                    f"{location} contains a duplicate filing fact selector"
+                )
+            seen_filing_fact_selectors.add(selector_identity)
+            parsed_filing_facts.append(parsed_selector)
+        if not (
+            any(multiplier > 0 for multiplier in parsed_members.values())
+            or parsed_filing_facts
+        ):
+            raise RuntimeError(
+                f"{location} must include at least one priced member or filing fact"
+            )
+        parsed[cik] = {
+            "symbol": symbol,
+            "confidence": confidence,
+            "basis": basis,
+            "price_basis": price_basis,
+            "policy_source": policy_source,
+            "members": parsed_members,
+            "filing_facts": parsed_filing_facts,
+        }
+    return parsed
 
 
 def quarter_sequence(start: Quarter, count: int) -> list[Quarter]:
@@ -619,7 +902,12 @@ def load_fsds_share_facts(
     client: SecClient,
     quarters: Iterable[Quarter],
     identities: dict[int, dict[str, Any]],
-) -> tuple[dict[int, SharesFact], list[dict[str, str]]]:
+    reviewed_policies: dict[int, dict[str, Any]] | None = None,
+) -> tuple[
+    dict[int, SharesFact],
+    list[dict[str, str]],
+    dict[int, list[ShareComponent]],
+]:
     candidates: dict[int, list[ShareComponent]] = {}
     sources: list[dict[str, str]] = []
     for quarter in quarters:
@@ -651,10 +939,500 @@ def load_fsds_share_facts(
     facts: dict[int, SharesFact] = {}
     for cik, components in candidates.items():
         symbol = str(identities[cik]["symbol"])
-        selected = select_fsds_shares_fact(cik, symbol, components)
+        selected = select_fsds_shares_fact(
+            cik,
+            symbol,
+            components,
+            reviewed_policies,
+        )
         if selected is not None:
             facts[cik] = selected
-    return facts, sources
+    return facts, sources, candidates
+
+
+def load_latest_inline_submissions(
+    client: SecClient,
+    ciks: Iterable[int],
+    as_of: date,
+) -> tuple[dict[int, dict[str, str | int]], list[dict[str, str]]]:
+    submissions: dict[int, dict[str, str | int]] = {}
+    sources: list[dict[str, str]] = []
+    for cik in sorted(set(ciks)):
+        url = SUBMISSIONS_URL.format(cik=cik)
+        payload = client.get(url, optional=True)
+        if payload is None:
+            continue
+        source_id = f"sec_submissions_{cik:010d}"
+        sources.append(source_record(source_id, url, client))
+        response = json_payload(payload, url)
+        filings = response.get("filings")
+        recent = filings.get("recent") if isinstance(filings, dict) else None
+        if not isinstance(recent, dict):
+            continue
+        candidate = select_latest_inline_submission(cik, recent, as_of)
+        if candidate is not None:
+            submissions[cik] = candidate
+    return submissions, sources
+
+
+def select_latest_inline_submission(
+    cik: int,
+    recent: dict[str, Any],
+    as_of: date,
+) -> dict[str, str | int] | None:
+    required = (
+        "accessionNumber",
+        "filingDate",
+        "form",
+        "primaryDocument",
+        "isInlineXBRL",
+    )
+    columns = {name: recent.get(name) for name in required}
+    if any(not isinstance(values, list) for values in columns.values()):
+        return None
+    row_count = min(len(values) for values in columns.values())
+    candidates: list[dict[str, str | int]] = []
+    for index in range(row_count):
+        accession = str(columns["accessionNumber"][index] or "")
+        filed = str(columns["filingDate"][index] or "")
+        form = str(columns["form"][index] or "").upper()
+        primary_document = str(columns["primaryDocument"][index] or "")
+        inline = columns["isInlineXBRL"][index]
+        try:
+            filed_on = date.fromisoformat(filed)
+        except ValueError:
+            continue
+        if (
+            form.removesuffix("/A") not in ELIGIBLE_FILING_FORMS
+            or filed_on > as_of
+            or str(inline).lower() not in {"1", "true"}
+            or not valid_accession(accession)
+            or not safe_filing_filename(primary_document)
+        ):
+            continue
+        instance = extracted_instance_filename(primary_document)
+        if instance is None:
+            continue
+        candidates.append(
+            {
+                "cik": cik,
+                "accession": accession,
+                "filed": filed,
+                "form": form,
+                "instance": instance,
+            }
+        )
+    return (
+        max(
+            candidates,
+            key=lambda candidate: (
+                str(candidate["filed"]),
+                str(candidate["accession"]),
+            ),
+        )
+        if candidates
+        else None
+    )
+
+
+def valid_accession(value: str) -> bool:
+    return (
+        len(value) == 20
+        and value[10] == "-"
+        and value[13] == "-"
+        and value.replace("-", "").isdigit()
+    )
+
+
+def safe_filing_filename(value: str) -> bool:
+    return (
+        bool(value)
+        and value.isascii()
+        and len(value) <= 255
+        and Path(value).name == value
+        and "/" not in value
+        and "\\" not in value
+    )
+
+
+def extracted_instance_filename(primary_document: str) -> str | None:
+    lowered = primary_document.lower()
+    for suffix in (".htm", ".html"):
+        if lowered.endswith(suffix):
+            return primary_document[: -len(suffix)] + "_htm.xml"
+    return None
+
+
+def load_filing_cover_share_components(
+    client: SecClient,
+    submissions: dict[int, dict[str, str | int]],
+    as_of: date,
+    reviewed_policies: dict[int, dict[str, Any]] | None = None,
+) -> tuple[dict[int, list[ShareComponent]], list[dict[str, str]]]:
+    candidates: dict[int, list[ShareComponent]] = {}
+    sources: list[dict[str, str]] = []
+    for cik, submission in sorted(submissions.items()):
+        accession = str(submission["accession"])
+        source_id = f"sec_filing_xbrl_{accession.replace('-', '')}"
+        url = FILING_ARCHIVE_URL.format(
+            cik=cik,
+            accession=accession.replace("-", ""),
+            filename=urllib.parse.quote(str(submission["instance"]), safe="._-"),
+        )
+        payload = client.get(url, optional=True)
+        if payload is None:
+            continue
+        sources.append(source_record(source_id, url, client))
+        components = parse_filing_cover_share_components(
+            payload,
+            submission,
+            source_id,
+            as_of,
+            (reviewed_policies or {}).get(cik),
+        )
+        if components:
+            candidates[cik] = components
+    return candidates, sources
+
+
+def parse_filing_cover_share_components(
+    payload: bytes,
+    submission: dict[str, str | int],
+    source: str,
+    as_of: date,
+    reviewed_policy: dict[str, Any] | None = None,
+) -> list[ShareComponent]:
+    try:
+        root = ElementTree.fromstring(payload)
+        namespace_bindings: dict[str, set[str]] = {}
+        for _, (prefix, namespace) in ElementTree.iterparse(
+            io.BytesIO(payload),
+            events=("start-ns",),
+        ):
+            namespace_bindings.setdefault(prefix or "", set()).add(namespace)
+        namespaces = {
+            prefix: next(iter(bindings))
+            for prefix, bindings in namespace_bindings.items()
+            if len(bindings) == 1
+        }
+    except ElementTree.ParseError as error:
+        raise RuntimeError(
+            f"SEC filing instance {submission['accession']} is invalid XML"
+        ) from error
+
+    try:
+        expected_cik = int(submission["cik"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("SEC filing submission has an invalid CIK") from error
+    contexts: dict[str, FilingContext] = {}
+    seen_context_ids: set[str] = set()
+    duplicate_context_ids: set[str] = set()
+    for element in root.iter():
+        if (
+            xml_local_name(element.tag) != "context"
+            or xml_namespace(element.tag) != XBRLI_NAMESPACE
+        ):
+            continue
+        context_id = str(element.attrib.get("id") or "")
+        if context_id in seen_context_ids:
+            duplicate_context_ids.add(context_id)
+            contexts.pop(context_id, None)
+            continue
+        seen_context_ids.add(context_id)
+        instant: str | None = None
+        start: str | None = None
+        end: str | None = None
+        segments: list[tuple[str, str]] = []
+        qualified_segments: list[tuple[str, str, str, str]] = []
+        invalid_dimension = False
+        context_cik: int | None = None
+        for child in element.iter():
+            name = xml_local_name(child.tag)
+            namespace = xml_namespace(child.tag)
+            if name == "identifier" and namespace == XBRLI_NAMESPACE:
+                identifier = (child.text or "").strip()
+                scheme = str(child.attrib.get("scheme") or "")
+                if (
+                    scheme not in {"http://www.sec.gov/CIK", "https://www.sec.gov/CIK"}
+                    or not identifier.isdigit()
+                ):
+                    invalid_dimension = True
+                    break
+                context_cik = int(identifier)
+            elif name == "instant" and namespace == XBRLI_NAMESPACE:
+                instant = eligible_frame_end((child.text or "").strip(), as_of)
+            elif name == "startDate" and namespace == XBRLI_NAMESPACE:
+                start = eligible_frame_end((child.text or "").strip(), as_of)
+            elif name == "endDate" and namespace == XBRLI_NAMESPACE:
+                end = eligible_frame_end((child.text or "").strip(), as_of)
+            elif name == "explicitMember" and namespace == XBRLDI_NAMESPACE:
+                axis_qname = resolved_qname(
+                    str(child.attrib.get("dimension") or ""),
+                    namespaces,
+                )
+                member_qname = resolved_qname(
+                    (child.text or "").strip(),
+                    namespaces,
+                )
+                if axis_qname is None or member_qname is None:
+                    invalid_dimension = True
+                    break
+                axis_namespace, raw_axis = axis_qname
+                member_namespace, raw_member = member_qname
+                axis = normalize_xbrl_axis(raw_axis)
+                member = normalize_xbrl_member(raw_member)
+                if (
+                    axis is None
+                    or member is None
+                    or (
+                        axis == "ClassOfStock"
+                        and not versioned_taxonomy_namespace(
+                            axis_namespace,
+                            US_GAAP_NAMESPACE_PREFIXES,
+                        )
+                    )
+                ):
+                    invalid_dimension = True
+                    break
+                segments.append((axis, member))
+                qualified_segments.append(
+                    (
+                        axis_namespace,
+                        axis,
+                        member_namespace,
+                        member,
+                    )
+                )
+            elif name == "typedMember" and namespace == XBRLDI_NAMESPACE:
+                invalid_dimension = True
+                break
+        period_end = instant or end
+        quarters = 0 if instant else filing_duration_quarters(start, end)
+        if (
+            context_id
+            and not invalid_dimension
+            and context_cik == expected_cik
+            and period_end is not None
+            and quarters is not None
+            and context_id not in duplicate_context_ids
+        ):
+            contexts[context_id] = FilingContext(
+                start,
+                period_end,
+                quarters,
+                tuple(sorted(segments)),
+                tuple(sorted(qualified_segments)),
+            )
+
+    units: dict[str, str] = {}
+    seen_unit_ids: set[str] = set()
+    duplicate_unit_ids: set[str] = set()
+    for element in root.iter():
+        if (
+            xml_local_name(element.tag) != "unit"
+            or xml_namespace(element.tag) != XBRLI_NAMESPACE
+        ):
+            continue
+        unit_id = str(element.attrib.get("id") or "")
+        if unit_id in seen_unit_ids:
+            duplicate_unit_ids.add(unit_id)
+            units.pop(unit_id, None)
+            continue
+        seen_unit_ids.add(unit_id)
+        measures = [
+            resolved_measure_name((child.text or "").strip(), namespaces)
+            for child in element.iter()
+            if (
+                xml_local_name(child.tag) == "measure"
+                and xml_namespace(child.tag) == XBRLI_NAMESPACE
+            )
+        ]
+        if (
+            unit_id
+            and unit_id not in duplicate_unit_ids
+            and len(measures) == 1
+            and measures[0] is not None
+        ):
+            units[unit_id] = measures[0]
+
+    components: list[ShareComponent] = []
+    filed = date.fromisoformat(str(submission["filed"])).strftime("%Y%m%d")
+    for element in root.iter():
+        if (
+            xml_local_name(element.tag) != SHARES_TAG
+            or not versioned_taxonomy_namespace(
+                xml_namespace(element.tag),
+                DEI_NAMESPACE_PREFIXES,
+            )
+            or units.get(str(element.attrib.get("unitRef") or "")) != "shares"
+        ):
+            continue
+        context = contexts.get(str(element.attrib.get("contextRef") or ""))
+        if context is None or context.quarters != 0:
+            continue
+        value = positive_number_from_text("".join(element.itertext()).replace(",", ""))
+        if value is None:
+            continue
+        components.append(
+            ShareComponent(
+                value=value,
+                end=context.end,
+                accession=str(submission["accession"]),
+                filed=filed,
+                form=str(submission["form"]),
+                quarters=0,
+                tag=SHARES_TAG,
+                taxonomy="dei/filing",
+                segments=context.segments,
+                source=source,
+            )
+        )
+    for selector in (reviewed_policy or {}).get("filing_facts", []):
+        if str(submission["accession"]) != selector["accession"]:
+            continue
+        for element in root.iter():
+            namespace = xml_namespace(element.tag)
+            if (
+                xml_local_name(element.tag) != selector["tag"]
+                or namespace != selector["namespace"]
+                or units.get(str(element.attrib.get("unitRef") or ""))
+                != selector["unit"]
+            ):
+                continue
+            context = contexts.get(str(element.attrib.get("contextRef") or ""))
+            if (
+                context is None
+                or context.quarters != selector["quarters"]
+                or context.start != selector["start"]
+                or context.end != selector["end"]
+                or context.segments != selector["segments"]
+                or context.qualified_segments
+                != selector["qualified_segments"]
+            ):
+                continue
+            value = positive_number_from_text(
+                "".join(element.itertext()).replace(",", "")
+            )
+            if value is None:
+                continue
+            components.append(
+                ShareComponent(
+                    value=value,
+                    end=context.end,
+                    accession=str(submission["accession"]),
+                    filed=filed,
+                    form=str(submission["form"]),
+                    quarters=context.quarters,
+                    tag=str(selector["tag"]),
+                    taxonomy=f"{namespace}#filing",
+                    segments=context.segments,
+                    source=source,
+                )
+            )
+    return components
+
+
+def xml_local_name(value: str) -> str:
+    return value.rsplit("}", 1)[-1]
+
+
+def xml_namespace(value: str) -> str:
+    return value[1:].split("}", 1)[0] if value.startswith("{") else ""
+
+
+def normalize_xbrl_axis(value: Any) -> str | None:
+    normalized = str(value or "").rsplit(":", 1)[-1]
+    if normalized.endswith("Axis"):
+        normalized = normalized[:-4]
+    if normalized == "StatementClassOfStock":
+        normalized = "ClassOfStock"
+    return normalized or None
+
+
+def normalize_xbrl_member(value: Any) -> str | None:
+    normalized = str(value or "").strip().rsplit(":", 1)[-1]
+    if normalized.endswith("Member"):
+        normalized = normalized[:-6]
+    return normalized or None
+
+
+def valid_xbrl_namespace(value: str) -> bool:
+    parsed = urllib.parse.urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+
+def versioned_taxonomy_namespace(
+    value: str,
+    prefixes: tuple[str, ...],
+) -> bool:
+    return any(
+        len(version := value.removeprefix(prefix)) == 4
+        and version.isdigit()
+        for prefix in prefixes
+        if value.startswith(prefix)
+    )
+
+
+def filing_fact_selector_identity(
+    selector: dict[str, Any],
+) -> tuple[Any, ...]:
+    return (
+        selector["accession"],
+        selector["tag"],
+        selector["namespace"],
+        selector["unit"],
+        selector["quarters"],
+        selector["start"],
+        selector["end"],
+        selector["segments"],
+        selector["qualified_segments"],
+    )
+
+
+def resolved_qname(
+    value: str,
+    namespaces: dict[str, str],
+) -> tuple[str, str] | None:
+    prefix, separator, local_name = value.partition(":")
+    if separator:
+        namespace = namespaces.get(prefix)
+    else:
+        local_name = prefix
+        namespace = namespaces.get("")
+    return (namespace, local_name) if namespace and local_name else None
+
+
+def resolved_measure_name(
+    value: str,
+    namespaces: dict[str, str],
+) -> str | None:
+    resolved = resolved_qname(value, namespaces)
+    if resolved is None:
+        return None
+    namespace, local_name = resolved
+    return (
+        local_name
+        if namespace == XBRLI_NAMESPACE and local_name == "shares"
+        else None
+    )
+
+
+def filing_duration_quarters(
+    start: str | None,
+    end: str | None,
+) -> int | None:
+    if start is None or end is None:
+        return None
+    try:
+        start_on = date.fromisoformat(start)
+        end_on = date.fromisoformat(end)
+    except ValueError:
+        return None
+    days = (end_on - start_on).days + 1
+    if days <= 0:
+        return None
+    quarters = max(1, round(days / 91.3125))
+    return quarters if quarters <= 8 else None
 
 
 def archive_member(archive: zipfile.ZipFile, filename: str) -> str | None:
@@ -703,7 +1481,12 @@ def parse_fsds_share_component(
     row: dict[str, Any], submission: dict[str, Any], source: str
 ) -> ShareComponent | None:
     tag = str(row.get("tag") or "").strip()
-    if tag not in {SHARES_TAG, COMMON_SHARES_TAG, BASIC_WEIGHTED_SHARES_TAG}:
+    if tag not in {
+        SHARES_TAG,
+        COMMON_SHARES_TAG,
+        BASIC_WEIGHTED_SHARES_TAG,
+        LIMITED_PARTNERS_WEIGHTED_UNITS_TAG,
+    }:
         return None
     taxonomy = str(row.get("version") or "").strip()
     expected_taxonomy = "dei/" if tag == SHARES_TAG else "us-gaap/"
@@ -717,9 +1500,13 @@ def parse_fsds_share_component(
         quarters = int(row.get("qtrs") or 0)
     except (TypeError, ValueError):
         return None
-    if tag != BASIC_WEIGHTED_SHARES_TAG and quarters != 0:
+    duration_tags = {
+        BASIC_WEIGHTED_SHARES_TAG,
+        LIMITED_PARTNERS_WEIGHTED_UNITS_TAG,
+    }
+    if tag not in duration_tags and quarters != 0:
         return None
-    if tag == BASIC_WEIGHTED_SHARES_TAG and quarters <= 0:
+    if tag in duration_tags and quarters <= 0:
         return None
     value = positive_number_from_text(row.get("value"))
     end = compact_date(row.get("ddate"))
@@ -780,12 +1567,44 @@ def parse_segments(value: Any) -> tuple[tuple[str, str], ...] | None:
 
 
 def select_fsds_shares_fact(
-    cik: int, symbol: str, components: list[ShareComponent]
+    cik: int,
+    symbol: str,
+    components: list[ShareComponent],
+    reviewed_policies: dict[int, dict[str, Any]] | None = None,
 ) -> SharesFact | None:
-    if reviewed_multiclass_issuer(cik):
+    reviewed_policies = reviewed_policies or {}
+    if cik in reviewed_policies:
+        return select_reviewed_filing_policy(
+            cik,
+            symbol,
+            components,
+            reviewed_policies[cik],
+        )
+    cover = latest_filing_cover_components(components)
+    if cik in REPORTED_EQUIVALENT_CLASS_POLICIES:
+        if cover and filing_cover_member_signature(cover) != (
+            REPORTED_EQUIVALENT_COVER_MEMBERS[cik]
+        ):
+            return None
+        components = [
+            component
+            for component in components
+            if component.taxonomy != "dei/filing"
+        ]
+    if reviewed_multiclass_issuer(cik, reviewed_policies):
         components = latest_reviewed_timeline_components(components)
         if not components:
             return None
+    elif cover:
+        cover_facts = [
+            fact
+            for fact in (
+                select_issuer_total(cik, cover, SHARES_TAG),
+                select_single_class_filing_cover(cover),
+            )
+            if fact is not None
+        ]
+        return select_preferred_shares_fact(cover_facts)
     groups: dict[tuple[str, str, str], list[ShareComponent]] = {}
     for component in components:
         groups.setdefault(
@@ -803,8 +1622,12 @@ def select_fsds_shares_fact(
         lambda values: select_reviewed_class_sum(cik, values, COMMON_SHARES_TAG),
         lambda values: select_reported_equivalent(cik, symbol, values),
     )
-    if not reviewed_multiclass_issuer(cik):
-        strategies += (select_basic_weighted_total,)
+    if not reviewed_multiclass_issuer(cik, reviewed_policies):
+        strategies += (
+            select_single_class_filing_cover,
+            select_basic_weighted_total,
+            select_limited_partners_weighted_total,
+        )
     facts: list[SharesFact] = []
     for strategy in strategies:
         facts.extend(
@@ -813,6 +1636,236 @@ def select_fsds_shares_fact(
             if (fact := strategy(values)) is not None
         )
     return select_preferred_shares_fact(facts)
+
+
+def select_reviewed_filing_policy(
+    cik: int,
+    symbol: str,
+    components: list[ShareComponent],
+    policy: dict[str, Any],
+) -> SharesFact | None:
+    if symbol != policy["symbol"]:
+        return None
+    cover = latest_filing_cover_components(components)
+    if not cover:
+        return None
+    by_member: dict[str, list[ShareComponent]] = {}
+    unsegmented: list[ShareComponent] = []
+    for component in cover:
+        if not component.segments:
+            unsegmented.append(component)
+            continue
+        member = exact_class_member(component)
+        if component.segments and member is None:
+            return None
+        if member is not None:
+            by_member.setdefault(member, []).append(component)
+    if unsegmented and select_consistent_component(unsegmented) is None:
+        return None
+    expected_members = policy["members"]
+    if frozenset(by_member) != frozenset(expected_members):
+        return None
+
+    selected: list[ShareComponent] = []
+    multipliers: list[float] = []
+    total = 0.0
+    for member, multiplier in sorted(expected_members.items()):
+        component = select_consistent_component(by_member[member])
+        if component is None:
+            return None
+        selected.append(component)
+        multipliers.append(float(multiplier))
+        total += float(component.value) * float(multiplier)
+    filing_facts = policy.get("filing_facts", [])
+    if len(
+        {
+            filing_fact_selector_identity(selector)
+            for selector in filing_facts
+        }
+    ) != len(filing_facts):
+        return None
+    for selector in filing_facts:
+        eligible = [
+            component
+            for component in components
+            if (
+                component.accession == cover[0].accession
+                and component.accession == selector["accession"]
+                and component.tag == selector["tag"]
+                and component.taxonomy == f"{selector['namespace']}#filing"
+                and component.quarters == selector["quarters"]
+                and component.end == selector["end"]
+                and component.segments == selector["segments"]
+            )
+        ]
+        component = select_consistent_component(eligible)
+        if component is None:
+            return None
+        multiplier = float(selector["multiplier"])
+        selected.append(component)
+        multipliers.append(multiplier)
+        total += float(component.value) * multiplier
+    if not math.isfinite(total) or total <= 0:
+        return None
+    first = min(
+        (
+            component
+            for component, multiplier in zip(selected, multipliers)
+            if multiplier > 0
+        ),
+        key=lambda component: component.end,
+    )
+    value: int | float = int(total) if total.is_integer() else total
+    return SharesFact(
+        value=value,
+        end=first.end,
+        accession=first.accession,
+        filed=first.filed,
+        form=first.form,
+        source=first.source,
+        method=(
+            "filing_reviewed_fact_policy"
+            if policy.get("filing_facts")
+            else "filing_cover_reviewed_policy"
+        ),
+        confidence=str(policy["confidence"]),
+        components=tuple(selected),
+        basis=f"{policy['basis']}; {policy['price_basis']}",
+        policy_source=str(policy["policy_source"]),
+        component_multipliers=tuple(multipliers),
+    )
+
+
+def select_single_class_filing_cover(
+    components: list[ShareComponent],
+) -> SharesFact | None:
+    cover = latest_filing_cover_components(components)
+    if not cover:
+        return None
+    by_member: dict[str, list[ShareComponent]] = {}
+    unsegmented: list[ShareComponent] = []
+    for component in cover:
+        if not component.segments:
+            unsegmented.append(component)
+            continue
+        member = exact_class_member(component)
+        if member is None:
+            return None
+        if excluded_cover_member(member):
+            continue
+        by_member.setdefault(member, []).append(component)
+
+    if unsegmented:
+        component = select_consistent_component(unsegmented)
+        return (
+            shares_fact((component,), "filing_cover_single_class", "high")
+            if component is not None and len(by_member) <= 1
+            else None
+        )
+    if len(by_member) != 1:
+        return None
+    component = select_consistent_component(next(iter(by_member.values())))
+    return (
+        shares_fact((component,), "filing_cover_single_class", "high")
+        if component is not None
+        else None
+    )
+
+
+def latest_filing_cover_components(
+    components: list[ShareComponent],
+) -> list[ShareComponent]:
+    cover = [
+        component
+        for component in components
+        if component.tag == SHARES_TAG
+        and component.taxonomy == "dei/filing"
+        and component.source.startswith("sec_filing_xbrl_")
+    ]
+    if not cover:
+        return []
+    latest_filing = max(
+        (component.filed, component.accession) for component in cover
+    )
+    filing = [
+        component
+        for component in cover
+        if (component.filed, component.accession) == latest_filing
+    ]
+    latest_end = max(component.end for component in filing)
+    return [component for component in filing if component.end == latest_end]
+
+
+def exact_class_member(component: ShareComponent) -> str | None:
+    return (
+        component.segments[0][1]
+        if len(component.segments) == 1
+        and component.segments[0][0] == "ClassOfStock"
+        else None
+    )
+
+
+def filing_cover_member_signature(
+    components: list[ShareComponent],
+) -> frozenset[str] | None:
+    by_member: dict[str, list[ShareComponent]] = {}
+    unsegmented: list[ShareComponent] = []
+    for component in components:
+        if not component.segments:
+            unsegmented.append(component)
+            continue
+        member = exact_class_member(component)
+        if member is None:
+            return None
+        by_member.setdefault(member, []).append(component)
+    if any(
+        select_consistent_component(values) is None
+        for values in by_member.values()
+    ) or (
+        unsegmented
+        and select_consistent_component(unsegmented) is None
+    ):
+        return None
+    return frozenset(by_member)
+
+
+def excluded_cover_member(member: str) -> bool:
+    normalized = member.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "preferred",
+            "warrant",
+            "right",
+            "option",
+            "debt",
+            "redeemable",
+            "temporary",
+        )
+    )
+
+
+def select_consistent_component(
+    components: list[ShareComponent],
+) -> ShareComponent | None:
+    if not components:
+        return None
+    selected = select_least_dimensioned(components)
+    if selected is None:
+        return None
+    return (
+        selected
+        if all(
+            math.isclose(
+                float(component.value),
+                float(selected.value),
+                rel_tol=0.0001,
+                abs_tol=1.0,
+            )
+            for component in components
+        )
+        else None
+    )
 
 
 def latest_reviewed_timeline_components(
@@ -840,6 +1893,7 @@ def select_issuer_total(
     if (
         cik in REVIEWED_CLASS_CONVERSION_POLICIES
         or cik in REPORTED_EQUIVALENT_CLASS_POLICIES
+        or cik in REVIEWED_COMMON_FRAME_TOTAL_POLICIES
     ):
         return None
     eligible = [
@@ -852,7 +1906,11 @@ def select_issuer_total(
             else common_aggregate_segments(component.segments)
         )
     ]
-    component = select_least_dimensioned(eligible)
+    component = (
+        select_consistent_component(eligible)
+        if any(candidate.taxonomy == "dei/filing" for candidate in eligible)
+        else select_least_dimensioned(eligible)
+    )
     if component is None:
         return None
     if cik in REVIEWED_EQUAL_CLASS_MEMBERS:
@@ -884,22 +1942,60 @@ def common_aggregate_segments(segments: tuple[tuple[str, str], ...]) -> bool:
     )
 
 
+def reviewed_class_components(
+    components: list[ShareComponent],
+) -> tuple[dict[str, list[ShareComponent]], bool] | None:
+    strict = any(component.taxonomy == "dei/filing" for component in components)
+    by_member: dict[str, list[ShareComponent]] = {}
+    unsegmented: list[ShareComponent] = []
+    for component in components:
+        if not component.segments:
+            unsegmented.append(component)
+            continue
+        member = (
+            exact_class_member(component)
+            if strict
+            else segment_member(component.segments, "ClassOfStock")
+        )
+        if strict and member is None:
+            return None
+        if member is not None:
+            by_member.setdefault(member, []).append(component)
+    if (
+        strict
+        and unsegmented
+        and select_consistent_component(unsegmented) is None
+    ):
+        return None
+    return by_member, strict
+
+
+def select_reviewed_component(
+    components: list[ShareComponent],
+    strict: bool,
+) -> ShareComponent | None:
+    return (
+        select_consistent_component(components)
+        if strict
+        else select_least_dimensioned(components)
+    )
+
+
 def select_reviewed_class_sum(
     cik: int, components: list[ShareComponent], tag: str
 ) -> SharesFact | None:
     reviewed_members = REVIEWED_EQUAL_CLASS_MEMBERS.get(cik)
     if not reviewed_members or not components or components[0].tag != tag:
         return None
-    by_member: dict[str, list[ShareComponent]] = {}
-    for component in components:
-        member = segment_member(component.segments, "ClassOfStock")
-        if member is not None:
-            by_member.setdefault(member, []).append(component)
+    resolved = reviewed_class_components(components)
+    if resolved is None:
+        return None
+    by_member, strict = resolved
     if frozenset(by_member) != reviewed_members:
         return None
     selected_components: list[ShareComponent] = []
     for member in sorted(reviewed_members):
-        component = select_least_dimensioned(by_member[member])
+        component = select_reviewed_component(by_member[member], strict)
         if component is None:
             return None
         selected_components.append(component)
@@ -913,7 +2009,9 @@ def select_reviewed_class_sum(
             else common_aggregate_segments(component.segments)
         )
     ]
-    aggregate = select_least_dimensioned(aggregates)
+    aggregate = select_reviewed_component(aggregates, strict)
+    if aggregates and aggregate is None:
+        return None
     selected_total = sum(float(component.value) for component in selected)
     if aggregate is not None and not math.isclose(
         float(aggregate.value),
@@ -949,23 +2047,28 @@ def select_reviewed_class_conversion(
     if policy_version is None:
         return None
     ratios = policy_version["ratios"]
-    redundant_aggregates = policy["redundant_aggregates"]
-    by_member: dict[str, list[ShareComponent]] = {}
-    for component in components:
-        member = segment_member(component.segments, "ClassOfStock")
-        if member is not None:
-            by_member.setdefault(member, []).append(component)
+    redundant_aggregates = policy_version.get(
+        "redundant_aggregates",
+        policy["redundant_aggregates"],
+    )
+    resolved = reviewed_class_components(components)
+    if resolved is None:
+        return None
+    by_member, strict = resolved
     observed_members = frozenset(by_member)
     if observed_members - frozenset(ratios) - frozenset(redundant_aggregates):
         return None
     if not frozenset(ratios).issubset(observed_members):
         return None
     for aggregate_member, constituent_members in redundant_aggregates.items():
-        aggregate = select_least_dimensioned(by_member.get(aggregate_member, []))
+        aggregate = select_reviewed_component(
+            by_member.get(aggregate_member, []),
+            strict,
+        )
         if aggregate is None:
             return None
         constituents = [
-            select_least_dimensioned(by_member.get(member, []))
+            select_reviewed_component(by_member.get(member, []), strict)
             for member in constituent_members
         ]
         if any(component is None for component in constituents):
@@ -987,7 +2090,7 @@ def select_reviewed_class_conversion(
     multipliers: list[float] = []
     total = 0.0
     for member, ratio in sorted(ratios.items()):
-        component = select_least_dimensioned(by_member[member])
+        component = select_reviewed_component(by_member[member], strict)
         if component is None:
             return None
         selected.append(component)
@@ -1054,6 +2157,50 @@ def select_basic_weighted_total(
     )
 
 
+def select_limited_partners_weighted_total(
+    components: list[ShareComponent],
+) -> SharesFact | None:
+    eligible = [
+        component
+        for component in components
+        if component.tag == LIMITED_PARTNERS_WEIGHTED_UNITS_TAG
+        and (
+            not component.segments
+            or (
+                len(component.segments) == 1
+                and component.segments[0]
+                in {
+                    ("ClassOfStock", "CommonUnits"),
+                    ("EquityComponents", "CommonUnits"),
+                    ("LimitedPartnersCapitalAccountByClass", "CommonUnits"),
+                }
+            )
+        )
+    ]
+    by_shape: dict[tuple[tuple[str, str], ...], list[ShareComponent]] = {}
+    for component in eligible:
+        by_shape.setdefault(component.segments, []).append(component)
+    selected_by_shape = [
+        selected
+        for values in by_shape.values()
+        if (selected := select_least_dimensioned(values)) is not None
+    ]
+    if not selected_by_shape:
+        return None
+    values = {round(float(component.value), 6) for component in selected_by_shape}
+    if len(values) != 1:
+        return None
+    component = min(
+        selected_by_shape,
+        key=lambda value: (len(value.segments), value.segments),
+    )
+    return shares_fact(
+        (component,),
+        "fsds_limited_partners_weighted_average",
+        "low",
+    )
+
+
 def segment_member(
     segments: tuple[tuple[str, str], ...], expected_axis: str
 ) -> str | None:
@@ -1085,11 +2232,16 @@ def duration_penalty(component: ShareComponent) -> tuple[int, int]:
     return abs(component.quarters - expected), component.quarters
 
 
-def reviewed_multiclass_issuer(cik: int) -> bool:
+def reviewed_multiclass_issuer(
+    cik: int,
+    reviewed_policies: dict[int, dict[str, Any]] | None = None,
+) -> bool:
     return (
-        cik in REVIEWED_EQUAL_CLASS_MEMBERS
+        cik in (reviewed_policies or {})
+        or cik in REVIEWED_EQUAL_CLASS_MEMBERS
         or cik in REVIEWED_CLASS_CONVERSION_POLICIES
         or cik in REPORTED_EQUIVALENT_CLASS_POLICIES
+        or cik in REVIEWED_COMMON_FRAME_TOTAL_POLICIES
     )
 
 
@@ -1122,13 +2274,18 @@ def shares_fact(
 
 
 def merge_share_facts(
-    frame_facts: dict[int, FrameFact], fsds_facts: dict[int, SharesFact]
+    frame_facts: dict[int, FrameFact],
+    fsds_facts: dict[int, SharesFact],
+    common_frame_facts: dict[int, FrameFact] | None = None,
+    reviewed_policies: dict[int, dict[str, Any]] | None = None,
+    as_of: date | None = None,
 ) -> dict[int, SharesFact]:
+    reviewed_policies = reviewed_policies or {}
     candidates: dict[int, list[SharesFact]] = {
         cik: [fact] for cik, fact in fsds_facts.items()
     }
     for cik, frame_fact in frame_facts.items():
-        if reviewed_multiclass_issuer(cik):
+        if reviewed_multiclass_issuer(cik, reviewed_policies):
             continue
         candidates.setdefault(cik, []).append(
             SharesFact(
@@ -1144,16 +2301,54 @@ def merge_share_facts(
                 frame=frame_fact.frame,
             )
         )
+    for cik, frame_fact in (common_frame_facts or {}).items():
+        if cik in reviewed_policies:
+            continue
+        policy = REVIEWED_COMMON_FRAME_TOTAL_POLICIES.get(cik)
+        if policy is None:
+            continue
+        candidates.setdefault(cik, []).append(
+            SharesFact(
+                value=frame_fact.value,
+                end=frame_fact.end,
+                accession=frame_fact.accession,
+                filed="",
+                form="",
+                source=frame_fact.source,
+                method="sec_frame_reviewed_common_total",
+                confidence="medium",
+                components=(),
+                frame=frame_fact.frame,
+                basis=str(policy["basis"]),
+                policy_source=str(policy["policy_source"]),
+            )
+        )
     return {
         cik: selected
         for cik, facts in candidates.items()
-        if (selected := select_preferred_shares_fact(facts)) is not None
+        if (
+            selected := select_preferred_shares_fact(
+                facts,
+                as_of=as_of,
+            )
+        )
+        is not None
     }
 
 
 def select_preferred_shares_fact(
     facts: list[SharesFact],
+    *,
+    as_of: date | None = None,
 ) -> SharesFact | None:
+    if as_of is not None:
+        facts = [
+            fact
+            for fact in facts
+            if 0
+            <= (as_of - date.fromisoformat(fact.end)).days
+            <= MAX_SHARE_FACT_AGE_DAYS
+        ]
     if not facts:
         return None
     newest_date = max(date.fromisoformat(fact.end) for fact in facts)
@@ -1179,14 +2374,19 @@ def select_preferred_shares_fact(
     ]
     confidence_rank = {"low": 0, "medium": 1, "high": 2}
     method_rank = {
+        "filing_reviewed_fact_policy": 7,
+        "filing_cover_reviewed_policy": 7,
+        "filing_cover_single_class": 6,
         "fsds_reviewed_class_conversion": 6,
         "fsds_dei_cover_total": 5,
         "fsds_dei_reviewed_class_sum": 4,
         "sec_frame_dei_total": 3,
+        "sec_frame_reviewed_common_total": 3,
         "fsds_reviewed_equal_class_sum": 3,
         "fsds_common_stock_total": 2,
         "fsds_reported_equivalent_class": 0,
         "fsds_basic_weighted_average": 0,
+        "fsds_limited_partners_weighted_average": 0,
     }
     return max(
         fresh,
@@ -1206,18 +2406,27 @@ def load_frame_facts(
     tag: str,
     unit: str,
     as_of: date,
+    *,
+    taxonomy: str = "dei",
 ) -> tuple[dict[int, FrameFact], list[dict[str, str]]]:
+    if taxonomy not in {"dei", "us-gaap"}:
+        raise ValueError(f"unsupported SEC Frame taxonomy: {taxonomy}")
     candidates: dict[int, list[FrameFact]] = {}
     sources: list[dict[str, str]] = []
     for quarter in quarters:
         frame = f"CY{quarter.year}Q{quarter.quarter}I"
         url = FRAME_URL.format(
-            tag=tag, unit=unit, year=quarter.year, quarter=quarter.quarter
+            taxonomy=taxonomy,
+            tag=tag,
+            unit=unit,
+            year=quarter.year,
+            quarter=quarter.quarter,
         )
         payload = client.get(url, optional=True)
         if payload is None:
             continue
-        source_id = f"sec_frame_{snake_case(tag)}_{frame}"
+        taxonomy_prefix = "" if taxonomy == "dei" else f"{snake_case(taxonomy)}_"
+        source_id = f"sec_frame_{taxonomy_prefix}{snake_case(tag)}_{frame}"
         sources.append(source_record(source_id, url, client))
         response = json_payload(payload, url)
         data = response.get("data")
@@ -1532,7 +2741,70 @@ def public_float_sanity_screen(
     return "absolute_filer_status_and_implied_price"
 
 
-def validate_catalog(companies: list[dict[str, Any]]) -> None:
+def unresolved_share_reasons(
+    companies: list[dict[str, Any]],
+    reviewed_policies: dict[int, dict[str, Any]],
+    latest_submissions: dict[int, dict[str, str | int]],
+    cover_components: dict[int, list[ShareComponent]],
+) -> dict[int, str]:
+    reasons: dict[int, str] = {}
+    for company in companies:
+        if company["shares_outstanding"] is not None:
+            continue
+        cik = int(company["cik"])
+        if reviewed_multiclass_issuer(cik, reviewed_policies):
+            reason = "policy_signature_changed"
+        elif cik not in latest_submissions:
+            reason = "no_recent_inline_filing"
+        elif not cover_components.get(cik):
+            reason = "no_filing_cover_share_fact"
+        elif len(latest_filing_cover_components(cover_components[cik])) > 1:
+            reason = "multi_class_unreviewed"
+        else:
+            reason = "no_recent_unambiguous_price_equivalent_share_basis"
+        reasons[cik] = reason
+    return reasons
+
+
+def share_coverage(
+    companies: list[dict[str, Any]],
+    unresolved_reasons: dict[int, str] | None = None,
+) -> dict[str, Any]:
+    unresolved_reasons = unresolved_reasons or {}
+    unresolved = [
+        company for company in companies if company["shares_outstanding"] is None
+    ]
+    top_companies = [company for company in companies if company["rank"] <= 100]
+    unresolved_top = [
+        company for company in top_companies if company["shares_outstanding"] is None
+    ]
+    return {
+        "catalog_companies": len(companies),
+        "catalog_resolved": len(companies) - len(unresolved),
+        "catalog_unresolved": len(unresolved),
+        "top_100_companies": len(top_companies),
+        "top_100_resolved": len(top_companies) - len(unresolved_top),
+        "top_100_unresolved": len(unresolved_top),
+        "unresolved": [
+            {
+                "cik": company["cik"],
+                "symbol": company["symbol"],
+                "sector": company["sector"],
+                "rank": company["rank"],
+                "reason": unresolved_reasons.get(
+                    int(company["cik"]),
+                    "no_recent_unambiguous_price_equivalent_share_basis",
+                ),
+            }
+            for company in unresolved
+        ],
+    }
+
+
+def validate_catalog(
+    companies: list[dict[str, Any]],
+    unresolved_reasons: dict[int, str] | None = None,
+) -> None:
     if len({company["cik"] for company in companies}) != len(companies):
         raise RuntimeError("catalog contains duplicate issuer CIKs")
     if len({company["symbol"] for company in companies}) != len(companies):
@@ -1544,6 +2816,32 @@ def validate_catalog(companies: list[dict[str, Any]]) -> None:
             raise RuntimeError(f"sector {sector} has an invalid candidate count")
         if ranks != list(range(1, len(ranks) + 1)):
             raise RuntimeError(f"sector {sector} ranks are not consecutive")
+    validate_top_100_share_coverage(companies, unresolved_reasons)
+
+
+def validate_top_100_share_coverage(
+    companies: list[dict[str, Any]],
+    unresolved_reasons: dict[int, str] | None = None,
+) -> None:
+    unresolved_reasons = unresolved_reasons or {}
+    unresolved_top = [
+        (
+            company["symbol"],
+            unresolved_reasons.get(
+                int(company["cik"]),
+                "unresolved",
+            ),
+        )
+        for company in companies
+        if company["rank"] <= 100 and company["shares_outstanding"] is None
+    ]
+    if unresolved_top:
+        raise RuntimeError(
+            "top-100 share coverage regression: "
+            + ", ".join(
+                f"{symbol} ({reason})" for symbol, reason in unresolved_top
+            )
+        )
 
 
 def runtime_catalog(catalog: dict[str, Any]) -> dict[str, Any]:
@@ -1835,6 +3133,10 @@ def main() -> int:
     args = parse_args()
     if args.package_only:
         catalog = load_catalog(args.output)
+        companies = catalog.get("companies")
+        if not isinstance(companies, list):
+            raise RuntimeError("catalog companies must be a list")
+        validate_top_100_share_coverage(companies)
         manifest, manifest_path = write_runtime_catalog_artifact(
             catalog,
             args.artifact_output,
@@ -1850,6 +3152,7 @@ def main() -> int:
     client = SecClient(args.user_agent, args.requests_per_second, args.cache_dir)
     generated_at = utc_now()
     generated_on = date.fromisoformat(generated_at[:10])
+    reviewed_policies = load_reviewed_share_policies()
 
     latest = find_latest_fsds(client, args.through)
     identities, identity_source = load_tickers(client)
@@ -1866,20 +3169,105 @@ def main() -> int:
     frame_shares_facts, frame_shares_sources = load_frame_facts(
         client, frame_quarters, SHARES_TAG, "shares", generated_on
     )
-    fsds_shares_facts, fsds_shares_sources = load_fsds_share_facts(
+    common_frame_shares_facts, common_frame_shares_sources = load_frame_facts(
+        client,
+        frame_quarters,
+        COMMON_SHARES_TAG,
+        "shares",
+        generated_on,
+        taxonomy="us-gaap",
+    )
+    (
+        fsds_shares_facts,
+        fsds_shares_sources,
+        fsds_share_components,
+    ) = load_fsds_share_facts(
         client,
         quarter_sequence(latest, args.sic_quarters),
         identities,
+        reviewed_policies,
     )
-    shares_facts = merge_share_facts(frame_shares_facts, fsds_shares_facts)
+    initial_shares_facts = merge_share_facts(
+        frame_shares_facts,
+        fsds_shares_facts,
+        common_frame_shares_facts,
+        reviewed_policies,
+        generated_on,
+    )
+    initial_companies = build_companies(
+        identities,
+        sic_facts,
+        float_facts,
+        initial_shares_facts,
+    )
+    cover_targets = {
+        int(company["cik"])
+        for company in initial_companies
+        if company["shares_outstanding"] is None
+        or company["shares_method"] == "fsds_limited_partners_weighted_average"
+    }
+    cover_targets.update(
+        cik
+        for cik in identities
+        if reviewed_multiclass_issuer(cik, reviewed_policies)
+    )
+    latest_submissions, submission_sources = load_latest_inline_submissions(
+        client,
+        cover_targets,
+        generated_on,
+    )
+    cover_share_components, cover_sources = load_filing_cover_share_components(
+        client,
+        latest_submissions,
+        generated_on,
+        reviewed_policies,
+    )
+    for cik, components in cover_share_components.items():
+        fsds_share_components.setdefault(cik, []).extend(components)
+
+    filing_shares_facts: dict[int, SharesFact] = {}
+    for cik, components in fsds_share_components.items():
+        identity = identities.get(cik)
+        if identity is None:
+            continue
+        if (
+            reviewed_multiclass_issuer(cik, reviewed_policies)
+            and cik not in cover_share_components
+        ):
+            continue
+        selected = select_fsds_shares_fact(
+            cik,
+            str(identity["symbol"]),
+            components,
+            reviewed_policies,
+        )
+        if selected is not None:
+            filing_shares_facts[cik] = selected
+    shares_facts = merge_share_facts(
+        frame_shares_facts,
+        filing_shares_facts,
+        common_frame_shares_facts,
+        reviewed_policies,
+        generated_on,
+    )
     companies = build_companies(identities, sic_facts, float_facts, shares_facts)
-    validate_catalog(companies)
+    unresolved_reasons = unresolved_share_reasons(
+        companies,
+        reviewed_policies,
+        latest_submissions,
+        cover_share_components,
+    )
+    validate_catalog(companies, unresolved_reasons)
 
     sources = [source_record(identity_source, TICKERS_URL, client)]
     sources.extend(sic_sources)
     sources.extend(float_sources)
     sources.extend(frame_shares_sources)
+    sources.extend(common_frame_shares_sources)
     sources.extend(fsds_shares_sources)
+    sources.extend(submission_sources)
+    sources.extend(cover_sources)
+    coverage = share_coverage(companies, unresolved_reasons)
     catalog = {
         "schema_version": SCHEMA_VERSION,
         "catalog_version": (
@@ -1912,11 +3300,17 @@ def main() -> int:
                 "public_float_only": "ranking fact available; shares fact unavailable",
             },
             "shares_fallback": (
-                "SEC DEI issuer total; reviewed DEI class sum; US-GAAP common-stock "
-                "issuer total; reviewed equal-economic class sum; filer-reported "
-                "equivalent class; basic weighted-average shares. Preferred and "
-                "diluted securities are excluded."
+                "Recent filing-level SEC cover facts with exact reviewed class "
+                "signatures; SEC DEI issuer total; reviewed DEI class sum; US-GAAP "
+                "common-stock issuer total; reviewed equal-economic class sum; "
+                "filer-reported equivalent class; basic weighted-average common "
+                "shares or partnership units. Preferred and diluted securities are "
+                "excluded."
             ),
+            "reviewed_share_policy_registry": str(
+                SHARE_POLICY_PATH.relative_to(Path(__file__).resolve().parents[1])
+            ),
+            "share_coverage": coverage,
             "quality_screening": (
                 "Excludes non-positive facts, extreme absolute values, implausible "
                 "public-float/filer-status combinations, and isolated greater-than-"

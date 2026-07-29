@@ -96,12 +96,15 @@ valid result. Network, format, size, and freshness failures preserve the newest
 valid cached or embedded copy.
 
 The selected local catalog is upserted and supplies 100 dated members per
-sector. A cached market cap is carried forward only when its share estimate and
-provenance still match the catalog. Candidates without a calculated market cap
-compete using their numeric SEC public-float proxy. A valid background update
-is applied to SQLite and queues a provider universe reconciliation. The runtime
-loads cached tiles and starts the selected provider worker unless `--offline`
-is set.
+sector. Catalog share bases come from recent unambiguous filing facts or
+exact-signature reviewed policies for economically ambiguous issuer
+structures. Catalog publication fails if any candidate currently ranked in a
+sector top 100 lacks a share basis. A cached market cap is carried forward only
+when its share estimate and provenance still match the catalog. Candidates
+without a calculated market cap compete using their numeric SEC public-float
+proxy. A valid background update is applied to SQLite and queues a provider
+universe reconciliation. The runtime loads cached tiles and starts the selected
+provider worker unless `--offline` is set.
 
 The worker initially:
 
@@ -194,27 +197,35 @@ ten columns from the available width. The three benchmark-proxy footer cells
 reuse the overview's centered three-column geometry and stop at the content
 pane rather than extending beneath the action rail.
 
-Charts map cached price observations to their actual timestamps across the
-selected window rather than spreading observations evenly across the terminal.
-Long gaps remain blank and disconnected. A Braille canvas renders the thin
-price trace over a per-cell RGB area fill, with price and range-aware date
-scales. The fill samples the same two horizontal Braille subcells as the trace
-and uses fractional edge coverage plus a short exterior fade to soften its
-cell-resolution boundary. Horizontal reference guides use the terminal font's
-middle-dot glyph instead of full-width Braille runs, preventing fallback-font
-advance errors from accumulating across browser-hosted terminal rows. The
-trace replaces guide dots at intersections. Price labels are painted over the
-plot after the chart, using an opaque panel background for legibility. Hover or
-keyboard selection then replaces one fixed terminal column with centered
-middle dots; its price intersection uses one inverse cyan cell with the same
-cursor glyph. When space permits, an exact price is placed beside that
-intersection and its date or time beside the X axis, on the roomier side of the
-cursor.
+Charts use a market-time timeline instead of raw wall-clock gaps. `1D` selects
+the newest regular session with an observation and maps its full configured
+open-to-close interval, leaving an active session's future tail blank. Intraday
+multi-session ranges concatenate observed exchange-local sessions and give
+closed periods zero horizontal width; `1W` keeps the latest five. Daily and
+weekly histories use ordinal observation spacing. Normal adjacent observations
+retain a direct line, while a long in-session gap carries the prior traded
+price to the next observation. Volume shares the same mapping but never fills
+a missing observation.
+
+A Braille canvas renders the thin price trace over a per-cell RGB area fill,
+with price and range-aware date scales. The fill samples the same two
+horizontal Braille subcells as the trace and uses fractional edge coverage plus
+a short exterior fade to soften its cell-resolution boundary. Horizontal
+reference guides use the terminal font's middle-dot glyph instead of full-width
+Braille runs, preventing fallback-font advance errors from accumulating across
+browser-hosted terminal rows. The trace replaces guide dots at intersections.
+Price labels are painted over the plot after the chart, using an opaque panel
+background for legibility. Hover or keyboard selection then replaces one fixed
+terminal column with centered middle dots; its price intersection uses one
+inverse cyan cell with the same cursor glyph. When space permits, an exact
+price is placed beside that intersection and its date or time beside the X
+axis, on the roomier side of the cursor.
 
 Ticker detail derives complete cached-history coverage from the earliest and
 latest price observations across timeframes. The header and Statistics expose
-that span. Fixed range controls that exceed it are muted without changing their
-hit targets or shortcuts; `ALL` remains the unbounded cached-history choice.
+that span. A fixed range control is muted when it adds no older cached interval
+beyond the next-shorter preset, without changing its hit target or shortcut;
+`ALL` remains the unbounded cached-history choice.
 
 A responsive 4-7-row volume histogram uses uniform-color lower-block caps for
 eighth-cell height precision. Fully occupied cells use background color instead
@@ -281,6 +292,14 @@ forward and reverse split ratios; `NewsProvider` is independently optional.
 `ProviderSet` is the runtime facade over those capabilities, so `sync` contains
 no settings, credential, or Alpaca dependency.
 
+`ProviderSet` also owns a stable cache namespace and a normalized
+`MarketContext`: market/calendar ID, symbol namespace, currency, IANA timezone,
+and regular session. Startup stores that identity in SQLite and clears
+unattributable provider rows before rendering when the namespace or market
+semantics change. Listing exchange is issuer metadata, not a cache boundary;
+multiple exchanges can share one market context. The current adapters declare
+one US-equities context for NASDAQ, NYSE, and ARCA instruments.
+
 `ProviderKind` selects a compiled adapter at the configuration/runtime edge.
 Alpaca authentication, pagination, feed selection, response shapes, retry
 headers, and error redaction stay inside the Alpaca adapter. Future providers
@@ -321,6 +340,9 @@ cache retention, attribution, and redistribution restrictions. See
 - A failed corporate-action lookup leaves a share-derived market cap unavailable
   unless the snapshot supplies a valid provider cap; it never combines a stale
   catalog share count with a post-split price.
+- A new or changed multi-class signature or accession-scoped economic fact
+  remains unresolved until its SEC-cited policy is reviewed; the catalog build
+  fails when this affects a current sector top-100 candidate.
 - Catalog refresh errors preserve the last valid local catalog and do not block
   startup; an oversized, malformed, unsupported, or older catalog is ignored.
 - Each history batch is independently upserted, so a later run resumes from

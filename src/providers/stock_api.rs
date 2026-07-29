@@ -142,10 +142,12 @@ impl StockApiProvider {
     #[must_use]
     pub fn into_provider_set(self) -> ProviderSet {
         let news_enabled = self.news_enabled;
+        let cache_namespace = format!("stock-api:v{API_SCHEMA_VERSION}|base={}", self.base_url);
         let provider = Arc::new(self);
         let assets: Arc<dyn AssetProvider> = provider.clone();
         let market_data: Arc<dyn MarketDataProvider> = provider.clone();
-        let providers = ProviderSet::new(Self::ID, Self::DISPLAY_NAME, assets, market_data);
+        let providers = ProviderSet::new(Self::ID, Self::DISPLAY_NAME, assets, market_data)
+            .with_cache_namespace(cache_namespace);
         if news_enabled {
             let news: Arc<dyn NewsProvider> = provider;
             providers.with_news(news)
@@ -1181,6 +1183,14 @@ mod tests {
             .into_provider_set();
         assert_eq!(provider.id(), "stock-api");
         assert!(!provider.supports_news());
+        assert_eq!(
+            provider.cache_identity().namespace.as_ref(),
+            "stock-api:v1|base=https://example.com/api/"
+        );
+        assert_eq!(
+            provider.market_context(),
+            &crate::market::MarketContext::us_equities()
+        );
 
         let provider =
             StockApiProvider::new("https://example.com/api", false).expect("path base URL");

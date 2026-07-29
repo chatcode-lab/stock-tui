@@ -367,9 +367,9 @@ When the chart is wide enough, its cursor labels the selected price beside the
 trace intersection and the selected date or time beside the X axis. Detail
 headers summarize the cached price-observation span and its start, while
 Statistics shows both boundary dates.
-Ranges longer than that observed span are muted in the detail rail, but remain
-fully clickable and keep their keyboard shortcuts; `ALL` always means all
-cached history.
+Ranges that add no older cached interval beyond the next-shorter preset are
+muted in the detail rail, but remain fully clickable and keep their keyboard
+shortcuts; `ALL` always means all cached history.
 
 Sector and Starred cells show the ticker plus one selected value. Choosing an
 ordering resets its direction and selects its natural default value: estimated
@@ -445,16 +445,31 @@ invalid, older, unavailable, or oversized response cannot replace the last
 valid cache. Offline mode uses that cache when it is at least as new as the
 embedded release catalog, otherwise it uses the embedded catalog.
 
-The catalog includes SEC public float as a ranking proxy plus
-provenance-tagged common-share estimates where the official filings support
-one. On startup the client refreshes candidate snapshots and prefers a valid
-provider-supplied market cap. Otherwise, a provider with corporate-action
-coverage adjusts the catalog share estimate for forward and reverse splits
-after its as-of date before multiplying by the current price. If the required
-split lookup fails, the local estimate remains unavailable instead of combining
-stale shares with a post-split price. Each sector's top 100 is then selected by
-estimated cap or numeric public float when cap is unavailable. Public float is
-never displayed as market cap.
+Each live cache is stamped with the active provider dataset, endpoint/feed, and
+market context before any rows are rendered. Switching to an incompatible
+provider, endpoint, feed, symbol namespace, currency, timezone, or regular
+session clears unattributable provider rows and checkpoints transactionally;
+starred symbols remain and are rehydrated by the new provider. A market context
+can cover several listing exchanges that share one calendar, so the current US
+heatmap keeps NASDAQ, NYSE, and ARCA instruments together. Only one market
+context is active during a launch.
+
+The catalog includes SEC public float as a ranking proxy plus dated,
+provenance-tagged share bases. Unambiguous filing cover facts resolve
+automatically; reviewed multi-class, tracking-stock, Up-C, partnership, and
+SPAC structures use exact class signatures, explicit multipliers, and
+accession-scoped issuer-reported economic facts from
+[`data/sec_share_policies.json`](data/sec_share_policies.json). The builder
+rejects stale or structurally changed facts and fails publication if a current
+sector top-100 candidate loses its share basis. On startup the client refreshes
+candidate snapshots and prefers a valid provider-supplied market cap.
+Otherwise, a provider with
+corporate-action coverage adjusts the catalog share basis for forward and
+reverse splits after its as-of date before multiplying by the current price.
+If the required split lookup fails, the local estimate remains unavailable
+instead of combining stale shares with a post-split price. Each sector's top
+100 is then selected by estimated cap or numeric public float when cap is
+unavailable. Public float is never displayed as market cap.
 It then resumes two years of daily bars plus all provider-available weekly
 history for the selected 900 companies and the three benchmark ETF proxies.
 Both history plans use a seven-day overlap after their initial backfill. It
@@ -464,9 +479,14 @@ bars through `2Y` and weekly bars for `5Y`, `10Y`, and `ALL`, with cached
 alternative timeframes used only when the preferred aggregate is unavailable.
 Ticker-detail statistics continue to show latest-session snapshot volume,
 while the chart uses traded provider bars without manufacturing volume for
-price-only endpoints. Chart samples keep their real timestamp spacing, so a
-trading halt or other long observation gap remains visibly blank rather than
-being stretched into a flat continuation.
+price-only endpoints. `1D` draws the latest observed regular session across its
+full exchange-local trading window, leaving the unobserved tail blank. `1W`
+concatenates the five latest observed sessions, and the other intraday view
+omits closed periods; daily and weekly histories use ordinal observations.
+Long gaps during an open session carry the last traded price to the next
+observation, while the corresponding volume columns remain empty. Session
+membership is calculated in the configured market timezone and labels are
+shown in the user's local timezone.
 In live mode, the broad-market snapshot refresh runs immediately on startup
 and every five minutes by default; `r` starts one immediately and restarts that
 timer. Opening a ticker or changing its range separately triggers a lazy detail

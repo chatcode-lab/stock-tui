@@ -186,6 +186,23 @@ impl DateRange {
         }
     }
 
+    /// Earliest timestamp needed to render an individual ticker chart.
+    ///
+    /// Intraday charts need a small calendar overlap so they can select complete
+    /// observed sessions instead of starting midway through a trading day.
+    #[must_use]
+    pub fn detail_history_cutoff(self, now: DateTime<Utc>) -> DateTime<Utc> {
+        match self {
+            Self::Day => now.checked_sub_days(Days::new(7)).unwrap_or(now),
+            Self::Week => now.checked_sub_days(Days::new(14)).unwrap_or(now),
+            Self::Month => self
+                .cutoff(now)
+                .checked_sub_days(Days::new(1))
+                .unwrap_or_else(|| self.cutoff(now)),
+            _ => self.cutoff(now),
+        }
+    }
+
     #[must_use]
     pub const fn shortcut(self) -> char {
         match self {
@@ -574,6 +591,29 @@ mod tests {
         assert_eq!(
             "10Y".parse::<DateRange>().expect("label parses"),
             DateRange::TenYears
+        );
+    }
+
+    #[test]
+    fn one_day_detail_history_reaches_the_previous_market_week() {
+        let now = DateTime::parse_from_rfc3339("2026-07-27T12:00:00Z")
+            .expect("fixture timestamp")
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            DateRange::Day.detail_history_cutoff(now),
+            now.checked_sub_days(Days::new(7)).expect("fixture cutoff")
+        );
+        assert_eq!(
+            DateRange::Week.detail_history_cutoff(now),
+            now.checked_sub_days(Days::new(14)).expect("fixture cutoff")
+        );
+        assert_eq!(
+            DateRange::Month.detail_history_cutoff(now),
+            DateRange::Month
+                .cutoff(now)
+                .checked_sub_days(Days::new(1))
+                .expect("fixture cutoff")
         );
     }
 }

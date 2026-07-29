@@ -1,0 +1,601 @@
+{
+  "schema_version": 1,
+  "policies": [
+    {
+      "cik": "0000016918",
+      "symbol": "STZ",
+      "confidence": "medium",
+      "basis": "Class A and convertible common shares are counted on a one-for-one conversion-equivalent basis.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/16918/000001691826000005/stz-20251130.htm",
+      "members": {
+        "CommonClassA": 1,
+        "ConvertibleCommonStock": 1
+      }
+    },
+    {
+      "cik": "0000047111",
+      "symbol": "HSY",
+      "confidence": "medium",
+      "basis": "Common stock and Class B common stock are both included in the issuer capitalization.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/47111/000162828026008586/hsy-20251231.htm",
+      "members": {
+        "CommonStock": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0000100493",
+      "symbol": "TSN",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are counted on a one-for-one conversion-equivalent basis.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/100493/000010049326000007/tsn-20251227.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0000014693",
+      "symbol": "BF-A",
+      "confidence": "medium",
+      "basis": "Class A and non-voting common shares are included using the listed Class A price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/14693/000001469326000010/bfb-20260131.htm",
+      "members": {
+        "CommonClassA": 1,
+        "NonvotingCommonStock": 1
+      }
+    },
+    {
+      "cik": "0000317540",
+      "symbol": "COKE",
+      "confidence": "medium",
+      "basis": "Class B and filer-designated undefined common shares are both included in the issuer capitalization.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/317540/000162828026009057/coke-20251231.htm",
+      "members": {
+        "CommonClassB": 1,
+        "CommonClassUndefined": 1
+      }
+    },
+    {
+      "cik": "0001166691",
+      "symbol": "CMCSA",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are counted on a one-for-one economic basis.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1166691/000162828026004994/cmcsa-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001560385",
+      "symbol": "FWONA",
+      "confidence": "medium",
+      "basis": "Only Formula One Group Class A, Class B, and Class C shares are included; Liberty Live tracking shares are excluded.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1560385/000110465926020653/lmca-20251231x10k.htm",
+      "members": {
+        "LibertyFormulaOneGroupCommonClass": 1,
+        "LibertyFormulaOneGroupCommonClassB": 1,
+        "LibertyFormulaOneGroupCommonClassC": 1
+      }
+    },
+    {
+      "cik": "0001883685",
+      "symbol": "DKNG",
+      "confidence": "low",
+      "basis": "Class A and voting-only Class B shares are aggregated to match the total-common-share convention used by some market-data providers; this is not a listed-class or dividend-equivalent capitalization.",
+      "price_basis": "provider_total_common_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1883685/000188368526000013/dkng-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0000105016",
+      "symbol": "WSO",
+      "confidence": "medium",
+      "basis": "Common stock and Class B common stock are counted on a one-for-one economic basis.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/105016/000119312526082486/wso-20251231.htm",
+      "members": {
+        "CommonStock": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001611983",
+      "symbol": "LBRDA",
+      "confidence": "medium",
+      "basis": "Class A, Class B, and Class C common shares are included using the listed Class A price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1611983/000110465926010397/lbrda-20251231x10k.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1,
+        "CommonClassC": 1
+      }
+    },
+    {
+      "cik": "0001552275",
+      "symbol": "SUN",
+      "confidence": "medium",
+      "basis": "The displayed listed-unit capitalization uses public common units; separately held Class C and Class D units are tracked but excluded.",
+      "price_basis": "canonical_common_unit",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1552275/000155227526000047/sun-20260331.htm",
+      "members": {
+        "CommonUnits": 1,
+        "CommonClassC": 0,
+        "CommonClassDUnits": 0
+      }
+    },
+    {
+      "cik": "0001657788",
+      "symbol": "KRP",
+      "confidence": "medium",
+      "basis": "Common units and Class B common units are counted on a fully converted one-for-one basis.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1657788/000110465926020477/krp-20251231x10k.htm",
+      "members": {
+        "CommonUnits": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001693256",
+      "symbol": "WTTR",
+      "confidence": "medium",
+      "basis": "Class A shares and Class B shares paired with economic interests are counted on a fully converted basis.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1693256/000110465926017085/wttr-20251231x10k.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001687187",
+      "symbol": "METC",
+      "confidence": "low",
+      "basis": "Class A and separately traded Class B shares are aggregated using the canonical Class A price as an approximate proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1687187/000110465926020479/metc-20251231x10k.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001063761",
+      "symbol": "SPG",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are counted on a one-for-one economic basis.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1063761/000110465926019419/spg-20251231x10k.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001937926",
+      "symbol": "BAM",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are both included in the issuer capitalization.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1937926/000162828026013098/bam-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001090727",
+      "symbol": "UPS",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are counted on a one-for-one economic basis.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1090727/000162828026008432/ups-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0000920760",
+      "symbol": "LEN",
+      "confidence": "medium",
+      "basis": "Class A and separately traded Class B shares are aggregated using the canonical Class A price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/920760/000162828026003870/len-20251130.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001846416",
+      "symbol": "HVII",
+      "confidence": "low",
+      "basis": "Public Class A and founder Class B common shares are aggregated as an approximate pre-combination capitalization.",
+      "price_basis": "public_and_founder_common_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1846416/000149315226009187/form10-k.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001571996",
+      "symbol": "DELL",
+      "confidence": "medium",
+      "basis": "Class A, Class B, and Class C common shares have equal per-share economics and convert one-for-one into Class C.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1571996/000157199626000008/dell-20260130.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1,
+        "CommonClassC": 1
+      }
+    },
+    {
+      "cik": "0001703056",
+      "symbol": "ADT",
+      "confidence": "low",
+      "basis": "Common stock and Class B common stock are aggregated on a fully converted basis using the canonical listed price as an approximate proxy.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1703056/000170305626000022/adt-20251231.htm",
+      "members": {
+        "CommonStock": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001809104",
+      "symbol": "ALIT",
+      "confidence": "medium",
+      "basis": "Class A and Class V interests that proxy paired economic units are aggregated; contingent Class B-1 and Class B-2 earnout shares remain included as an approximate fully converted scope.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1809104/000162828026011108/alit-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassBOne": 1,
+        "CommonClassBTwo": 1,
+        "CommonClassV": 1
+      }
+    },
+    {
+      "cik": "0000008063",
+      "symbol": "ATRO",
+      "confidence": "medium",
+      "basis": "Filer-designated undefined common shares and Class B shares are included using the canonical listed price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/8063/000000806326000021/atro-20251231.htm",
+      "members": {
+        "CommonClassUndefined": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001958140",
+      "symbol": "BATRA",
+      "confidence": "medium",
+      "basis": "Atlanta Braves Class A, Class B, and Class C common shares are included using the canonical Class A price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1958140/000110465926020650/batra-20251231x10k.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1,
+        "CommonClassC": 1
+      }
+    },
+    {
+      "cik": "0000028917",
+      "symbol": "DDS",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are included using the canonical listed price as a reviewed proxy.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/28917/000002891726000006/dds-20260131x10k.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0000922621",
+      "symbol": "ERIE",
+      "confidence": "medium",
+      "basis": "Class A shares and Class B shares converted at 2,400 Class A shares per Class B share are counted on a fully converted Class A-equivalent basis.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/922621/000162828026026866/erie-20260331.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 2400
+      }
+    },
+    {
+      "cik": "0001805521",
+      "symbol": "FFAI",
+      "confidence": "low",
+      "basis": "Class A and Class B common shares are aggregated using the canonical listed price as an approximate proxy.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1805521/000162828026022509/ffie-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001056288",
+      "symbol": "FHI",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are both included in the issuer capitalization.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1056288/000105628826000007/fhi-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001468174",
+      "symbol": "H",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are counted using the canonical listed price as a reviewed proxy.",
+      "price_basis": "canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1468174/000146817426000007/h-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001433642",
+      "symbol": "HLNE",
+      "confidence": "low",
+      "basis": "Current Class A shares are combined with the filer-reported weighted-average Class B and Class C unit conversion amount; legal Class B cover shares are tracked but excluded to avoid double counting.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1433642/000143364226000019/hlne-20260331.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 0
+      },
+      "filing_facts": [
+        {
+          "accession": "0001433642-26-000019",
+          "tag": "IncrementalCommonSharesAttributableToShareBasedPaymentArrangements",
+          "namespace": "http://fasb.org/us-gaap/2025",
+          "unit": "shares",
+          "quarters": 4,
+          "start": "2025-04-01",
+          "end": "2026-03-31",
+          "segments": [
+            {
+              "axis": "AwardType",
+              "axis_namespace": "http://fasb.org/us-gaap/2025",
+              "member": "ClassBAndClassCUnits",
+              "member_namespace": "http://www.hamiltonlane.com/20260331"
+            },
+            {
+              "axis": "ClassOfStock",
+              "axis_namespace": "http://fasb.org/us-gaap/2025",
+              "member": "CommonClassA",
+              "member_namespace": "http://fasb.org/us-gaap/2025"
+            }
+          ],
+          "multiplier": 1
+        }
+      ]
+    },
+    {
+      "cik": "0000880117",
+      "symbol": "JBSS",
+      "confidence": "medium",
+      "basis": "Noncumulative common stock and Class A common shares are included using the canonical listed price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/880117/000119312526029438/jbss-20251225.htm",
+      "members": {
+        "NoncumulativeCommonStock": 1,
+        "CommonClassA": 1
+      }
+    },
+    {
+      "cik": "0001570585",
+      "symbol": "LBTYA",
+      "confidence": "medium",
+      "basis": "Class A, Class B, and Class C common shares are included using the canonical Class A price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1570585/000157058526000014/lbtya-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1,
+        "CommonClassC": 1
+      }
+    },
+    {
+      "cik": "0001596967",
+      "symbol": "MC",
+      "confidence": "medium",
+      "basis": "Current Class A shares, outside Group LP units exchangeable one-for-one, and the residual 0.00055:1 economic interest of Class B shares are counted on a fully converted basis.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1596967/000119312526192462/mc-20260331.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 0.00055
+      },
+      "filing_facts": [
+        {
+          "accession": "0001193125-26-192462",
+          "tag": "PartnersCapitalAccountUnitsHeldByNoncontrollingInterestHolders",
+          "namespace": "http://www.moelis.com/20260331",
+          "unit": "shares",
+          "quarters": 0,
+          "end": "2026-03-31",
+          "segments": [],
+          "multiplier": 1
+        }
+      ]
+    },
+    {
+      "cik": "0001626115",
+      "symbol": "PJT",
+      "confidence": "low",
+      "basis": "The filer-reported weighted-average Class A share count assuming all partnership units were exchanged one-for-one is used; unvested restricted stock units are excluded.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1626115/000119312526197485/pjt-20260331.htm",
+      "members": {
+        "CommonClassA": 0,
+        "CommonClassB": 0
+      },
+      "filing_facts": [
+        {
+          "accession": "0001193125-26-197485",
+          "tag": "NumberOfDilutedClassACommonSharesOutstandingIfHoldingPartnershipUnitsExchanged",
+          "namespace": "http://www.pjtpartners.com/20260331",
+          "unit": "shares",
+          "quarters": 1,
+          "start": "2026-01-01",
+          "end": "2026-03-31",
+          "segments": [
+            {
+              "axis": "AntidilutiveSecuritiesExcludedFromComputationOfEarningsPerShareByAntidilutiveSecurities",
+              "axis_namespace": "http://fasb.org/us-gaap/2025",
+              "member": "ParticipatingRestrictedStockUnits",
+              "member_namespace": "http://www.pjtpartners.com/20260331"
+            }
+          ],
+          "multiplier": 1
+        }
+      ]
+    },
+    {
+      "cik": "0001637207",
+      "symbol": "PLNT",
+      "confidence": "medium",
+      "basis": "Class A shares and Class B shares paired with economic interests are counted on a fully converted basis.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1637207/000163720726000011/plnt-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001800227",
+      "symbol": "PPLI",
+      "confidence": "medium",
+      "basis": "Class A and Class B are directly economic common shares with different voting rights and one-for-one conversion rights.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1800227/000162828026009997/iaci-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001849253",
+      "symbol": "RYAN",
+      "confidence": "low",
+      "basis": "Listed Class A shares define this capitalization scope; non-economic Class B shares are explicitly covered but excluded.",
+      "price_basis": "canonical_listed_class_scope",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1849253/000184925326000006/ryan-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 0
+      }
+    },
+    {
+      "cik": "0001697500",
+      "symbol": "SEI",
+      "confidence": "medium",
+      "basis": "Class A shares and Class B shares paired with economic interests are counted on a fully converted basis.",
+      "price_basis": "fully_converted_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1697500/000162828026012501/sei-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0000004457",
+      "symbol": "UHAL",
+      "confidence": "medium",
+      "basis": "Voting Class A and non-voting common shares are included using the canonical listed price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/4457/000119312526037685/uhal-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "NonvotingCommonStock": 1
+      }
+    },
+    {
+      "cik": "0001806837",
+      "symbol": "VERX",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are included using the canonical Class A price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1806837/000110465926019165/verx-20251231x10k.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001841425",
+      "symbol": "VGAS",
+      "confidence": "low",
+      "basis": "Listed Class A shares define this capitalization scope; non-economic Class C shares are explicitly covered but excluded.",
+      "price_basis": "canonical_listed_class_scope",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1841425/000162828026021763/vgasw-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassC": 0
+      }
+    },
+    {
+      "cik": "0001699136",
+      "symbol": "WHD",
+      "confidence": "low",
+      "basis": "Listed Class A shares define this capitalization scope; non-economic Class B shares are explicitly covered but excluded.",
+      "price_basis": "canonical_listed_class_scope",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1699136/000162828026012377/whd-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 0
+      }
+    },
+    {
+      "cik": "0001319161",
+      "symbol": "WMG",
+      "confidence": "medium",
+      "basis": "Class A and Class B common shares are included using the canonical Class A price as a multi-class proxy.",
+      "price_basis": "multi_class_canonical_symbol_proxy",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1319161/000131916126000010/wmg-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1
+      }
+    },
+    {
+      "cik": "0001856314",
+      "symbol": "YOU",
+      "confidence": "low",
+      "basis": "Class A and Class B shares define this capitalization scope; non-economic Class C and Class D shares are explicitly covered but excluded.",
+      "price_basis": "canonical_listed_class_scope",
+      "policy_source": "https://www.sec.gov/Archives/edgar/data/1856314/000185631426000006/you-20251231.htm",
+      "members": {
+        "CommonClassA": 1,
+        "CommonClassB": 1,
+        "CommonClassC": 0,
+        "CommonClassD": 0
+      }
+    }
+  ]
+}

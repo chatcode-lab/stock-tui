@@ -241,7 +241,13 @@ the compact remote catalog are generated entirely from official SEC sources:
 - The SEC XBRL
   [Frames API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
   supplies `dei:EntityPublicFloat` in USD and, when reported,
-  `dei:EntityCommonStockSharesOutstanding` in shares.
+  `dei:EntityCommonStockSharesOutstanding` in shares, plus explicitly reviewed
+  issuer aggregates such as `us-gaap:CommonStockSharesOutstanding`.
+- The SEC
+  [Submissions API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
+  identifies each affected issuer's latest inline 10-K, 10-Q, 20-F, or 40-F.
+  The builder reads that filing's immutable extracted XBRL instance so cover
+  shares retain their exact class dimensions.
 
 The audit JSON records its schema/catalog versions, generation and as-of
 timestamps, selection method, source URLs and retrieval times, and fact-level
@@ -285,52 +291,90 @@ The catalog builder:
    economics, Class A converts one-for-one into Class B, and Class B is the
    substantially larger listed class. Their voting rights still differ, so
    this economic/liquidity choice does not relax the general share-class rule.
+   When a newer catalog changes an issuer's canonical symbol, the client
+   retires the previous symbol from sector membership without aliasing the two
+   securities' prices, bars, or favorites.
 3. Takes the newest SIC observation from the requested recent Financial
    Statement Data Set quarters.
 4. Searches recent quarterly XBRL frames, independently of the newest available
-   bulk-file quarter, for positive public float and unsegmented DEI share
-   totals. It rejects malformed or future-dated frame observations. It also
-   scans Financial Statement Data Set `num` rows for eligible standard-taxonomy
-   share facts from 10-K, 10-Q, 20-F, and 40-F filings.
-5. Selects a common-share estimate using the reviewed hierarchy below and stores
-   its accession, source, fact date, method, confidence, and components.
-6. Rejects non-finite/non-positive facts, extreme absolute float values,
+   bulk-file quarter, for positive public float, unsegmented DEI share totals,
+   and issuer-scoped reviewed US-GAAP common-share totals. It rejects malformed
+   or future-dated frame observations. It also scans Financial Statement Data
+   Set `num` rows for eligible standard-taxonomy share facts from 10-K, 10-Q,
+   20-F, and 40-F filings.
+5. For every unresolved, partnership-fallback, or reviewed issuer, resolves the
+   latest eligible inline filing from SEC submissions and parses its extracted
+   XBRL instance. This preserves the exact
+   `StatementClassOfStockAxis`/`ClassOfStockAxis` members that aggregate APIs
+   can flatten.
+6. Selects a price-equivalent share basis using the reviewed hierarchy below
+   and stores its accession, source, fact date, method, confidence, components,
+   multipliers, policy basis, and SEC filing URL. A fact more than 550 days old
+   is rejected even when no newer candidate exists.
+7. Rejects non-finite/non-positive facts, extreme absolute float values,
    grossly inconsistent public-float/filer-status combinations, an unreviewed
    implied float-per-share above `$2,000`, and an isolated newest public-float
    fact more than 100 times above prior observations. Downward corrections and
    reviewed legitimate high-price issuers are retained. A float above
    `$70 billion` with no accelerated-filer status also requires explicit
    review.
-7. Maps SIC to the nine legacy display sectors, ranks each sector by reported
+8. Maps SIC to the nine legacy display sectors, ranks each sector by reported
    public float descending, deduplicates symbols, and retains between 100 and
-   250 eligible candidates per sector.
+   250 eligible candidates per sector. It emits coverage and unresolved-reason
+   metadata and refuses the build if any current sector top-100 candidate lacks
+   a share basis.
 
 The share hierarchy is deliberately fail-closed:
 
-1. An unsegmented `dei:EntityCommonStockSharesOutstanding` cover total or a
-   reviewed sum of DEI common classes, high confidence.
-2. An unsegmented `us-gaap:CommonStockSharesOutstanding` issuer total, a
+1. A latest-filing fact set whose exact class signature matches a reviewed
+   policy. Each expected cover member has an explicit multiplier, including
+   zero for a reported non-economic or out-of-scope class. A policy may also
+   combine exact issuer-reported economic-unit or fully exchanged share facts,
+   pinned to an accession, namespace, period, unit, and dimension signature.
+   Unknown, missing, renamed, or inconsistent inputs invalidate the policy.
+2. A latest-filing unsegmented or single unambiguous common class, high
+   confidence. Preferred, warrant, right, option, debt, redeemable, and
+   temporary-equity members are excluded.
+3. An unsegmented `dei:EntityCommonStockSharesOutstanding` total or a reviewed
+   sum of DEI common classes, high confidence.
+4. An unsegmented `us-gaap:CommonStockSharesOutstanding` issuer total, a
    reviewed sum of equal-economic classes, or a reviewed class conversion,
    medium confidence.
-3. A filer-reported equivalent class or unsegmented
-   `us-gaap:WeightedAverageNumberOfSharesOutstandingBasic`, low confidence.
+5. A filer-reported equivalent class, unsegmented
+   `us-gaap:WeightedAverageNumberOfSharesOutstandingBasic`, or
+   `us-gaap:WeightedAverageLimitedPartnershipUnitsOutstanding`, low confidence.
 
-Only point-in-time facts are accepted for the first two levels. Basic weighted
-average is explicitly a lower-quality approximation; diluted and preferred
-shares are excluded. When the newest fact is point-in-time, an older
-higher-confidence point fact can override it only within 45 days. When the
-newest fact is the low-confidence weighted fallback, a point-in-time fact can
-remain preferred for up to 185 days. Duration selection is form-aware and
-deterministic.
+Automatic cover and class-member calculations use point-in-time facts.
+An accession-scoped reviewed policy can deliberately use a cited duration fact,
+such as a filer-reported fully exchanged weighted average, and records the
+lower confidence and scope explicitly. Generic basic weighted average remains
+a lower-quality fallback; diluted shares, preferred shares, RSUs, options, and
+unexercised convertibles are not inferred. When the newest generic fact is
+point-in-time, an older higher-confidence point fact can override it only
+within 45 days. When the newest generic fact is the low-confidence weighted
+fallback, a point-in-time fact can remain preferred for up to 185 days.
+Duration selection is form-aware and deterministic.
 
-Reviewed multi-class policies currently cover equal-economic shares for
-Alphabet, Meta, Mastercard, Nike, and Palantir; Visa's documented Class A
-conversion factors and redundant B-class aggregate; and Berkshire Hathaway's
-filer-reported Class A/Class B equivalent counts. The builder fails closed when
-an expected member is missing, renamed, duplicated inconsistently, or joined by
-an unreviewed class. A newer unreviewed accession or class structure invalidates
-the issuer estimate instead of silently falling back to an older reviewed
-filing. These policies are calculation metadata, not extra sector tiles.
+Built-in reviewed logic covers established equal-economic and conversion cases
+such as Alphabet, Meta, Mastercard, Nike, Palantir, Visa, and Berkshire
+Hathaway. The declarative
+[`data/sec_share_policies.json`](../data/sec_share_policies.json) registry
+covers current ambiguous multi-class, tracking-stock, Up-C, partnership,
+separately traded class, and SPAC structures. It records the displayed ticker,
+confidence, price basis, policy rationale, official filing, exact member
+multipliers, and any exact additional filing-fact selectors. The current
+audited build resolves all 1,880 candidates, including all 900 sector top-100
+positions; that is a property of this catalog revision, not a promise that
+future filings will remain compatible.
+
+The builder fails closed when an expected member is missing, renamed,
+duplicated inconsistently, joined by an unreviewed class, placed under an
+unknown dimension, or no longer matches an accession-scoped additional fact.
+A changed filing structure invalidates the issuer estimate instead of silently
+falling back to an older reviewed filing. Policies are calculation metadata,
+not extra sector tiles. A provider-supplied cap remains authoritative because
+separately traded classes can have different prices and some policies
+deliberately use the canonical ticker as a documented provider-style proxy.
 
 `EntityPublicFloat` is a filer-reported issuer-level value and is **not market
 capitalization**. The build stores it as a numeric size proxy with provenance;
@@ -382,13 +426,14 @@ Consequently:
 - `EntityPublicFloat` and share facts use issuer-specific filing practices;
   screening catches only obvious anomalies.
 - A low-confidence weighted-average count is not a point-in-time count.
-  Price-equivalent multi-class estimates depend on reviewed conversion or
-  economic-equivalence assumptions. The Alpaca adapter reconciles intervening
-  forward and reverse splits, but amendments and other corporate actions can
-  still make an estimate stale.
-- Shares can remain absent or ambiguous for multi-class issuers, ADRs, and
-  foreign filers, and a current SEC ticker identity can temporarily fail to
-  join older facts after a CIK reorganization.
+  Price-equivalent multi-class estimates depend on reviewed conversion,
+  exchange, economic-equivalence, or provider-convention assumptions. The
+  Alpaca adapter reconciles intervening forward and reverse splits, but
+  amendments and other corporate actions can still make an estimate stale.
+- A new or changed multi-class issuer, ADR, foreign filer, or CIK
+  reorganization can remain unresolved until reviewed. Publication fails when
+  such a gap reaches a current sector top-100 position; lower-ranked gaps are
+  reported in the audit metadata.
 - Depositary receipts, funds, warrants, units, rights, test symbols, and foreign
   issuers can require handling that these general filters do not capture.
 - EDGAR's conformed issuer name is not necessarily the consumer-facing brand.
@@ -417,14 +462,15 @@ downloads under `~/.cache/stock-tui/sec-catalog` by default, restricts requests
 to `www.sec.gov` and `data.sec.gov`, and defaults to eight requests per second.
 It refuses a setting above the SEC's current aggregate maximum of ten requests
 per second, retries transient failures, writes source receipts, validates
-unique CIKs/symbols and consecutive per-sector ranks, and atomically replaces
-the output.
+unique CIKs/symbols, consecutive per-sector ranks, exact reviewed filing
+signatures, absolute share-fact freshness, and complete top-100 share coverage,
+then atomically replaces the output.
 
 `.github/workflows/catalog-publish.yml` runs daily at 06:17 UTC and can be
 dispatched manually. It restores the large SEC source cache, invalidates
-mutable ticker/Frames responses, runs the network-free calculation fixtures,
-builds and validates the complete audit catalog, packages the compact
-deterministic artifact, and publishes it with Wrangler. Immutable versioned
+mutable ticker, Frames, and submissions responses, runs the network-free
+calculation fixtures, builds and validates the complete audit catalog, packages
+the compact deterministic artifact, and publishes it with Wrangler. Immutable versioned
 objects are written before the five-minute-cache stable object and manifest.
 The full audit catalog is retained only as a short-lived private workflow
 artifact; scheduled builds do not commit generated catalogs to the repository.
@@ -495,8 +541,12 @@ as-of date, the client applies intervening forward and reverse split ratios and
 estimates market cap as adjusted price-equivalent common shares times the
 canonical ticker price. If that required lookup fails, the local estimate is
 cleared rather than knowingly mixing pre-split shares with a post-split price.
-This is ordinary common-equity market cap, not fully diluted value: preferred
-shares, RSUs, options, and unexercised convertibles are excluded.
+The target is price-equivalent common equity, not fully diluted value.
+Reviewed Up-C policies can include outstanding exchangeable operating units,
+but preferred shares, RSUs, options, and unexercised convertibles are excluded.
+Low-confidence policies identify weighted-average, separately traded-class, or
+provider-style total-common approximations rather than presenting them as
+exact economic equivalence.
 
 Market-cap ordering compares the estimated cap where present and the numeric
 public-float proxy otherwise, then uses catalog rank and symbol for stable
@@ -507,10 +557,12 @@ sum for longer ranges; ticker-detail statistics retain that latest-session
 snapshot volume. Alphabetical ordering uses ticker symbol.
 
 This remains an approximation. Different traded classes can have different
-prices; treasury-share treatment, ADR ratios, amendments, filing lag, delayed
-corporate-action publication, and actions other than forward/reverse splits can
-all cause divergence from a commercial fundamentals provider. No Yahoo page,
-cookie, or unofficial scraped feed is used at build or runtime.
+prices; canonical-price proxy policies, treasury-share treatment, ADR ratios,
+amendments, filing lag, delayed corporate-action publication, and actions other
+than forward/reverse splits can all cause divergence from a commercial
+fundamentals provider. Low-confidence policies identify the most approximate
+cases. No Yahoo page, cookie, or unofficial scraped feed is used at build or
+runtime.
 
 ## Adding A Provider
 
@@ -519,8 +571,8 @@ A provider contribution must include:
 1. Official provenance and API documentation.
 2. Written analysis of personal display, caching, retention, attribution, and
    redistribution rights.
-3. Exact feed coverage, delay, corporate-action adjustment, timezone, and
-   symbol semantics.
+3. Exact feed coverage, delay, corporate-action adjustment, market calendar,
+   IANA timezone, currency, regular-session, and symbol-namespace semantics.
 4. Secret-safe configuration and redacted errors.
 5. Pagination, timeout, retry, and rate-limit behavior.
 6. Fixture-based tests that never call a paid or credentialed service.
@@ -536,6 +588,22 @@ assembled into `ProviderSet`, selected through `--provider`/configuration, and
 must keep provider payloads and errors out of the domain, storage, and rendering
 layers. A new provider also needs its own credential/onboarding branch where
 applicable.
+
+Every assembled provider must set two persistence properties:
+
+- A stable cache namespace that changes whenever the endpoint, feed, adjustment
+  policy, upstream dataset, or normalized contract can change observations.
+- A `MarketContext` containing the calendar ID, symbol namespace, currency,
+  IANA timezone, and regular-session bounds used to group chart observations.
+
+The runtime permits one such market context per launch and validates it before
+rendering cached rows. An incompatible or legacy unstamped cache is cleared
+transactionally while favorite symbols survive for rehydration. Do not derive
+the context from each company's free-text listing exchange: NASDAQ, NYSE, and
+ARCA all belong to the current `us-equities` context because they share the
+same chart calendar. A provider serving unrelated markets must expose separate
+contexts (and currently requires separate launches/configurations) rather than
+putting colliding symbols or sessions into one cache.
 
 `StockApiProvider` is the reference for an adapter that does not reuse Alpaca
 credentials and can operate either anonymously or with its own bearer token. It

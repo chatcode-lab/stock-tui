@@ -311,7 +311,7 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
             }
         }
         Route::Ticker(_) => {
-            if horizontal != 0 {
+            if horizontal != 0 && state.detail_tab == DetailTab::Chart {
                 state.detail_hover = move_chart_selection(
                     &state.chart_sample_indices,
                     state.detail_hover,

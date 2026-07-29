@@ -22,11 +22,14 @@ Typical locations are:
 Platform conventions can vary. Use `stock-tui --print-config` for the exact
 resolved `db_path`, or override it with `--db` / `STOCK_TUI_DB_PATH`.
 
-Releases before 0.1.2 used `market.sqlite3` for both modes. On the first live
-startup after upgrading, a detected legacy demo checkpoint triggers an
-automatic cleanup of simulated bars, news, snapshots, and memberships before
-the selected provider sync begins. Favorites and already-fetched live bars and
-news are preserved.
+Releases before 0.1.2 used `market.sqlite3` for both modes. Current releases
+also require every live database to carry an explicit provider and market
+identity. On the first online launch after upgrading an unstamped legacy
+database, the application cannot prove which provider/feed produced its rows,
+so it clears observations, news, memberships, checkpoints, and provider
+company metadata before synchronization. Starred symbols are preserved as
+neutral company rows and rehydrated from the catalog/provider. Demo and live
+defaults remain separate.
 
 The application also creates platform config and cache directories. The
 configuration file is `<config_dir>/config.toml`; the SQLite database belongs
@@ -39,7 +42,7 @@ recreated from the embedded release catalog plus the public catalog endpoint.
 ## SQLite Settings
 
 - Schema version is stored in `PRAGMA user_version`.
-- Current schema version: 2.
+- Current schema version: 3.
 - Journal mode: WAL.
 - Foreign keys: enabled on every connection.
 - Busy timeout: 30 seconds.
@@ -48,9 +51,11 @@ recreated from the embedded release catalog plus the public catalog endpoint.
 
 Schema 2 is an additive migration. It preserves schema-1 companies, bars,
 snapshots, news, favorites, memberships, and checkpoints while adding SEC
-ranking-proxy and share-estimate metadata. A downgrade to a schema-1 binary
-will refuse to open the upgraded database; it will not attempt a lossy
-downgrade.
+ranking-proxy and share-estimate metadata. Schema 3 adds a singleton
+`cache_context` record. The migration itself is additive, but the next online
+startup deliberately clears legacy provider rows whose provenance cannot be
+established. A downgrade to an older binary refuses to open the upgraded
+database; it does not attempt a lossy downgrade.
 
 WAL creates adjacent `-wal` and `-shm` files while the database is open. For a
 consistent backup, stop `stock-tui` first and copy the database together with
@@ -115,33 +120,59 @@ Successful completion times keyed by a textual scope such as `snapshots`,
 `history:1Day:2Y`, `history:1Week:all`, their per-symbol child scopes, or the
 versioned demo scope. Checkpoints contain no credentials.
 
+### `cache_context`
+
+One singleton row identifies the only live market dataset allowed in the
+database. It stores an opaque provider cache namespace plus the market ID,
+symbol namespace, currency, IANA timezone, and regular-session open/close.
+Provider namespaces include observation-changing settings such as the selected
+feed and base endpoints.
+
+An exact identity match reuses the cache. A mismatch, or an unstamped database
+containing legacy provider rows, is reset transactionally before the first UI
+render. Bars, snapshots, news, memberships, checkpoints, and provider-derived
+company metadata are removed; favorite symbols survive as neutral retained
+rows. Listing-exchange text is not a cache boundary: NASDAQ, NYSE, and ARCA
+currently share the single `us-equities` market context and calendar. Switching
+to another provider market, feed, endpoint, currency, session, or symbol
+namespace starts that new context without mixing old rows.
+
 ## First Live Launch
 
 A live database is prepared in stages:
 
-1. Resolve and upsert the newest valid local SEC-derived catalog without
+1. Build the configured provider and validate the database's `cache_context`.
+   Initialize an empty cache, reuse an exact match, or clear incompatible
+   provider rows while preserving favorite symbols. Exactly one market context
+   is active for the process.
+2. Resolve and upsert the newest valid local SEC-derived catalog without
    waiting for the network. It contains between 100 and 250 candidates per
-   sector, and previously reconciled retention flags survive its upsert. When
-   the local copy exceeds 12 hours by default, a background task checks the
-   compact R2 catalog and keeps that cadence while the app remains open. A
+   sector plus dated filing-derived share bases. An ambiguous issuer receives a
+   share basis only when its latest filing is unambiguous or matches an exact
+   reviewed class and filing-fact policy. Lower-ranked unresolved candidates
+   remain available through their numeric public-float proxy, while catalog CI
+   requires complete share coverage for the current sector top 100. Previously
+   reconciled retention flags survive its upsert.
+   When the local copy exceeds 12 hours by default, a background task checks
+   the compact R2 catalog and keeps that cadence while the app remains open. A
    valid newer result is cached, applied to SQLite, and queues another provider
    universe reconciliation; network, schema, size, and downgrade failures keep
    the local result.
-2. Select up to 100 retained initial members per sector by estimated market cap
+3. Select up to 100 retained initial members per sector by estimated market cap
    where available and numeric SEC public float otherwise. With no cached
    market caps this is equivalent to descending catalog proxy rank.
-3. Fetch the selected asset provider's active instrument list before requesting
+4. Fetch the selected asset provider's active instrument list before requesting
    snapshots. Present catalog candidates are reactivated; missing candidates
    are removed from current membership without deleting their company rows,
    favorites, or cached data. Memberships are then recomputed and current
    names/exchanges are merged without erasing catalog sector, proxy,
    share-estimate, or market-cap metadata.
-4. Request current snapshots for all retained sector candidates and the three
+5. Request current snapshots for all retained sector candidates and the three
    benchmark ETF proxies in configurable batches (100 by default). When the
    adapter supports corporate actions, request forward and reverse splits from
    the oldest relevant catalog share date through the refresh date in
    parallel.
-5. Prefer a valid market cap supplied with the provider snapshot. Otherwise,
+6. Prefer a valid market cap supplied with the provider snapshot. Otherwise,
    where a catalog share estimate and corporate-action coverage are available,
    apply intervening split ratios through that snapshot's observation date
    before multiplying price-equivalent common shares by current price. If
@@ -150,7 +181,7 @@ A live database is prepared in stages:
    sector by the resulting estimate or the numeric public-float proxy, and
    store a dated snapshot. The proxy affects selection but never populates the
    market-cap field shown in ticker statistics.
-6. Start adjusted history requests for those selected 900 companies and three
+7. Start adjusted history requests for those selected 900 companies and three
    benchmark ETF proxies in configurable 50-symbol batches: two years of
    `1Day` bars and all provider-available `1Week` bars.
 
@@ -251,8 +282,9 @@ While a preferred timeframe has no price observations, storage chooses an
 available fallback appropriate for that range. Changing the range on a detail
 view triggers another lazy request and redraws from whatever is already cached.
 The detail header summarizes the complete cached price-observation span, and
-Statistics shows its first and last dates. Longer fixed ranges are visually
-muted while remaining selectable; `ALL` always uses the complete cached span.
+Statistics shows its first and last dates. A fixed range is visually muted only
+when it adds no older observations beyond the next-shorter preset; it remains
+selectable, and `ALL` always uses the complete cached span.
 
 News is not globally downloaded for every sector company or benchmark proxy.
 This keeps startup and provider usage bounded. Cached headlines remain
@@ -285,10 +317,23 @@ Missing range history remains neutral and sorts after known volume.
 
 Ticker price charts add price-only boundary points for the cutoff baseline and
 selected endpoint when those values are not already represented by a cached
-price-observation bar. Both plots use real timestamps across the selected
-window, leave long no-observation intervals blank, and exclude flat no-trade
-placeholders. Volume still comes only from traded provider OHLCV bars; the
-price-only boundary points cannot fabricate it.
+price-observation bar. `1D` loads a seven-day overlap, selects the newest
+exchange-local date containing a regular-session observation, and maps the full
+configured open-to-close session to the plot. This keeps the future portion of
+an active session blank and lets a weekend launch show Friday rather than an
+empty rolling 24-hour window. `1W` loads enough overlap to concatenate the five
+newest observed sessions. Other intraday data maps each observed session to an
+equal contiguous span, so nights, weekends, and holidays consume no horizontal
+space. Daily and weekly bars use ordinal observation spacing.
+
+Consecutive observations retain a direct thin trace. When a long gap occurs
+during an open session, the trace carries the last traded price to the next
+observation instead of drawing a disconnected hole. Closed-session boundaries
+are compressed to the same X position. Flat no-trade placeholders remain
+excluded. Volume still comes only from traded provider OHLCV bars, so missing
+observations stay empty and price-only boundary points cannot fabricate volume.
+Session grouping uses the active market's IANA timezone; labels use the user's
+local timezone.
 
 Sort modes operate within each sector:
 
@@ -325,7 +370,10 @@ release does not run automatic garbage collection for old company rows.
 database. It does not request a catalog update, update market-data freshness
 timestamps, or fetch a search miss. The runtime can still seed issuer
 identities from a valid local catalog cache or its embedded release fallback;
-missing market observations remain empty.
+missing market observations remain empty. A stamped database reuses its stored
+market context for chart sessions. An unstamped legacy database is left
+untouched in offline mode and falls back to the current US-equities session
+profile because no provider is available to establish a safer identity.
 
 Demo mode is entered with `--demo` or by explicitly choosing `d` during
 onboarding; missing credentials alone do not select it. A normal online launch

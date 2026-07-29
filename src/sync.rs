@@ -552,7 +552,7 @@ async fn refresh_ticker(
         providers.fetch_bars(
             &symbols,
             range.preferred_timeframe(),
-            range.cutoff(history_end),
+            range.detail_history_cutoff(history_end),
             history_end,
         ),
         providers.fetch_news(&symbols, 20),
@@ -632,7 +632,12 @@ async fn refresh_assets(
         .into_iter()
         .map(|company| (company.symbol.clone(), company))
         .collect();
-    let merged = reconcile_active_assets(assets, &existing, Utc::now());
+    let favorites = storage
+        .favorite_symbols()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let merged = reconcile_active_assets(assets, &existing, &favorites, Utc::now());
     storage
         .upsert_companies(&merged)
         .map_err(|error| error.to_string())?;
@@ -662,6 +667,7 @@ async fn refresh_assets(
 fn reconcile_active_assets(
     active_assets: Vec<Company>,
     existing: &HashMap<String, Company>,
+    favorite_symbols: &HashSet<String>,
     updated_at: chrono::DateTime<Utc>,
 ) -> Vec<Company> {
     let active_symbols = active_assets
@@ -671,6 +677,17 @@ fn reconcile_active_assets(
     let mut merged = active_assets
         .into_iter()
         .map(|mut asset| {
+            let replaced_in_catalog = crate::universe::catalog_symbol_replacement(&asset.symbol)
+                .and_then(|replacement| existing.get(replacement))
+                .is_some_and(|canonical| canonical.sector.is_some());
+            if replaced_in_catalog {
+                asset.sector = None;
+                asset.raw_sector = None;
+                asset.rank = None;
+                asset.in_universe = false;
+                asset.retained = favorite_symbols.contains(&asset.symbol);
+                return asset;
+            }
             if let Some(current) = existing.get(&asset.symbol) {
                 asset.sector = current.sector;
                 asset.raw_sector.clone_from(&current.raw_sector);
@@ -879,7 +896,7 @@ mod tests {
             })
             .collect();
 
-        let reconciled = reconcile_active_assets(active, &existing, instant());
+        let reconciled = reconcile_active_assets(active, &existing, &HashSet::new(), instant());
         let by_symbol = reconciled
             .iter()
             .map(|company| (company.symbol.as_str(), company))
@@ -902,6 +919,37 @@ mod tests {
         assert_eq!(by_symbol["SPY"].market_cap, Some(1_000_000.0));
         assert!(!by_symbol["FUND"].retained);
         assert!(!by_symbol["FUND"].in_universe);
+    }
+
+    #[test]
+    fn active_asset_refresh_keeps_goog_canonical_over_googl() {
+        let goog = company("GOOG", Some(Sector::Technology), true, true);
+        let googl = company("GOOGL", Some(Sector::Technology), true, true);
+        let existing = [goog, googl]
+            .into_iter()
+            .map(|company| (company.symbol.clone(), company))
+            .collect::<HashMap<_, _>>();
+        let active = ["GOOG", "GOOGL"]
+            .into_iter()
+            .map(|symbol| company(symbol, None, false, false))
+            .collect();
+        let favorites = HashSet::from(["GOOGL".to_owned()]);
+
+        let reconciled = reconcile_active_assets(active, &existing, &favorites, instant());
+        let by_symbol = reconciled
+            .iter()
+            .map(|company| (company.symbol.as_str(), company))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(by_symbol["GOOG"].sector, Some(Sector::Technology));
+        assert!(by_symbol["GOOG"].retained);
+
+        let googl = by_symbol["GOOGL"];
+        assert_eq!(googl.sector, None);
+        assert_eq!(googl.raw_sector, None);
+        assert_eq!(googl.rank, None);
+        assert!(!googl.in_universe);
+        assert!(googl.retained);
     }
 
     #[test]
@@ -974,6 +1022,30 @@ mod tests {
         let updated = update_market_caps(vec![inhd], &[current], &coverage, instant());
 
         assert_eq!(updated[0].market_cap, Some(97_272_000.0));
+    }
+
+    #[test]
+    fn reviewed_dell_shares_produce_a_split_aware_market_cap() {
+        let dell = crate::universe::embedded_companies(instant())
+            .expect("embedded catalog")
+            .into_iter()
+            .find(|company| company.symbol == "DELL")
+            .expect("Dell catalog entry");
+        let expected_market_cap = dell.shares_outstanding.expect("Dell catalog shares") * 369.655;
+        let current = snapshot("DELL", 369.655, None);
+
+        let updated = update_market_caps(
+            vec![dell],
+            &[current],
+            &StockSplitCoverage::Available(Vec::new()),
+            instant(),
+        );
+
+        assert!(
+            updated[0]
+                .market_cap
+                .is_some_and(|cap| (cap - expected_market_cap).abs() < 1.0)
+        );
     }
 
     #[test]

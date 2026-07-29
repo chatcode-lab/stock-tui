@@ -1,4 +1,6 @@
-use chrono::{DateTime, Local, Utc};
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use ratatui::{
     Frame,
     buffer::{Buffer, Cell},
@@ -14,6 +16,7 @@ use ratatui::{
 
 use crate::{
     domain::{Bar, DateRange},
+    market::MarketContext,
     palette::{BORDER, CANVAS, CYAN, MUTED, PANEL, TEXT},
     ui::state::UiState,
 };
@@ -59,6 +62,242 @@ impl ChartTimeWindow {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SessionSpan {
+    date: NaiveDate,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+}
+
+impl SessionSpan {
+    fn position(self, timestamp: DateTime<Utc>) -> Option<f64> {
+        ChartTimeWindow {
+            start: self.start,
+            end: self.end,
+        }
+        .position(timestamp)
+    }
+
+    fn timestamp_at(self, position: f64) -> Option<DateTime<Utc>> {
+        ChartTimeWindow {
+            start: self.start,
+            end: self.end,
+        }
+        .timestamp_at(position)
+    }
+
+    fn observation_timestamp(self, bar: &Bar) -> Option<DateTime<Utc>> {
+        if bar.timestamp >= self.start && bar.timestamp <= self.end {
+            return Some(bar.timestamp);
+        }
+        let duration = timeframe_duration(&bar.timeframe)?;
+        (bar.timestamp < self.start && bar.timestamp + duration > self.start).then_some(self.start)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChartTimeline {
+    Session(SessionSpan),
+    Sessions(Vec<SessionSpan>),
+    Ordinal(Vec<DateTime<Utc>>),
+}
+
+impl ChartTimeline {
+    fn from_bars(
+        range: DateRange,
+        bars: &[Bar],
+        price_bars: &[Bar],
+        requested: ChartTimeWindow,
+        market: &MarketContext,
+    ) -> Option<Self> {
+        if range == DateRange::Day {
+            let source = if bars.is_empty() { price_bars } else { bars };
+            let latest_date = source
+                .iter()
+                .filter(|bar| bar.timestamp <= requested.end)
+                .filter_map(|bar| session_span_for_bar(bar, market).map(|span| span.date))
+                .max()?;
+            let (start, end) = market.session_bounds(latest_date)?;
+            return Some(Self::Session(SessionSpan {
+                date: latest_date,
+                start,
+                end,
+            }));
+        }
+
+        if bars.iter().any(|bar| timeframe_is_intraday(&bar.timeframe)) {
+            let first_date = market.session_date(requested.start);
+            let mut dates = bars
+                .iter()
+                .filter(|bar| bar.timestamp <= requested.end)
+                .filter_map(|bar| session_span_for_bar(bar, market).map(|span| span.date))
+                .filter(|date| range == DateRange::Week || *date >= first_date)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            if range == DateRange::Week && dates.len() > 5 {
+                dates.drain(..dates.len() - 5);
+            }
+            let spans = dates
+                .into_iter()
+                .filter_map(|date| {
+                    market
+                        .session_bounds(date)
+                        .map(|(start, end)| SessionSpan { date, start, end })
+                })
+                .collect::<Vec<_>>();
+            return (!spans.is_empty()).then_some(Self::Sessions(spans));
+        }
+
+        let mut timestamps = price_bars
+            .iter()
+            .map(|bar| bar.timestamp)
+            .filter(|timestamp| requested.position(*timestamp).is_some())
+            .collect::<Vec<_>>();
+        timestamps.sort_unstable();
+        timestamps.dedup();
+        (!timestamps.is_empty()).then_some(Self::Ordinal(timestamps))
+    }
+
+    fn position(&self, timestamp: DateTime<Utc>) -> Option<f64> {
+        match self {
+            Self::Session(span) => span.position(timestamp),
+            Self::Sessions(spans) => {
+                let (index, span) = spans
+                    .iter()
+                    .enumerate()
+                    .find(|(_, span)| timestamp >= span.start && timestamp <= span.end)?;
+                let within = span.position(timestamp)?;
+                Some((index as f64 + within) / spans.len() as f64)
+            }
+            Self::Ordinal(timestamps) => {
+                let index = timestamps.binary_search(&timestamp).ok()?;
+                Some(normalized_position(index, timestamps.len()))
+            }
+        }
+    }
+
+    fn position_bar(&self, bar: &Bar) -> Option<f64> {
+        match self {
+            Self::Session(span) => span
+                .observation_timestamp(bar)
+                .and_then(|timestamp| span.position(timestamp)),
+            Self::Sessions(spans) => {
+                let (index, span) = spans
+                    .iter()
+                    .enumerate()
+                    .find(|(_, span)| span.observation_timestamp(bar).is_some())?;
+                let timestamp = span.observation_timestamp(bar)?;
+                let within = span.position(timestamp)?;
+                Some((index as f64 + within) / spans.len() as f64)
+            }
+            Self::Ordinal(_) => self.position(bar.timestamp),
+        }
+    }
+
+    fn timestamp_at(&self, position: f64) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Session(span) => span.timestamp_at(position),
+            Self::Sessions(spans) => {
+                let scaled = position.clamp(0.0, 1.0) * spans.len() as f64;
+                let index = if position >= 1.0 {
+                    spans.len().checked_sub(1)?
+                } else {
+                    scaled.floor() as usize
+                };
+                let within = if position >= 1.0 {
+                    1.0
+                } else {
+                    scaled - index as f64
+                };
+                spans.get(index)?.timestamp_at(within)
+            }
+            Self::Ordinal(timestamps) => {
+                let index = normalized_cell_index(position, timestamps.len());
+                timestamps.get(index).copied()
+            }
+        }
+    }
+
+    fn axis_ticks(&self, count: usize) -> Vec<(f64, DateTime<Utc>)> {
+        match self {
+            Self::Session(_) => evenly_spaced_positions(count)
+                .into_iter()
+                .filter_map(|position| {
+                    self.timestamp_at(position)
+                        .map(|timestamp| (position, timestamp))
+                })
+                .collect(),
+            Self::Sessions(spans) => {
+                let count = count.min(spans.len());
+                evenly_spaced_indices(spans.len(), count)
+                    .into_iter()
+                    .filter_map(|index| {
+                        let span = spans.get(index)?;
+                        let position = (index as f64 + 0.5) / spans.len() as f64;
+                        span.timestamp_at(0.5)
+                            .map(|timestamp| (position, timestamp))
+                    })
+                    .collect()
+            }
+            Self::Ordinal(timestamps) => {
+                let count = count.min(timestamps.len());
+                evenly_spaced_indices(timestamps.len(), count)
+                    .into_iter()
+                    .filter_map(|index| {
+                        timestamps.get(index).copied().map(|timestamp| {
+                            (normalized_position(index, timestamps.len()), timestamp)
+                        })
+                    })
+                    .collect()
+            }
+        }
+    }
+}
+
+fn session_span_for_bar(bar: &Bar, market: &MarketContext) -> Option<SessionSpan> {
+    let date = market.session_date(bar.timestamp);
+    let (start, end) = market.session_bounds(date)?;
+    let span = SessionSpan { date, start, end };
+    span.observation_timestamp(bar).map(|_| span)
+}
+
+fn timeframe_duration(timeframe: &str) -> Option<chrono::Duration> {
+    let (amount, unit) = if let Some(amount) = timeframe.strip_suffix("Min") {
+        (amount, "minute")
+    } else {
+        (timeframe.strip_suffix("Hour")?, "hour")
+    };
+    let amount = amount.parse::<i64>().ok()?;
+    match unit {
+        "minute" => Some(chrono::Duration::minutes(amount)),
+        "hour" => Some(chrono::Duration::hours(amount)),
+        _ => None,
+    }
+}
+
+fn timeframe_is_intraday(timeframe: &str) -> bool {
+    timeframe_duration(timeframe).is_some()
+}
+
+fn evenly_spaced_positions(count: usize) -> Vec<f64> {
+    (0..count)
+        .map(|index| normalized_position(index, count))
+        .collect()
+}
+
+fn evenly_spaced_indices(len: usize, count: usize) -> Vec<usize> {
+    if len == 0 || count == 0 {
+        return Vec::new();
+    }
+    if count == 1 {
+        return vec![len / 2];
+    }
+    (0..count)
+        .map(|index| index * (len - 1) / (count - 1))
+        .collect()
+}
+
 pub(crate) fn render_price_volume(
     frame: &mut Frame<'_>,
     state: &mut UiState,
@@ -72,18 +311,23 @@ pub(crate) fn render_price_volume(
     if area.height < 5 || area.width < 10 {
         return;
     }
-    let price_bars = reconciled_price_bars(bars, period_start, period_end)
+    let reconciled = reconciled_price_bars(bars, period_start, period_end);
+    let Some(timeline) = ChartTimeline::from_bars(
+        state.date_range,
+        bars,
+        &reconciled,
+        time_window,
+        &state.market_context,
+    ) else {
+        render_empty_chart(frame, area);
+        return;
+    };
+    let price_bars = reconciled
         .into_iter()
-        .filter(|bar| time_window.position(bar.timestamp).is_some())
+        .filter(|bar| timeline.position_bar(bar).is_some())
         .collect::<Vec<_>>();
     if price_bars.is_empty() {
-        frame.render_widget(
-            Paragraph::new("Waiting for cached history")
-                .centered()
-                .style(Style::default().fg(MUTED).bg(PANEL))
-                .block(Block::default().borders(Borders::ALL).border_style(BORDER)),
-            area,
-        );
+        render_empty_chart(frame, area);
         return;
     }
     let volume_height = volume_section_height(area.height);
@@ -139,7 +383,7 @@ pub(crate) fn render_price_volume(
     state.chart_rect = Some(plot_area);
 
     let usable_width = usize::from(plot_area.width).max(1);
-    let sampled = sample_bars_by_time(&price_bars, usable_width, time_window);
+    let sampled = sample_bars_by_time(&price_bars, usable_width, &timeline);
     state.chart_sample_indices = sampled
         .iter()
         .map(|sample| sample.map_or(EMPTY_CHART_SAMPLE_INDEX, |(index, _)| index))
@@ -148,9 +392,7 @@ pub(crate) fn render_price_volume(
         .detail_hover
         .map(|index| index.min(sampled.len().saturating_sub(1)));
     state.detail_hover = hover_index;
-    let hover_bar = hover_index
-        .and_then(|index| sampled.get(index))
-        .and_then(|sample| sample.map(|(_, bar)| bar));
+    let hover_bar = hover_index.and_then(|index| hover_bar_at(&sampled, index));
     let title_bar =
         hover_bar.unwrap_or_else(|| price_bars.last().expect("price bars are non-empty"));
     let first_close = period_start
@@ -186,15 +428,14 @@ pub(crate) fn render_price_volume(
         &price_bars,
         usable_width.saturating_mul(TRACE_SAMPLES_PER_COLUMN),
     );
-    let typical_interval = typical_bar_interval_millis(&price_bars);
-    let point_segments = timestamped_price_segments(&trace_sampled, time_window, typical_interval);
+    let point_segments = timestamped_price_segments(&trace_sampled, &timeline);
     let canvas_segments = point_segments.clone();
-    let crosshair = hover_bar.and_then(|bar| time_window.position(bar.timestamp));
-    let hover_marker = crosshair.and_then(|position| {
-        interpolated_segment_price(&point_segments, position)
-            .or_else(|| hover_bar.map(|bar| bar.close))
-            .map(|price| (position, price))
-    });
+    let crosshair = hover_index
+        .zip(hover_bar)
+        .map(|(index, _)| normalized_position(index, sampled.len()));
+    let hover_marker = crosshair
+        .zip(hover_bar)
+        .map(|(position, bar)| (position, bar.close));
     let grid_values = price_axis_values(bounds, y_labels.len());
     let canvas = Canvas::default()
         .marker(Marker::Braille)
@@ -224,7 +465,7 @@ pub(crate) fn render_price_volume(
         accent,
     );
     render_price_axis(frame.buffer_mut(), plot_area, bounds, &y_labels);
-    render_time_axis(frame, x_axis_area, time_window, state.date_range);
+    render_time_axis(frame, x_axis_area, &timeline, state.date_range);
     if let (Some(marker), Some(bar)) = (hover_marker, hover_bar) {
         render_hover_labels(
             frame.buffer_mut(),
@@ -245,7 +486,17 @@ pub(crate) fn render_price_volume(
         bars,
         accent,
         crosshair,
-        time_window,
+        &timeline,
+    );
+}
+
+fn render_empty_chart(frame: &mut Frame<'_>, area: Rect) {
+    frame.render_widget(
+        Paragraph::new("Waiting for cached history")
+            .centered()
+            .style(Style::default().fg(MUTED).bg(PANEL))
+            .block(Block::default().borders(Borders::ALL).border_style(BORDER)),
+        area,
     );
 }
 
@@ -256,25 +507,25 @@ fn padded_price_bounds(data_low: f64, data_high: f64) -> [f64; 2] {
     [(data_low - padding).max(0.0), data_high + padding]
 }
 
-fn sample_bars_by_time(
-    bars: &[Bar],
+fn sample_bars_by_time<'a>(
+    bars: &'a [Bar],
     width: usize,
-    window: ChartTimeWindow,
-) -> Vec<Option<(usize, &Bar)>> {
+    timeline: &ChartTimeline,
+) -> Vec<Option<(usize, &'a Bar)>> {
     if width == 0 {
         return Vec::new();
     }
     let mut samples = vec![None; width];
     for (index, bar) in bars.iter().enumerate() {
-        let Some(position) = window.position(bar.timestamp) else {
+        let Some(position) = timeline.position_bar(bar) else {
             continue;
         };
         let column = normalized_cell_index(position, width);
         let column_position = normalized_position(column, width);
         let candidate_distance = (position - column_position).abs();
         let replace = samples[column].is_none_or(|(_, current): (usize, &Bar)| {
-            window
-                .position(current.timestamp)
+            timeline
+                .position_bar(current)
                 .is_none_or(|current_position| {
                     candidate_distance <= (current_position - column_position).abs()
                 })
@@ -284,6 +535,24 @@ fn sample_bars_by_time(
         }
     }
     samples
+}
+
+fn hover_bar_at<'a>(samples: &[Option<(usize, &'a Bar)>], hover_index: usize) -> Option<&'a Bar> {
+    let sample = samples.get(hover_index)?;
+    if let Some((_, bar)) = sample {
+        return Some(*bar);
+    }
+    let has_later_observation = samples
+        .get(hover_index + 1..)
+        .is_some_and(|later| later.iter().any(Option::is_some));
+    has_later_observation
+        .then(|| {
+            samples[..hover_index]
+                .iter()
+                .rev()
+                .find_map(|sample| sample.map(|(_, bar)| bar))
+        })
+        .flatten()
 }
 
 fn normalized_cell_index(position: f64, cells: usize) -> usize {
@@ -445,8 +714,8 @@ fn render_reference_grid(buffer: &mut Buffer, area: Rect, bounds: [f64; 2], valu
     }
 }
 
-fn render_time_axis(frame: &mut Frame<'_>, area: Rect, window: ChartTimeWindow, range: DateRange) {
-    if area.width == 0 || area.height == 0 || window.timestamp_at(0.0).is_none() {
+fn render_time_axis(frame: &mut Frame<'_>, area: Rect, timeline: &ChartTimeline, range: DateRange) {
+    if area.width == 0 || area.height == 0 {
         return;
     }
     frame
@@ -459,16 +728,13 @@ fn render_time_axis(frame: &mut Frame<'_>, area: Rect, window: ChartTimeWindow, 
     } else {
         2
     };
-    for slot in 0..count {
-        let position = slot as f64 / (count - 1) as f64;
-        let Some(timestamp) = window.timestamp_at(position) else {
-            continue;
-        };
-        let label = format_axis_time(timestamp, range, area.width);
-        let anchor = usize::from(area.width.saturating_sub(1)) * slot / (count - 1);
-        let offset = if slot == 0 {
+    let ticks = timeline.axis_ticks(count);
+    for (slot, (position, timestamp)) in ticks.iter().copied().enumerate() {
+        let label = format_axis_tick(timestamp, range, area.width);
+        let anchor = normalized_cell_index(position, usize::from(area.width));
+        let offset = if slot == 0 && position <= f64::EPSILON {
             0
-        } else if slot == count - 1 {
+        } else if slot == ticks.len() - 1 && position >= 1.0 - f64::EPSILON {
             usize::from(area.width).saturating_sub(label.len())
         } else {
             anchor.saturating_sub(label.len() / 2)
@@ -500,7 +766,22 @@ fn format_axis_price(value: f64) -> String {
     }
 }
 
-fn format_axis_time(timestamp: DateTime<Utc>, range: DateRange, width: u16) -> String {
+fn format_axis_tick(timestamp: DateTime<Utc>, range: DateRange, width: u16) -> String {
+    let local = timestamp.with_timezone(&Local);
+    match range {
+        DateRange::Day => local.format("%H:%M").to_string(),
+        DateRange::Week if width >= 50 => local.format("%a %b %d").to_string(),
+        DateRange::Week => local.format("%a").to_string(),
+        DateRange::Month | DateRange::ThreeMonths | DateRange::SixMonths | DateRange::Year => {
+            local.format("%b %d").to_string()
+        }
+        DateRange::TwoYears | DateRange::FiveYears | DateRange::TenYears | DateRange::All => {
+            local.format("%b %Y").to_string()
+        }
+    }
+}
+
+fn format_hover_time(timestamp: DateTime<Utc>, range: DateRange, width: u16) -> String {
     let local = timestamp.with_timezone(&Local);
     match range {
         DateRange::Day => local.format("%H:%M").to_string(),
@@ -572,12 +853,6 @@ fn interpolated_price_within(points: &[(f64, f64)], position: f64) -> Option<f64
         return None;
     }
     interpolated_price(points, position)
-}
-
-fn interpolated_segment_price(point_segments: &[Vec<(f64, f64)>], position: f64) -> Option<f64> {
-    point_segments
-        .iter()
-        .find_map(|points| interpolated_price_within(points, position))
 }
 
 fn render_area_gradient(
@@ -735,7 +1010,7 @@ fn render_hover_labels(
     if x_axis_area.is_empty() {
         return;
     }
-    let time_label = format_axis_time(selected_bar.timestamp, range, x_axis_area.width);
+    let time_label = format_hover_time(selected_bar.timestamp, range, x_axis_area.width);
     if let Some(x) = hover_label_x(x_axis_area, cursor_x, time_label.len(), position) {
         buffer.set_stringn(
             x,
@@ -803,11 +1078,11 @@ fn render_volume(
     bars: &[Bar],
     accent: Color,
     crosshair: Option<f64>,
-    time_window: ChartTimeWindow,
+    timeline: &ChartTimeline,
 ) {
     let max_volume = bars
         .iter()
-        .filter(|bar| time_window.position(bar.timestamp).is_some())
+        .filter(|bar| timeline.position_bar(bar).is_some())
         .map(|bar| bar.volume)
         .filter(|volume| volume.is_finite() && *volume >= 0.0)
         .fold(0.0_f64, f64::max);
@@ -834,7 +1109,7 @@ fn render_volume(
         return;
     }
     let plot = Rect::new(left, inner.y, right - left, inner.height);
-    let columns = volume_columns(bars, usize::from(plot.width), time_window);
+    let columns = volume_columns(bars, usize::from(plot.width), timeline);
     let selected_column = crosshair.map(|position| {
         (position.clamp(0.0, 1.0) * f64::from(plot.width.saturating_sub(1))).round() as usize
     });
@@ -869,13 +1144,13 @@ fn volume_height_eighths(relative: f64, rows: usize) -> usize {
         .max(1.0) as usize
 }
 
-fn volume_columns(bars: &[Bar], width: usize, window: ChartTimeWindow) -> Vec<f64> {
+fn volume_columns(bars: &[Bar], width: usize, timeline: &ChartTimeline) -> Vec<f64> {
     if width == 0 {
         return Vec::new();
     }
     let mut columns = vec![0.0_f64; width];
     for bar in bars {
-        let Some(position) = window.position(bar.timestamp) else {
+        let Some(position) = timeline.position_bar(bar) else {
             continue;
         };
         let volume = if bar.volume.is_finite() {
@@ -943,62 +1218,41 @@ fn trace_bars(bars: &[Bar], max_points: usize) -> Vec<(usize, &Bar)> {
     }
 }
 
-fn typical_bar_interval_millis(bars: &[Bar]) -> Option<i64> {
-    let mut intervals = bars
-        .windows(2)
-        .filter_map(|pair| {
-            let interval = pair[1]
-                .timestamp
-                .signed_duration_since(pair[0].timestamp)
-                .num_milliseconds();
-            (interval > 0).then_some(interval)
-        })
-        .collect::<Vec<_>>();
-    if intervals.is_empty() {
-        return None;
-    }
-    intervals.sort_unstable();
-    Some(intervals[intervals.len() / 2])
-}
-
 fn timestamped_price_segments(
     sampled: &[(usize, &Bar)],
-    window: ChartTimeWindow,
-    typical_interval_millis: Option<i64>,
+    timeline: &ChartTimeline,
 ) -> Vec<Vec<(f64, f64)>> {
-    const GAP_INTERVAL_MULTIPLIER: i64 = 3;
-
-    let mut segments = Vec::new();
-    let mut segment = Vec::new();
-    let mut previous: Option<(usize, &Bar)> = None;
+    let mut points = Vec::new();
+    let mut previous: Option<(usize, f64, &Bar)> = None;
     for &(index, bar) in sampled {
-        let Some(position) = window.position(bar.timestamp) else {
+        let Some(position) = timeline.position_bar(bar) else {
             continue;
         };
-        let starts_new_segment = previous.is_some_and(|(previous_index, previous_bar)| {
-            let interval = bar
-                .timestamp
-                .signed_duration_since(previous_bar.timestamp)
-                .num_milliseconds();
-            let observation_steps = index.saturating_sub(previous_index).max(1) as i64;
-            typical_interval_millis.is_some_and(|typical| {
-                let expected = typical
-                    .saturating_mul(observation_steps)
-                    .saturating_mul(GAP_INTERVAL_MULTIPLIER);
-                interval > expected
-            })
-        });
-        if starts_new_segment && !segment.is_empty() {
-            segments.push(segment);
-            segment = Vec::new();
+        if let Some((previous_index, previous_position, previous_bar)) = previous
+            && position > previous_position
+            && is_observation_gap(previous_index, previous_bar, index, bar)
+        {
+            points.push((position, previous_bar.close));
         }
-        segment.push((position, bar.close));
-        previous = Some((index, bar));
+        points.push((position, bar.close));
+        previous = Some((index, position, bar));
     }
-    if !segment.is_empty() {
-        segments.push(segment);
+    if points.is_empty() {
+        Vec::new()
+    } else {
+        vec![points]
     }
-    segments
+}
+
+fn is_observation_gap(previous_index: usize, previous: &Bar, index: usize, current: &Bar) -> bool {
+    let Some(interval) =
+        timeframe_duration(&previous.timeframe).or_else(|| timeframe_duration(&current.timeframe))
+    else {
+        return false;
+    };
+    let observation_steps =
+        i32::try_from(index.saturating_sub(previous_index).max(1)).unwrap_or(i32::MAX);
+    current.timestamp - previous.timestamp > interval * observation_steps * 2
 }
 
 fn sample_bars(bars: &[Bar], width: usize) -> Vec<(usize, &Bar)> {
@@ -1045,6 +1299,26 @@ mod tests {
         }
     }
 
+    fn ordinal_timeline(bars: &[Bar]) -> ChartTimeline {
+        ChartTimeline::Ordinal(bars.iter().map(|bar| bar.timestamp).collect())
+    }
+
+    fn intraday_bar(timestamp: &str, timeframe: &str, close: f64, volume: f64) -> Bar {
+        Bar {
+            symbol: "TEST".to_owned(),
+            timeframe: timeframe.to_owned(),
+            timestamp: timestamp.parse().expect("fixture timestamp"),
+            open: close,
+            high: close,
+            low: close,
+            close,
+            volume,
+            trade_count: Some(1),
+            vwap: Some(close),
+            source: "test".to_owned(),
+        }
+    }
+
     #[test]
     fn sampling_preserves_endpoints() {
         let bars: Vec<_> = (0..100).map(bar).collect();
@@ -1062,6 +1336,27 @@ mod tests {
         assert_eq!(sampled.len(), 20);
         assert_eq!(sampled.first().unwrap().0, 0);
         assert_eq!(sampled.last().unwrap().0, 3);
+    }
+
+    #[test]
+    fn hover_repeats_only_interior_sparse_columns() {
+        let bars: Vec<_> = (0..2).map(bar).collect();
+        let samples = vec![None, Some((0, &bars[0])), None, Some((1, &bars[1])), None];
+
+        assert!(hover_bar_at(&samples, 0).is_none());
+        assert_eq!(
+            hover_bar_at(&samples, 1).map(|bar| bar.timestamp),
+            Some(bars[0].timestamp)
+        );
+        assert_eq!(
+            hover_bar_at(&samples, 2).map(|bar| bar.timestamp),
+            Some(bars[0].timestamp)
+        );
+        assert_eq!(
+            hover_bar_at(&samples, 3).map(|bar| bar.timestamp),
+            Some(bars[1].timestamp)
+        );
+        assert!(hover_bar_at(&samples, 4).is_none());
     }
 
     #[test]
@@ -1088,34 +1383,191 @@ mod tests {
     }
 
     #[test]
-    fn timestamp_mapping_preserves_observation_gaps_and_blank_tail() {
-        let bars = vec![bar(0), bar(1), bar(10), bar(11)];
-        let window = ChartTimeWindow {
-            start: bars[0].timestamp,
-            end: bars[0].timestamp + Duration::days(12),
+    fn one_day_timeline_uses_the_latest_full_regular_session() {
+        let bars = vec![
+            intraday_bar("2026-07-24T19:30:00Z", "5Min", 100.0, 10.0),
+            intraday_bar("2026-07-27T13:30:00Z", "5Min", 101.0, 20.0),
+            intraday_bar("2026-07-27T16:00:00Z", "5Min", 102.0, 30.0),
+        ];
+        let requested = ChartTimeWindow {
+            start: "2026-07-20T16:00:00Z".parse().expect("start"),
+            end: "2026-07-27T17:00:00Z".parse().expect("end"),
         };
-        let samples = sample_bars_by_time(&bars, 13, window);
-        let trace = trace_bars(&bars, 26);
-        let segments =
-            timestamped_price_segments(&trace, window, typical_bar_interval_millis(&bars));
-        let volumes = volume_columns(&bars, 13, window);
+        let timeline = ChartTimeline::from_bars(
+            DateRange::Day,
+            &bars,
+            &bars,
+            requested,
+            &MarketContext::us_equities(),
+        )
+        .expect("timeline");
+        let samples = sample_bars_by_time(&bars, 14, &timeline);
+        let volumes = volume_columns(&bars, 14, &timeline);
 
-        assert!(samples[0].is_some());
-        assert!(samples[1].is_some());
-        assert!(samples[2..10].iter().all(Option::is_none));
-        assert!(samples[10].is_some());
-        assert!(samples[11].is_some());
-        assert!(samples[12].is_none());
-        assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0].len(), 2);
-        assert_eq!(segments[1].len(), 2);
-        assert_eq!(&volumes[2..10], &[0.0; 8]);
-        assert_eq!(volumes[12], 0.0);
-        assert!(
-            segments
-                .iter()
-                .all(|segment| braille_column_price(segment, 12, 13).is_none())
+        assert_eq!(
+            timeline.timestamp_at(0.0),
+            Some("2026-07-27T13:30:00Z".parse().expect("open"))
         );
+        assert_eq!(
+            timeline.timestamp_at(1.0),
+            Some("2026-07-27T20:00:00Z".parse().expect("close"))
+        );
+        assert!(timeline.position_bar(&bars[0]).is_none());
+        assert_eq!(timeline.position_bar(&bars[1]), Some(0.0));
+        assert!(
+            timeline
+                .position_bar(&bars[2])
+                .is_some_and(|position| position < 0.5)
+        );
+        assert!(samples.last().expect("last column").is_none());
+        assert_eq!(volumes.last(), Some(&0.0));
+    }
+
+    #[test]
+    fn timeline_uses_the_configured_market_instead_of_new_york_hours() {
+        let market = MarketContext {
+            id: "uk-equities".into(),
+            symbol_namespace: "uk-equity".into(),
+            currency: "GBP".into(),
+            timezone: chrono_tz::Europe::London,
+            regular_open: chrono::NaiveTime::from_hms_opt(8, 0, 0).expect("open"),
+            regular_close: chrono::NaiveTime::from_hms_opt(16, 30, 0).expect("close"),
+        };
+        let bars = vec![
+            intraday_bar("2026-07-24T14:00:00Z", "5Min", 100.0, 10.0),
+            intraday_bar("2026-07-27T07:00:00Z", "5Min", 101.0, 20.0),
+        ];
+        let timeline = ChartTimeline::from_bars(
+            DateRange::Day,
+            &bars,
+            &bars,
+            ChartTimeWindow {
+                start: "2026-07-20T00:00:00Z".parse().expect("start"),
+                end: "2026-07-27T12:00:00Z".parse().expect("end"),
+            },
+            &market,
+        )
+        .expect("timeline");
+
+        assert_eq!(
+            timeline.timestamp_at(0.0),
+            Some("2026-07-27T07:00:00Z".parse().expect("London open"))
+        );
+        assert_eq!(
+            timeline.timestamp_at(1.0),
+            Some("2026-07-27T15:30:00Z".parse().expect("London close"))
+        );
+    }
+
+    #[test]
+    fn intraday_sessions_compress_weekends_and_hold_the_last_trade() {
+        let bars = vec![
+            intraday_bar("2026-07-21T13:30:00Z", "1Hour", 100.0, 10.0),
+            intraday_bar("2026-07-22T13:30:00Z", "1Hour", 101.0, 20.0),
+            intraday_bar("2026-07-23T13:30:00Z", "1Hour", 102.0, 30.0),
+            intraday_bar("2026-07-24T20:00:00Z", "1Hour", 103.0, 40.0),
+            intraday_bar("2026-07-27T13:30:00Z", "1Hour", 104.0, 50.0),
+        ];
+        let requested = ChartTimeWindow {
+            start: "2026-07-20T00:00:00Z".parse().expect("start"),
+            end: "2026-07-27T20:00:00Z".parse().expect("end"),
+        };
+        let timeline = ChartTimeline::from_bars(
+            DateRange::Week,
+            &bars,
+            &bars,
+            requested,
+            &MarketContext::us_equities(),
+        )
+        .expect("timeline");
+        let friday_close = timeline.position_bar(&bars[3]).expect("Friday close");
+        let monday_open = timeline.position_bar(&bars[4]).expect("Monday open");
+        let trace = trace_bars(&bars, 20);
+        let segments = timestamped_price_segments(&trace, &timeline);
+
+        assert!((friday_close - monday_open).abs() < f64::EPSILON);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].len(), bars.len() * 2 - 2);
+        assert!(
+            segments[0]
+                .windows(2)
+                .any(|pair| pair[0].0 == pair[1].0 && pair[0].1 != pair[1].1)
+        );
+    }
+
+    #[test]
+    fn hourly_bar_overlapping_the_open_is_clamped_to_the_session_start() {
+        let bars = vec![
+            intraday_bar("2026-07-27T13:00:00Z", "1Hour", 100.0, 10.0),
+            intraday_bar("2026-07-27T14:00:00Z", "1Hour", 101.0, 20.0),
+        ];
+        let requested = ChartTimeWindow {
+            start: "2026-07-27T00:00:00Z".parse().expect("start"),
+            end: "2026-07-27T20:00:00Z".parse().expect("end"),
+        };
+        let timeline = ChartTimeline::from_bars(
+            DateRange::Week,
+            &bars,
+            &bars,
+            requested,
+            &MarketContext::us_equities(),
+        )
+        .expect("timeline");
+
+        assert_eq!(timeline.position_bar(&bars[0]), Some(0.0));
+        assert!(
+            timeline
+                .position_bar(&bars[1])
+                .is_some_and(|position| position > 0.0)
+        );
+    }
+
+    #[test]
+    fn consecutive_intraday_observations_keep_a_thin_direct_trace() {
+        let bars = vec![
+            intraday_bar("2026-07-27T13:30:00Z", "5Min", 100.0, 10.0),
+            intraday_bar("2026-07-27T13:35:00Z", "5Min", 101.0, 20.0),
+            intraday_bar("2026-07-27T13:40:00Z", "5Min", 102.0, 30.0),
+        ];
+        let timeline = ChartTimeline::from_bars(
+            DateRange::Day,
+            &bars,
+            &bars,
+            ChartTimeWindow {
+                start: "2026-07-27T00:00:00Z".parse().expect("start"),
+                end: "2026-07-27T20:00:00Z".parse().expect("end"),
+            },
+            &MarketContext::us_equities(),
+        )
+        .expect("timeline");
+        let trace = trace_bars(&bars, 20);
+        let segments = timestamped_price_segments(&trace, &timeline);
+
+        assert_eq!(
+            segments,
+            vec![vec![(0.0, 100.0), (1.0 / 78.0, 101.0), (2.0 / 78.0, 102.0)]]
+        );
+    }
+
+    #[test]
+    fn daily_observations_use_ordinal_spacing() {
+        let bars = vec![
+            intraday_bar("2026-07-24T04:00:00Z", "1Day", 100.0, 10.0),
+            intraday_bar("2026-07-27T04:00:00Z", "1Day", 101.0, 20.0),
+            intraday_bar("2026-07-28T04:00:00Z", "1Day", 102.0, 30.0),
+        ];
+        let timeline = ChartTimeline::from_bars(
+            DateRange::ThreeMonths,
+            &bars,
+            &bars,
+            covering_window(&bars),
+            &MarketContext::us_equities(),
+        )
+        .expect("timeline");
+
+        assert_eq!(timeline.position_bar(&bars[0]), Some(0.0));
+        assert_eq!(timeline.position_bar(&bars[1]), Some(0.5));
+        assert_eq!(timeline.position_bar(&bars[2]), Some(1.0));
     }
 
     #[test]
@@ -1159,10 +1611,8 @@ mod tests {
         );
         assert_eq!(prices.first().unwrap().volume, 0.0);
         assert_eq!(prices.last().unwrap().volume, 0.0);
-        assert_eq!(
-            volume_columns(&bars, 2, covering_window(&bars)),
-            vec![10.0, 20.0]
-        );
+        let timeline = ordinal_timeline(&bars);
+        assert_eq!(volume_columns(&bars, 2, &timeline), vec![10.0, 20.0]);
         assert_eq!(
             bars.iter().map(|bar| bar.volume).collect::<Vec<_>>(),
             [10.0, 20.0]
@@ -1309,7 +1759,7 @@ mod tests {
         selected.close = 123.456;
         let bounds = [100.0, 150.0];
         let price_label = format_hover_price(selected.close);
-        let time_label = format_axis_time(selected.timestamp, DateRange::Day, axis.width);
+        let time_label = format_hover_time(selected.timestamp, DateRange::Day, axis.width);
 
         for position in [0.2, 0.8] {
             buffer.reset();
@@ -1453,9 +1903,10 @@ mod tests {
         let mut bars: Vec<_> = (0..2).map(bar).collect();
         bars[0].volume = 10.0;
         bars[1].volume = 20.0;
+        let timeline = ordinal_timeline(&bars);
 
         assert_eq!(
-            volume_columns(&bars, 6, covering_window(&bars)),
+            volume_columns(&bars, 6, &timeline),
             vec![10.0, 0.0, 0.0, 0.0, 0.0, 20.0]
         );
     }
@@ -1466,11 +1917,9 @@ mod tests {
         for (index, bar) in bars.iter_mut().enumerate() {
             bar.volume = (index + 1) as f64;
         }
+        let timeline = ordinal_timeline(&bars);
 
-        assert_eq!(
-            volume_columns(&bars, 2, covering_window(&bars)),
-            vec![4.0, 8.0]
-        );
+        assert_eq!(volume_columns(&bars, 2, &timeline), vec![4.0, 8.0]);
     }
 
     #[test]
@@ -1518,11 +1967,9 @@ mod tests {
         let mut bars: Vec<_> = (0..2).map(bar).collect();
         bars[0].volume = 0.0;
         bars[1].volume = f64::NAN;
+        let timeline = ordinal_timeline(&bars);
 
-        assert_eq!(
-            volume_columns(&bars, 4, covering_window(&bars)),
-            vec![0.0; 4]
-        );
+        assert_eq!(volume_columns(&bars, 4, &timeline), vec![0.0; 4]);
     }
 
     #[test]
@@ -1546,11 +1993,11 @@ mod tests {
         let timestamp = Utc::now();
 
         assert_eq!(
-            format_axis_time(timestamp, DateRange::Day, 80).len(),
+            format_axis_tick(timestamp, DateRange::Day, 80).len(),
             "12:34".len()
         );
         assert_eq!(
-            format_axis_time(timestamp, DateRange::Month, 80).len(),
+            format_axis_tick(timestamp, DateRange::Month, 80).len(),
             "Jul 23".len()
         );
         for range in [
@@ -1560,7 +2007,7 @@ mod tests {
             DateRange::All,
         ] {
             assert_eq!(
-                format_axis_time(timestamp, range, 80).len(),
+                format_axis_tick(timestamp, range, 80).len(),
                 "Jul 2026".len()
             );
         }

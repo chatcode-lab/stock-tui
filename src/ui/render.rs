@@ -361,17 +361,17 @@ fn render_range_buttons(
         };
         let rect = Rect::new(x, y + row, width, 1);
         let active = state.date_range == range;
-        let exceeds_history = matches!(state.route, Route::Ticker(_))
+        let adds_no_history = matches!(state.route, Route::Ticker(_))
             && state
                 .detail
                 .as_ref()
-                .is_some_and(|detail| range_exceeds_history(detail, range));
+                .is_some_and(|detail| range_adds_no_history(detail, range));
         let style = if active {
             Style::default()
                 .fg(CANVAS)
                 .bg(CYAN)
                 .add_modifier(Modifier::BOLD)
-        } else if exceeds_history {
+        } else if adds_no_history {
             Style::default().fg(MUTED).bg(PANEL)
         } else {
             Style::default().fg(TEXT).bg(PANEL)
@@ -895,21 +895,17 @@ fn render_statistics(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, t
     );
 }
 
-fn range_exceeds_history(detail: &TickerDetail, range: DateRange) -> bool {
-    const TOLERANCE_DAYS: u64 = 7;
-
+fn range_adds_no_history(detail: &TickerDetail, range: DateRange) -> bool {
     if range == DateRange::All {
         return false;
     }
-    let Some((start, end)) = detail.history_start_at.zip(detail.history_end_at) else {
+    let Some(start) = detail.history_start_at else {
         return true;
     };
-    let observed_days = end
-        .signed_duration_since(start)
-        .num_days()
-        .max(0)
-        .unsigned_abs();
-    observed_days.saturating_add(TOLERANCE_DAYS) < range.days()
+    if range == DateRange::Day {
+        return false;
+    }
+    start >= range.previous().cutoff(detail.range_end_at)
 }
 
 fn compact_history_coverage(detail: &TickerDetail) -> Option<String> {

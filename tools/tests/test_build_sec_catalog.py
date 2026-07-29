@@ -340,6 +340,42 @@ class SecSharesRegressionTests(unittest.TestCase):
         )
         self.assertIsNone(fact)
 
+    def test_latest_visa_conversion_policy_includes_new_class(self) -> None:
+        visa = next(case for case in self.cases if case["issuer"] == "Visa")
+        base = fixture_components(visa)[0]
+        values = {
+            "CommonClassA": 1_704_112_694,
+            "CommonClassB1": 2_180_148,
+            "CommonClassB2": 486_669,
+            "CommonClassB3": 60_589_871,
+            "CommonClassC": 17_059_152,
+        }
+        components = [
+            replace(
+                base,
+                value=value,
+                end="2026-07-21",
+                accession="0001403161-26-000104",
+                filed="20260722",
+                segments=(("ClassOfStock", member),),
+            )
+            for member, value in values.items()
+        ]
+
+        fact = catalog.select_fsds_shares_fact(
+            visa["cik"],
+            visa["symbol"],
+            components,
+        )
+
+        self.assertIsNotNone(fact)
+        assert fact is not None
+        self.assertAlmostEqual(fact.value, 1_867_047_259.5289, places=3)
+        self.assertEqual(
+            fact.component_multipliers,
+            (1.0, 1.5445, 1.5014, 1.4953, 4.0),
+        )
+
     def test_visa_does_not_fall_back_past_newer_unknown_accession(self) -> None:
         visa = next(case for case in self.cases if case["issuer"] == "Visa")
         older = fixture_components(visa)
@@ -666,6 +702,63 @@ class SecSharesRegressionTests(unittest.TestCase):
         self.assertEqual(merged, fallback)
         self.assertEqual(merged.method, "fsds_reported_equivalent_class")
 
+    def test_reviewed_common_frame_total_supplies_dell_shares(self) -> None:
+        frame = catalog.FrameFact(
+            value=649_000_000,
+            end="2026-05-01",
+            accession="0001571996-26-000030",
+            frame="CY2026Q1I",
+            source=(
+                "sec_frame_us_gaap_common_stock_shares_outstanding_"
+                "CY2026Q1I"
+            ),
+        )
+
+        merged = catalog.merge_share_facts({}, {}, {1_571_996: frame})[
+            1_571_996
+        ]
+
+        self.assertEqual(merged.value, 649_000_000)
+        self.assertEqual(merged.method, "sec_frame_reviewed_common_total")
+        self.assertEqual(merged.confidence, "medium")
+        self.assertEqual(
+            merged.basis,
+            "one-to-one equal-economic Class A, B, and C common shares",
+        )
+        self.assertIn("dell-20260501.htm", merged.policy_source or "")
+
+    def test_dell_policy_rejects_an_unqualified_dei_cover_total(self) -> None:
+        component = catalog.ShareComponent(
+            value=325_000_000,
+            end="2026-05-01",
+            accession="unqualified",
+            filed="20260603",
+            form="10-Q",
+            quarters=0,
+            tag=catalog.SHARES_TAG,
+            taxonomy="dei/2025",
+            segments=(),
+            source="fixture",
+        )
+
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(1_571_996, "DELL", [component])
+        )
+
+    def test_common_frame_total_rejects_unreviewed_issuer(self) -> None:
+        frame = catalog.FrameFact(
+            value=100_000_000,
+            end="2026-05-01",
+            accession="unreviewed",
+            frame="CY2026Q1I",
+            source="fixture",
+        )
+
+        self.assertNotIn(
+            9_999_999,
+            catalog.merge_share_facts({}, {}, {9_999_999: frame}),
+        )
+
     def test_public_float_accepts_downward_correction(self) -> None:
         older = catalog.FrameFact(
             value=71_600_000_000,
@@ -864,6 +957,768 @@ class SecSharesRegressionTests(unittest.TestCase):
                     catalog.public_float_sanity_screen(cik, shares),
                     "reviewed_high_price_issuer",
                 )
+
+
+class FilingCoverShareTests(unittest.TestCase):
+    def test_latest_inline_submission_is_selected_safely(self) -> None:
+        recent = {
+            "accessionNumber": [
+                "0000000001-26-000001",
+                "0000000001-26-000002",
+                "0000000001-26-000003",
+            ],
+            "filingDate": ["2026-01-15", "2026-04-15", "2026-05-15"],
+            "form": ["10-K", "10-Q", "8-K"],
+            "primaryDocument": ["one.htm", "two.htm", "../unsafe.htm"],
+            "isInlineXBRL": [1, 1, 1],
+        }
+
+        selected = catalog.select_latest_inline_submission(
+            1,
+            recent,
+            date(2026, 7, 29),
+        )
+
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected["accession"], "0000000001-26-000002")
+        self.assertEqual(selected["instance"], "two_htm.xml")
+
+    def test_cover_parser_normalizes_class_dimensions(self) -> None:
+        payload = b"""<?xml version="1.0"?>
+<xbrli:xbrl
+  xmlns:xbrli="http://www.xbrl.org/2003/instance"
+  xmlns:xbrldi="http://xbrl.org/2006/xbrldi"
+  xmlns:dei="http://xbrl.sec.gov/dei/2025"
+  xmlns:us-gaap="http://fasb.org/us-gaap/2025"
+  xmlns:fake="https://example.com/fake">
+  <xbrli:unit id="shares"><xbrli:measure>xbrli:shares</xbrli:measure></xbrli:unit>
+  <xbrli:context id="a">
+    <xbrli:entity>
+      <xbrli:identifier scheme="http://www.sec.gov/CIK">1</xbrli:identifier>
+      <xbrli:segment>
+        <xbrldi:explicitMember dimension="us-gaap:StatementClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember>
+      </xbrli:segment>
+    </xbrli:entity>
+    <xbrli:period><xbrli:instant>2026-06-30</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <dei:EntityCommonStockSharesOutstanding contextRef="a" unitRef="shares">123000000</dei:EntityCommonStockSharesOutstanding>
+</xbrli:xbrl>
+"""
+        submission = {
+            "cik": 1,
+            "accession": "0000000001-26-000001",
+            "filed": "2026-07-15",
+            "form": "10-Q",
+        }
+
+        components = catalog.parse_filing_cover_share_components(
+            payload,
+            submission,
+            "sec_filing_xbrl_fixture",
+            date(2026, 7, 29),
+        )
+
+        self.assertEqual(len(components), 1)
+        self.assertEqual(
+            components[0].segments,
+            (("ClassOfStock", "CommonClassA"),),
+        )
+        self.assertEqual(components[0].value, 123_000_000)
+
+        fake_axis = payload.replace(
+            b"us-gaap:StatementClassOfStockAxis",
+            b"fake:StatementClassOfStockAxis",
+        )
+        self.assertEqual(
+            catalog.parse_filing_cover_share_components(
+                fake_axis,
+                submission,
+                "sec_filing_xbrl_fixture",
+                date(2026, 7, 29),
+            ),
+            [],
+        )
+        rebound_axis_prefix = payload.replace(
+            b"</xbrli:xbrl>",
+            (
+                b'<fake:marker xmlns:us-gaap="https://example.com/rebound"/>'
+                b"</xbrli:xbrl>"
+            ),
+        )
+        self.assertEqual(
+            catalog.parse_filing_cover_share_components(
+                rebound_axis_prefix,
+                submission,
+                "sec_filing_xbrl_fixture",
+                date(2026, 7, 29),
+            ),
+            [],
+        )
+        invalid_dei_release = payload.replace(
+            b"http://xbrl.sec.gov/dei/2025",
+            b"http://xbrl.sec.gov/dei/not-a-release",
+        )
+        self.assertEqual(
+            catalog.parse_filing_cover_share_components(
+                invalid_dei_release,
+                submission,
+                "sec_filing_xbrl_fixture",
+                date(2026, 7, 29),
+            ),
+            [],
+        )
+        invalid_gaap_release = payload.replace(
+            b"http://fasb.org/us-gaap/2025",
+            b"http://fasb.org/us-gaap/not-a-release",
+        )
+        self.assertEqual(
+            catalog.parse_filing_cover_share_components(
+                invalid_gaap_release,
+                submission,
+                "sec_filing_xbrl_fixture",
+                date(2026, 7, 29),
+            ),
+            [],
+        )
+
+        submission["cik"] = 2
+        self.assertEqual(
+            catalog.parse_filing_cover_share_components(
+                payload,
+                submission,
+                "sec_filing_xbrl_fixture",
+                date(2026, 7, 29),
+            ),
+            [],
+        )
+
+    def test_cover_parser_ignores_same_named_non_dei_fact(self) -> None:
+        payload = b"""<?xml version="1.0"?>
+<xbrli:xbrl
+  xmlns:xbrli="http://www.xbrl.org/2003/instance"
+  xmlns:fake="https://example.invalid/fake">
+  <xbrli:context id="a">
+    <xbrli:entity>
+      <xbrli:identifier scheme="http://www.sec.gov/CIK">1</xbrli:identifier>
+    </xbrli:entity>
+    <xbrli:period><xbrli:instant>2026-06-30</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <fake:EntityCommonStockSharesOutstanding contextRef="a">123000000</fake:EntityCommonStockSharesOutstanding>
+</xbrli:xbrl>
+"""
+        submission = {
+            "cik": 1,
+            "accession": "0000000001-26-000001",
+            "filed": "2026-07-15",
+            "form": "10-Q",
+        }
+
+        components = catalog.parse_filing_cover_share_components(
+            payload,
+            submission,
+            "sec_filing_xbrl_fixture",
+            date(2026, 7, 29),
+        )
+
+        self.assertEqual(components, [])
+
+    def test_reviewed_policy_uses_exact_accession_scoped_filing_fact(
+        self,
+    ) -> None:
+        payload = b"""<?xml version="1.0"?>
+<xbrli:xbrl
+  xmlns:xbrli="http://www.xbrl.org/2003/instance"
+  xmlns:xbrldi="http://xbrl.org/2006/xbrldi"
+  xmlns:dei="http://xbrl.sec.gov/dei/2025"
+  xmlns:us-gaap="http://fasb.org/us-gaap/2025"
+  xmlns:issuer="https://example.com/issuer/2026"
+  xmlns:fake="https://example.com/fake">
+  <xbrli:unit id="shares"><xbrli:measure>xbrli:shares</xbrli:measure></xbrli:unit>
+  <xbrli:context id="a">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">1</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:ClassOfStockAxis">us-gaap:CommonClassAMember</xbrldi:explicitMember></xbrli:segment>
+    </xbrli:entity>
+    <xbrli:period><xbrli:instant>2026-07-15</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="b">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">1</xbrli:identifier>
+      <xbrli:segment><xbrldi:explicitMember dimension="us-gaap:ClassOfStockAxis">us-gaap:CommonClassBMember</xbrldi:explicitMember></xbrli:segment>
+    </xbrli:entity>
+    <xbrli:period><xbrli:instant>2026-07-15</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <xbrli:context id="units">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">1</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:startDate>2026-04-01</xbrli:startDate><xbrli:endDate>2026-06-30</xbrli:endDate></xbrli:period>
+  </xbrli:context>
+  <dei:EntityCommonStockSharesOutstanding contextRef="a" unitRef="shares">100</dei:EntityCommonStockSharesOutstanding>
+  <dei:EntityCommonStockSharesOutstanding contextRef="b" unitRef="shares">20</dei:EntityCommonStockSharesOutstanding>
+  <issuer:FullyExchangedUnits contextRef="units" unitRef="shares">40</issuer:FullyExchangedUnits>
+</xbrli:xbrl>
+"""
+        accession = "0000000001-26-000001"
+        selector = {
+            "accession": accession,
+            "tag": "FullyExchangedUnits",
+            "namespace": "https://example.com/issuer/2026",
+            "unit": "shares",
+            "quarters": 1,
+            "start": "2026-04-01",
+            "end": "2026-06-30",
+            "segments": (),
+            "qualified_segments": (),
+            "multiplier": 1.0,
+        }
+        policy = {
+            "symbol": "ONE",
+            "confidence": "low",
+            "basis": "reviewed filing fact",
+            "price_basis": "fully_converted_canonical_symbol_proxy",
+            "policy_source": (
+                "https://www.sec.gov/Archives/edgar/data/1/"
+                "000000000126000001/one.htm"
+            ),
+            "members": {"CommonClassA": 1.0, "CommonClassB": 0.0},
+            "filing_facts": [selector],
+        }
+        submission = {
+            "cik": 1,
+            "accession": accession,
+            "filed": "2026-07-16",
+            "form": "10-Q",
+        }
+
+        components = catalog.parse_filing_cover_share_components(
+            payload,
+            submission,
+            "sec_filing_xbrl_fixture",
+            date(2026, 7, 29),
+            policy,
+        )
+        fact = catalog.select_fsds_shares_fact(
+            1,
+            "ONE",
+            components,
+            {1: policy},
+        )
+
+        self.assertIsNotNone(fact)
+        assert fact is not None
+        self.assertEqual(fact.value, 140)
+        self.assertEqual(fact.end, "2026-06-30")
+        self.assertEqual(fact.method, "filing_reviewed_fact_policy")
+        self.assertEqual(fact.component_multipliers, (1.0, 0.0, 1.0))
+        self.assertEqual(
+            catalog.select_preferred_shares_fact([fact]),
+            fact,
+        )
+        drifted_components = [
+            replace(component, accession="0000000001-27-999999")
+            for component in components
+        ]
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(
+                1,
+                "ONE",
+                drifted_components,
+                {1: policy},
+            )
+        )
+        duplicate_selector_policy = {
+            **policy,
+            "filing_facts": [selector, dict(selector)],
+        }
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(
+                1,
+                "ONE",
+                components,
+                {1: duplicate_selector_policy},
+            )
+        )
+
+        wrong_accession = {
+            **policy,
+            "filing_facts": [
+                {**selector, "accession": "0000000001-26-000002"}
+            ],
+        }
+        without_reported_fact = catalog.parse_filing_cover_share_components(
+            payload,
+            submission,
+            "sec_filing_xbrl_fixture",
+            date(2026, 7, 29),
+            wrong_accession,
+        )
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(
+                1,
+                "ONE",
+                without_reported_fact,
+                {1: wrong_accession},
+            )
+        )
+
+        fake_unit = payload.replace(b"xbrli:shares", b"fake:shares")
+        without_valid_unit = catalog.parse_filing_cover_share_components(
+            fake_unit,
+            submission,
+            "sec_filing_xbrl_fixture",
+            date(2026, 7, 29),
+            policy,
+        )
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(
+                1,
+                "ONE",
+                without_valid_unit,
+                {1: policy},
+            )
+        )
+
+    def test_inconsistent_duplicate_cover_totals_fail_closed(self) -> None:
+        first = catalog.ShareComponent(
+            value=100,
+            end="2026-06-30",
+            accession="cover",
+            filed="20260715",
+            form="10-Q",
+            quarters=0,
+            tag=catalog.SHARES_TAG,
+            taxonomy="dei/filing",
+            segments=(),
+            source="sec_filing_xbrl_cover",
+        )
+
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(
+                1,
+                "ONE",
+                [first, replace(first, value=200)],
+            )
+        )
+
+    def test_duplicate_context_and_unit_ids_fail_closed(self) -> None:
+        payload = b"""<?xml version="1.0"?>
+<xbrli:xbrl
+  xmlns:xbrli="http://www.xbrl.org/2003/instance"
+  xmlns:dei="http://xbrl.sec.gov/dei/2025">
+  <xbrli:unit id="shares"><xbrli:measure>xbrli:shares</xbrli:measure></xbrli:unit>
+  <xbrli:context id="current">
+    <xbrli:entity><xbrli:identifier scheme="http://www.sec.gov/CIK">1</xbrli:identifier></xbrli:entity>
+    <xbrli:period><xbrli:instant>2026-06-30</xbrli:instant></xbrli:period>
+  </xbrli:context>
+  <dei:EntityCommonStockSharesOutstanding contextRef="current" unitRef="shares">100</dei:EntityCommonStockSharesOutstanding>
+</xbrli:xbrl>
+"""
+        submission = {
+            "cik": 1,
+            "accession": "0000000001-26-000001",
+            "filed": "2026-07-15",
+            "form": "10-Q",
+        }
+        duplicate_unit = payload.replace(
+            b'<xbrli:context id="current">',
+            (
+                b'<xbrli:unit id="shares">'
+                b"<xbrli:measure>xbrli:shares</xbrli:measure>"
+                b"</xbrli:unit>"
+                b'<xbrli:context id="current">'
+            ),
+        )
+        duplicate_context = payload.replace(
+            b"<dei:EntityCommonStockSharesOutstanding",
+            (
+                b'<xbrli:context id="current"/>'
+                b"<dei:EntityCommonStockSharesOutstanding"
+            ),
+        )
+
+        for malformed in (duplicate_unit, duplicate_context):
+            with self.subTest(kind=malformed is duplicate_unit):
+                self.assertEqual(
+                    catalog.parse_filing_cover_share_components(
+                        malformed,
+                        submission,
+                        "sec_filing_xbrl_fixture",
+                        date(2026, 7, 29),
+                    ),
+                    [],
+                )
+
+    def test_reviewed_equal_classes_reject_inconsistent_cover_totals(
+        self,
+    ) -> None:
+        base = catalog.ShareComponent(
+            value=100,
+            end="2026-06-30",
+            accession="cover",
+            filed="20260715",
+            form="10-Q",
+            quarters=0,
+            tag=catalog.SHARES_TAG,
+            taxonomy="dei/filing",
+            segments=(("ClassOfStock", "CommonClassA"),),
+            source="sec_filing_xbrl_cover",
+        )
+        components = [
+            base,
+            replace(
+                base,
+                value=50,
+                segments=(("ClassOfStock", "CommonClassB"),),
+            ),
+            replace(base, value=150, segments=()),
+            replace(base, value=999, segments=()),
+        ]
+
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(
+                320187,
+                "NKE",
+                components,
+            )
+        )
+
+    def test_single_common_cover_class_ignores_preferred_class(self) -> None:
+        common = catalog.ShareComponent(
+            value=200_000_000,
+            end="2026-06-30",
+            accession="cover",
+            filed="20260715",
+            form="10-Q",
+            quarters=0,
+            tag=catalog.SHARES_TAG,
+            taxonomy="dei/filing",
+            segments=(("ClassOfStock", "CommonUnits"),),
+            source="sec_filing_xbrl_cover",
+        )
+        preferred = replace(
+            common,
+            value=10_000_000,
+            segments=(("ClassOfStock", "ConvertiblePreferredUnits"),),
+        )
+
+        fact = catalog.select_fsds_shares_fact(
+            1,
+            "ONE",
+            [common, preferred],
+        )
+
+        self.assertIsNotNone(fact)
+        assert fact is not None
+        self.assertEqual(fact.value, 200_000_000)
+        self.assertEqual(fact.method, "filing_cover_single_class")
+
+    def test_reviewed_cover_policy_sums_and_excludes_exact_members(self) -> None:
+        base = catalog.ShareComponent(
+            value=100,
+            end="2026-06-30",
+            accession="cover",
+            filed="20260715",
+            form="10-Q",
+            quarters=0,
+            tag=catalog.SHARES_TAG,
+            taxonomy="dei/filing",
+            segments=(("ClassOfStock", "CommonClassA"),),
+            source="sec_filing_xbrl_cover",
+        )
+        components = [
+            base,
+            replace(
+                base,
+                value=50,
+                segments=(("ClassOfStock", "CommonClassB"),),
+            ),
+        ]
+        policy = {
+            1: {
+                "symbol": "ONE",
+                "confidence": "medium",
+                "basis": "reviewed fixture",
+                "price_basis": "canonical_symbol_proxy",
+                "policy_source": "https://www.sec.gov/fixture",
+                "members": {"CommonClassA": 1.0, "CommonClassB": 0.0},
+            }
+        }
+
+        fact = catalog.select_fsds_shares_fact(
+            1,
+            "ONE",
+            components,
+            policy,
+        )
+
+        self.assertIsNotNone(fact)
+        assert fact is not None
+        self.assertEqual(fact.value, 100)
+        self.assertEqual(fact.method, "filing_cover_reviewed_policy")
+        self.assertEqual(fact.component_multipliers, (1.0, 0.0))
+
+        unexpected = replace(
+            base,
+            value=25,
+            segments=(("ClassOfStock", "CommonClassC"),),
+        )
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(
+                1,
+                "ONE",
+                [*components, unexpected],
+                policy,
+            )
+        )
+
+    def test_reviewed_cover_policy_rejects_an_unknown_dimension(self) -> None:
+        component = catalog.ShareComponent(
+            value=100,
+            end="2026-06-30",
+            accession="cover",
+            filed="20260715",
+            form="10-Q",
+            quarters=0,
+            tag=catalog.SHARES_TAG,
+            taxonomy="dei/filing",
+            segments=(
+                ("ClassOfStock", "CommonClassA"),
+                ("Unexpected", "Unexpected"),
+            ),
+            source="sec_filing_xbrl_cover",
+        )
+        policy = {
+            1: {
+                "symbol": "ONE",
+                "confidence": "medium",
+                "basis": "reviewed fixture",
+                "price_basis": "canonical_symbol_proxy",
+                "policy_source": "https://www.sec.gov/fixture",
+                "members": {"CommonClassA": 1.0},
+            }
+        }
+
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(1, "ONE", [component], policy)
+        )
+
+    def test_generic_cover_selection_rejects_an_unknown_dimension(self) -> None:
+        component = catalog.ShareComponent(
+            value=100,
+            end="2026-06-30",
+            accession="cover",
+            filed="20260715",
+            form="10-Q",
+            quarters=0,
+            tag=catalog.SHARES_TAG,
+            taxonomy="dei/filing",
+            segments=(
+                ("ClassOfStock", "CommonClassA"),
+                ("Unexpected", "Unexpected"),
+            ),
+            source="sec_filing_xbrl_cover",
+        )
+
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(1, "ONE", [component])
+        )
+
+    def test_stale_share_fact_is_rejected_absolutely(self) -> None:
+        stale = catalog.SharesFact(
+            value=100,
+            end="2023-09-30",
+            accession="stale",
+            filed="20231030",
+            form="10-Q",
+            source="fixture",
+            method="sec_frame_dei_total",
+            confidence="high",
+            components=(),
+        )
+
+        self.assertIsNone(
+            catalog.select_preferred_shares_fact(
+                [stale],
+                as_of=date(2026, 7, 29),
+            )
+        )
+
+    def test_limited_partnership_weighted_units_are_low_confidence(self) -> None:
+        component = catalog.parse_fsds_share_component(
+            {
+                "tag": catalog.LIMITED_PARTNERS_WEIGHTED_UNITS_TAG,
+                "version": "us-gaap/2025",
+                "ddate": "20251231",
+                "qtrs": "4",
+                "uom": "shares",
+                "segments": "",
+                "coreg": "",
+                "value": "211667000",
+            },
+            {
+                "accession": "0000000001-26-000001",
+                "filed": "20260220",
+                "form": "10-K",
+            },
+            "fixture",
+        )
+
+        self.assertIsNotNone(component)
+        assert component is not None
+        fact = catalog.select_fsds_shares_fact(1, "ONE", [component])
+        self.assertIsNotNone(fact)
+        assert fact is not None
+        self.assertEqual(fact.value, 211_667_000)
+        self.assertEqual(fact.confidence, "low")
+        self.assertEqual(
+            fact.method,
+            "fsds_limited_partners_weighted_average",
+        )
+
+    def test_ambiguous_latest_cover_suppresses_old_partnership_fallback(
+        self,
+    ) -> None:
+        old = catalog.ShareComponent(
+            value=200_000_000,
+            end="2025-12-31",
+            accession="old",
+            filed="20260220",
+            form="10-K",
+            quarters=4,
+            tag=catalog.LIMITED_PARTNERS_WEIGHTED_UNITS_TAG,
+            taxonomy="us-gaap/2025",
+            segments=(),
+            source="fixture_fsds_num",
+        )
+        common_a = catalog.ShareComponent(
+            value=100_000_000,
+            end="2026-06-30",
+            accession="cover",
+            filed="20260715",
+            form="10-Q",
+            quarters=0,
+            tag=catalog.SHARES_TAG,
+            taxonomy="dei/filing",
+            segments=(("ClassOfStock", "CommonClassA"),),
+            source="sec_filing_xbrl_cover",
+        )
+        common_b = replace(
+            common_a,
+            value=50_000_000,
+            segments=(("ClassOfStock", "CommonClassB"),),
+        )
+
+        self.assertIsNone(
+            catalog.select_fsds_shares_fact(
+                1,
+                "ONE",
+                [old, common_a, common_b],
+            )
+        )
+
+    def test_reviewed_policy_registry_matches_ambiguous_issuer_set(self) -> None:
+        policies = catalog.load_reviewed_share_policies()
+        symbols = {policy["symbol"] for policy in policies.values()}
+
+        self.assertEqual(
+            symbols,
+            {
+                "ADT",
+                "ALIT",
+                "ATRO",
+                "BAM",
+                "BATRA",
+                "BF-A",
+                "CMCSA",
+                "COKE",
+                "DDS",
+                "DELL",
+                "DKNG",
+                "ERIE",
+                "FFAI",
+                "FHI",
+                "FWONA",
+                "H",
+                "HLNE",
+                "HSY",
+                "HVII",
+                "JBSS",
+                "KRP",
+                "LBRDA",
+                "LBTYA",
+                "LEN",
+                "MC",
+                "METC",
+                "PJT",
+                "PLNT",
+                "PPLI",
+                "RYAN",
+                "SEI",
+                "SPG",
+                "STZ",
+                "SUN",
+                "TSN",
+                "UHAL",
+                "UPS",
+                "VERX",
+                "VGAS",
+                "WHD",
+                "WMG",
+                "WSO",
+                "WTTR",
+                "YOU",
+            },
+        )
+
+    def test_checked_in_catalog_resolves_every_reviewed_policy(self) -> None:
+        policies = catalog.load_reviewed_share_policies()
+        payload = json.loads(
+            (Path(__file__).parents[2] / "data" / "sec_universe.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        by_cik = {
+            int(company["cik"]): company
+            for company in payload["companies"]
+        }
+
+        for cik, policy in policies.items():
+            with self.subTest(symbol=policy["symbol"]):
+                company = by_cik[cik]
+                self.assertEqual(company["symbol"], policy["symbol"])
+                self.assertIsNotNone(company["shares_outstanding"])
+                self.assertIsNotNone(company["shares_method"])
+        self.assertEqual(
+            payload["selection"]["share_coverage"]["top_100_unresolved"],
+            0,
+        )
+
+    def test_catalog_validation_rejects_an_unresolved_top_100_company(
+        self,
+    ) -> None:
+        companies = [
+            {
+                "cik": str(index + 1),
+                "symbol": f"T{index:04d}",
+                "sector": sector,
+                "rank": rank,
+                "shares_outstanding": 1,
+            }
+            for index, (sector, rank) in enumerate(
+                (sector, rank)
+                for sector in catalog.SECTORS
+                for rank in range(1, catalog.MIN_COMPANIES_PER_SECTOR + 1)
+            )
+        ]
+        catalog.validate_catalog(companies)
+        companies[0]["shares_outstanding"] = None
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "top-100 share coverage regression: T0000",
+        ):
+            catalog.validate_catalog(
+                companies,
+                {1: "policy_signature_changed"},
+            )
 
 
 if __name__ == "__main__":

@@ -643,6 +643,17 @@ fn normalize_sec_symbol(symbol: &str) -> String {
     }
 }
 
+/// Return a newer catalog canonical for a retired display symbol.
+///
+/// These are catalog membership replacements, not interchangeable market-data
+/// aliases: the retired security remains independently searchable and usable.
+pub(crate) fn catalog_symbol_replacement(symbol: &str) -> Option<&'static str> {
+    match symbol {
+        "GOOGL" => Some("GOOG"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -698,10 +709,33 @@ mod tests {
     }
 
     #[test]
+    fn embedded_catalog_includes_reviewed_dell_common_shares() {
+        let companies = embedded_companies(Utc::now()).expect("embedded catalog");
+        let dell = companies
+            .iter()
+            .find(|company| company.symbol == "DELL")
+            .expect("Dell catalog entry");
+
+        assert_eq!(dell.shares_outstanding, Some(648_107_991.0));
+        assert_eq!(dell.shares_as_of, NaiveDate::from_ymd_opt(2026, 6, 2));
+        assert_eq!(
+            dell.shares_method.as_deref(),
+            Some("filing_cover_reviewed_policy")
+        );
+        assert_eq!(dell.shares_confidence.as_deref(), Some("medium"));
+    }
+
+    #[test]
     fn sec_share_class_symbols_use_alpaca_notation() {
         assert_eq!(normalize_sec_symbol("BRK-B"), "BRK.B");
         assert_eq!(normalize_sec_symbol("TRTN-PA"), "TRTN.PRA");
         assert_eq!(normalize_sec_symbol("AAPL"), "AAPL");
+    }
+
+    #[test]
+    fn retired_alphabet_catalog_symbol_points_to_the_concise_class() {
+        assert_eq!(catalog_symbol_replacement("GOOGL"), Some("GOOG"));
+        assert_eq!(catalog_symbol_replacement("GOOG"), None);
     }
 
     #[test]

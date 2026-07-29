@@ -6,6 +6,7 @@ use ratatui::layout::{Position, Rect};
 use crate::{
     benchmarks::MarketBenchmark,
     domain::{Company, DateRange, MarketTile, Sector, SortMode, SyncProgress, TickerDetail},
+    market::MarketContext,
     palette::Theme,
     ui::layout::SectorView,
 };
@@ -157,6 +158,7 @@ pub struct UiState {
     pub snapshot_checkpoint: Option<DateTime<Utc>>,
     pub auto_refresh_interval: Option<Duration>,
     pub theme: Theme,
+    pub market_context: MarketContext,
     pub data_provider_label: String,
     pub simulated_data: bool,
 }
@@ -197,6 +199,7 @@ impl Default for UiState {
             snapshot_checkpoint: None,
             auto_refresh_interval: None,
             theme: Theme::detect(),
+            market_context: MarketContext::default(),
             data_provider_label: "Unconfigured".to_owned(),
             simulated_data: false,
         }

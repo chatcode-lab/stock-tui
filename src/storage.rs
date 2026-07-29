@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use rusqlite::{
     Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params, types::Type,
 };
@@ -16,9 +16,10 @@ use crate::{
     domain::{
         Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, SortMode, TickerDetail,
     },
+    market::{CacheIdentity, MarketContext},
 };
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const STALE_AFTER_HOURS: i64 = 72;
 const MAX_MEMBERS_PER_SECTOR: usize = 100;
 const TIMEFRAME_EXISTS_SQL: &str = "
@@ -198,9 +199,37 @@ ALTER TABLE companies ADD COLUMN shares_confidence TEXT;
 ALTER TABLE sector_memberships ADD COLUMN size_proxy REAL;
 "#;
 
+const MIGRATION_3: &str = r#"
+CREATE TABLE IF NOT EXISTS cache_context (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    namespace TEXT NOT NULL,
+    market_id TEXT NOT NULL,
+    symbol_namespace TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    regular_open TEXT NOT NULL,
+    regular_close TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+"#;
+
 #[derive(Debug, Clone)]
 pub struct Storage {
     path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CachePreparation {
+    Initialized,
+    Reused,
+    Reset,
+}
+
+impl CachePreparation {
+    #[must_use]
+    pub const fn was_reset(self) -> bool {
+        matches!(self, Self::Reset)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -236,6 +265,17 @@ struct ResolvedPeriod {
     period_return: Option<f64>,
     updated_at: Option<DateTime<Utc>>,
     source: Option<EndpointSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoredCacheIdentity {
+    namespace: String,
+    market_id: String,
+    symbol_namespace: String,
+    currency: String,
+    timezone: String,
+    regular_open: String,
+    regular_close: String,
 }
 
 type PeriodMetricRow = (Option<f64>, Option<i64>, Option<f64>, Option<i64>);
@@ -305,6 +345,13 @@ impl Storage {
                 ))
                 .context("could not apply SQLite schema migration 2")?;
         }
+        if current < 3 {
+            connection
+                .execute_batch(&format!(
+                    "BEGIN IMMEDIATE;\n{MIGRATION_3}\nPRAGMA user_version = 3;\nCOMMIT;"
+                ))
+                .context("could not apply SQLite schema migration 3")?;
+        }
         Ok(())
     }
 
@@ -318,6 +365,61 @@ impl Storage {
         self.connection()?
             .pragma_query_value(None, "journal_mode", |row| row.get(0))
             .context("could not read SQLite journal mode")
+    }
+
+    /// Stamps a live cache with the active provider dataset and market context.
+    ///
+    /// A different provider, endpoint, feed, symbol namespace, or session profile
+    /// invalidates unscoped rows. Favorite symbols are retained as neutral company
+    /// records so the next synchronization can hydrate them again.
+    pub fn prepare_live_cache(&self, identity: &CacheIdentity) -> Result<CachePreparation> {
+        validate_cache_identity(identity)?;
+        let expected = StoredCacheIdentity::from(identity);
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("could not begin live cache preparation")?;
+        let current = load_stored_cache_identity(&transaction)?;
+        if current.as_ref() == Some(&expected) {
+            transaction
+                .commit()
+                .context("could not finish live cache inspection")?;
+            return Ok(CachePreparation::Reused);
+        }
+
+        let has_cached_rows: bool = transaction.query_row(
+            "SELECT
+                EXISTS(SELECT 1 FROM companies LIMIT 1)
+                OR EXISTS(SELECT 1 FROM sector_memberships LIMIT 1)
+                OR EXISTS(SELECT 1 FROM bars LIMIT 1)
+                OR EXISTS(SELECT 1 FROM snapshots LIMIT 1)
+                OR EXISTS(SELECT 1 FROM news LIMIT 1)
+                OR EXISTS(SELECT 1 FROM sync_checkpoints LIMIT 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        let preparation = if current.is_some() || has_cached_rows {
+            clear_incompatible_live_rows(&transaction)?;
+            CachePreparation::Reset
+        } else {
+            CachePreparation::Initialized
+        };
+        store_cache_identity(&transaction, &expected)?;
+        transaction
+            .commit()
+            .context("could not commit live cache preparation")?;
+        Ok(preparation)
+    }
+
+    pub fn cache_identity(&self) -> Result<Option<CacheIdentity>> {
+        let connection = self.connection()?;
+        load_stored_cache_identity(&connection)?
+            .map(StoredCacheIdentity::into_domain)
+            .transpose()
+    }
+
+    pub fn market_context(&self) -> Result<Option<MarketContext>> {
+        Ok(self.cache_identity()?.map(|identity| identity.market))
     }
 
     pub fn upsert_companies(&self, companies: &[Company]) -> Result<usize> {
@@ -1129,7 +1231,7 @@ impl Storage {
             .bars(
                 &company.symbol,
                 Some(timeframe),
-                Some(range.cutoff(now)),
+                Some(range.detail_history_cutoff(now)),
                 Some(now),
                 None,
             )?
@@ -1282,8 +1384,171 @@ impl Storage {
         transaction.execute("DELETE FROM sector_memberships", [])?;
         transaction.execute("DELETE FROM companies", [])?;
         transaction.execute("DELETE FROM sync_checkpoints", [])?;
+        transaction.execute("DELETE FROM cache_context", [])?;
         transaction.commit().context("could not commit cache reset")
     }
+}
+
+impl From<&CacheIdentity> for StoredCacheIdentity {
+    fn from(identity: &CacheIdentity) -> Self {
+        Self {
+            namespace: identity.namespace.to_string(),
+            market_id: identity.market.id.to_string(),
+            symbol_namespace: identity.market.symbol_namespace.to_string(),
+            currency: identity.market.currency.to_string(),
+            timezone: identity.market.timezone.to_string(),
+            regular_open: identity.market.regular_open.format("%H:%M:%S").to_string(),
+            regular_close: identity.market.regular_close.format("%H:%M:%S").to_string(),
+        }
+    }
+}
+
+impl StoredCacheIdentity {
+    fn into_domain(self) -> Result<CacheIdentity> {
+        let timezone = self
+            .timezone
+            .parse()
+            .with_context(|| format!("invalid cached market timezone {:?}", self.timezone))?;
+        let regular_open =
+            NaiveTime::parse_from_str(&self.regular_open, "%H:%M:%S").with_context(|| {
+                format!(
+                    "invalid cached regular-session open {:?}",
+                    self.regular_open
+                )
+            })?;
+        let regular_close = NaiveTime::parse_from_str(&self.regular_close, "%H:%M:%S")
+            .with_context(|| {
+                format!(
+                    "invalid cached regular-session close {:?}",
+                    self.regular_close
+                )
+            })?;
+        if regular_close <= regular_open {
+            bail!("cached regular-session close must be later than its open");
+        }
+        Ok(CacheIdentity::new(
+            self.namespace,
+            MarketContext {
+                id: self.market_id.into(),
+                symbol_namespace: self.symbol_namespace.into(),
+                currency: self.currency.into(),
+                timezone,
+                regular_open,
+                regular_close,
+            },
+        ))
+    }
+}
+
+fn validate_cache_identity(identity: &CacheIdentity) -> Result<()> {
+    if identity.namespace.trim().is_empty()
+        || identity.market.id.trim().is_empty()
+        || identity.market.symbol_namespace.trim().is_empty()
+        || identity.market.currency.trim().is_empty()
+    {
+        bail!("cache identity fields must not be empty");
+    }
+    if identity.market.regular_close <= identity.market.regular_open {
+        bail!("regular-session close must be later than its open");
+    }
+    Ok(())
+}
+
+fn load_stored_cache_identity(connection: &Connection) -> Result<Option<StoredCacheIdentity>> {
+    connection
+        .query_row(
+            "SELECT
+                namespace, market_id, symbol_namespace, currency, timezone,
+                regular_open, regular_close
+             FROM cache_context
+             WHERE singleton = 1",
+            [],
+            |row| {
+                Ok(StoredCacheIdentity {
+                    namespace: row.get(0)?,
+                    market_id: row.get(1)?,
+                    symbol_namespace: row.get(2)?,
+                    currency: row.get(3)?,
+                    timezone: row.get(4)?,
+                    regular_open: row.get(5)?,
+                    regular_close: row.get(6)?,
+                })
+            },
+        )
+        .optional()
+        .context("could not load cache identity")
+}
+
+fn store_cache_identity(
+    transaction: &Transaction<'_>,
+    identity: &StoredCacheIdentity,
+) -> Result<()> {
+    transaction
+        .execute(
+            "INSERT INTO cache_context (
+                singleton, namespace, market_id, symbol_namespace, currency,
+                timezone, regular_open, regular_close, updated_at
+             ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(singleton) DO UPDATE SET
+                namespace = excluded.namespace,
+                market_id = excluded.market_id,
+                symbol_namespace = excluded.symbol_namespace,
+                currency = excluded.currency,
+                timezone = excluded.timezone,
+                regular_open = excluded.regular_open,
+                regular_close = excluded.regular_close,
+                updated_at = excluded.updated_at",
+            params![
+                identity.namespace,
+                identity.market_id,
+                identity.symbol_namespace,
+                identity.currency,
+                identity.timezone,
+                identity.regular_open,
+                identity.regular_close,
+                timestamp_millis(Utc::now()),
+            ],
+        )
+        .context("could not store cache identity")?;
+    Ok(())
+}
+
+fn clear_incompatible_live_rows(transaction: &Transaction<'_>) -> Result<()> {
+    transaction.execute("DELETE FROM news", [])?;
+    transaction.execute("DELETE FROM snapshots", [])?;
+    transaction.execute("DELETE FROM bars", [])?;
+    transaction.execute("DELETE FROM sector_memberships", [])?;
+    transaction.execute("DELETE FROM sync_checkpoints", [])?;
+    transaction.execute(
+        "DELETE FROM companies
+         WHERE symbol NOT IN (SELECT symbol FROM favorites)",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE companies
+         SET name = symbol,
+             sector = NULL,
+             raw_sector = NULL,
+             exchange = '',
+             industry = '',
+             market_cap = NULL,
+             size_proxy = NULL,
+             size_proxy_source = NULL,
+             size_proxy_as_of = NULL,
+             size_proxy_confidence = NULL,
+             shares_outstanding = NULL,
+             shares_source = NULL,
+             shares_as_of = NULL,
+             shares_method = NULL,
+             shares_confidence = NULL,
+             rank = NULL,
+             description = '',
+             in_universe = 0,
+             retained = 1,
+             updated_at = ?1",
+        [timestamp_millis(Utc::now())],
+    )?;
+    Ok(())
 }
 
 fn upsert_company(
@@ -2022,7 +2287,7 @@ mod tests {
         let directory = tempdir()?;
         let path = directory.path().join("market.sqlite3");
         let storage = Storage::open(&path)?;
-        assert_eq!(storage.schema_version()?, 2);
+        assert_eq!(storage.schema_version()?, 3);
         assert_eq!(storage.journal_mode()?.to_ascii_lowercase(), "wal");
 
         let now = instant(13);
@@ -2107,7 +2372,7 @@ mod tests {
         drop(connection);
 
         let storage = Storage::open(&path)?;
-        assert_eq!(storage.schema_version()?, 2);
+        assert_eq!(storage.schema_version()?, 3);
         let legacy = storage.company("LEGACY")?.expect("legacy company survives");
         assert_eq!(legacy.name, "Legacy Company");
         assert_eq!(legacy.size_proxy, None);
@@ -2135,11 +2400,139 @@ mod tests {
         let directory = tempdir()?;
         let path = directory.path().join("future.sqlite3");
         let connection = Connection::open(&path)?;
-        connection.execute_batch("PRAGMA user_version = 3;")?;
+        connection.execute_batch("PRAGMA user_version = 4;")?;
         drop(connection);
 
         let error = Storage::open(&path).expect_err("future schema must be rejected");
-        assert!(error.to_string().contains("newer than supported version 2"));
+        assert!(error.to_string().contains("newer than supported version 3"));
+        Ok(())
+    }
+
+    #[test]
+    fn live_cache_identity_reuses_exact_context_and_resets_incompatible_rows() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let iex = CacheIdentity::new("alpaca:v1|feed=iex", MarketContext::us_equities());
+        assert_eq!(
+            storage.prepare_live_cache(&iex)?,
+            CachePreparation::Initialized
+        );
+        assert_eq!(storage.cache_identity()?, Some(iex.clone()));
+        assert_eq!(storage.prepare_live_cache(&iex)?, CachePreparation::Reused);
+
+        let now = instant(13);
+        storage.replace_universe(
+            now.date_naive(),
+            &[
+                company(
+                    "KEEP",
+                    "Favorite Company",
+                    Sector::Technology,
+                    300.0,
+                    Some(1),
+                    now,
+                ),
+                company(
+                    "DROP",
+                    "Other Company",
+                    Sector::Financial,
+                    200.0,
+                    Some(1),
+                    now,
+                ),
+            ],
+        )?;
+        storage.set_favorite("KEEP", true)?;
+        storage.upsert_bars(&[
+            bar("KEEP", now, 101.0, 1_000.0),
+            bar("DROP", now, 51.0, 500.0),
+        ])?;
+        storage.upsert_snapshots(&[
+            snapshot("KEEP", 101.0, 100.0, 1_000.0, now),
+            snapshot("DROP", 51.0, 50.0, 500.0, now),
+        ])?;
+        storage.upsert_news(&[NewsItem {
+            id: "provider-news".to_owned(),
+            headline: "Provider-specific headline".to_owned(),
+            source: "Provider".to_owned(),
+            published_at: now,
+            url: "https://example.com/news".to_owned(),
+            summary: String::new(),
+            symbols: vec!["KEEP".to_owned()],
+        }])?;
+        storage.set_sync_checkpoint("snapshots", now)?;
+
+        let sip = CacheIdentity::new("alpaca:v1|feed=sip", MarketContext::us_equities());
+        let preparation = storage.prepare_live_cache(&sip)?;
+        assert_eq!(preparation, CachePreparation::Reset);
+        assert!(preparation.was_reset());
+        assert_eq!(storage.cache_identity()?, Some(sip.clone()));
+        assert_eq!(storage.market_context()?, Some(sip.market.clone()));
+        assert_eq!(
+            storage.counts()?,
+            StorageCounts {
+                companies: 1,
+                favorites: 1,
+                ..StorageCounts::default()
+            }
+        );
+        assert!(storage.company("DROP")?.is_none());
+        let favorite = storage.company("KEEP")?.expect("favorite symbol survives");
+        assert_eq!(favorite.name, "KEEP");
+        assert_eq!(favorite.sector, None);
+        assert_eq!(favorite.exchange, "");
+        assert_eq!(favorite.market_cap, None);
+        assert_eq!(favorite.shares_outstanding, None);
+        assert_eq!(favorite.rank, None);
+        assert!(!favorite.in_universe);
+        assert!(favorite.retained);
+        assert_eq!(storage.favorite_symbols()?, vec!["KEEP".to_owned()]);
+        assert_eq!(storage.prepare_live_cache(&sip)?, CachePreparation::Reused);
+
+        storage.upsert_bars(&[bar("KEEP", now, 102.0, 250.0)])?;
+        let other_market = MarketContext {
+            id: "uk-equities".into(),
+            symbol_namespace: "uk-equity".into(),
+            currency: "GBP".into(),
+            timezone: chrono_tz::Europe::London,
+            regular_open: NaiveTime::from_hms_opt(8, 0, 0).expect("valid London-session open"),
+            regular_close: NaiveTime::from_hms_opt(16, 30, 0).expect("valid London-session close"),
+        };
+        let london = CacheIdentity::new(sip.namespace, other_market);
+        assert_eq!(
+            storage.prepare_live_cache(&london)?,
+            CachePreparation::Reset
+        );
+        assert!(storage.bars("KEEP", None, None, None, None)?.is_empty());
+        assert_eq!(storage.cache_identity()?, Some(london));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_unstamped_rows_are_not_assumed_to_match_a_live_provider() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        storage.upsert_companies(&[company(
+            "OLD",
+            "Ambiguous Cached Company",
+            Sector::Technology,
+            100.0,
+            Some(1),
+            now,
+        )])?;
+        storage.upsert_bars(&[bar("OLD", now, 10.0, 100.0)])?;
+
+        let identity = CacheIdentity::new(
+            "stock-api:v1|base=https://stock.example/",
+            MarketContext::default(),
+        );
+        assert_eq!(
+            storage.prepare_live_cache(&identity)?,
+            CachePreparation::Reset
+        );
+        assert_eq!(storage.counts()?, StorageCounts::default());
+        assert_eq!(storage.cache_identity()?, Some(identity));
         Ok(())
     }
 
@@ -2396,7 +2789,7 @@ mod tests {
             .ticker_detail("aaa", DateRange::Week, now, 10)?
             .expect("known company");
         assert_eq!(detail.company.symbol, "AAA");
-        assert_eq!(detail.bars.len(), 1);
+        assert_eq!(detail.bars.len(), 2);
         assert_eq!(detail.news[0].headline, "Alpha ships a product");
         assert_eq!(detail.sector_rank, Some(1));
         assert!(

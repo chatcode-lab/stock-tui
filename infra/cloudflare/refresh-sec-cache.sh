@@ -13,7 +13,7 @@ shopt -s nullglob
 for metadata in "$cache_dir"/*.meta.json; do
   url="$(jq -er '.url // empty' "$metadata")"
   case "$url" in
-    https://www.sec.gov/files/company_tickers_exchange.json|https://data.sec.gov/api/xbrl/frames/*)
+    https://www.sec.gov/files/company_tickers_exchange.json|https://data.sec.gov/api/xbrl/frames/*|https://data.sec.gov/submissions/CIK*.json)
       stem="${metadata%.meta.json}"
       rm -f -- "$metadata" "$stem".*
       removed=$((removed + 1))

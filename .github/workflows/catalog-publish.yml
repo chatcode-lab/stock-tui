@@ -63,7 +63,17 @@ jobs:
           python3 tools/build_sec_catalog.py \
             --cache-dir "$SEC_CACHE_DIR" \
             --output "$CATALOG_OUTPUT"
-          jq -e '.schema_version == 2 and (.companies | length >= 900)' \
+          jq -e '
+            .schema_version == 2
+            and (.companies | length >= 900)
+            and .selection.share_coverage.top_100_unresolved == 0
+            and (
+              [.companies[]
+                | select(.rank <= 100 and .shares_outstanding == null)
+              ]
+              | length == 0
+            )
+          ' \
             "$CATALOG_OUTPUT" >/dev/null
 
       - name: Package compact runtime catalog

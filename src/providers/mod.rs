@@ -14,7 +14,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use tokio::sync::Mutex;
 
-use crate::domain::{Bar, Company, NewsItem, Snapshot, StockSplit};
+use crate::{
+    domain::{Bar, Company, NewsItem, Snapshot, StockSplit},
+    market::{CacheIdentity, MarketContext},
+};
 
 pub use alpaca::AlpacaProvider;
 pub use stock_api::StockApiProvider;
@@ -131,6 +134,8 @@ struct CorporateActionsCache {
 pub struct ProviderSet {
     id: Arc<str>,
     display_name: Arc<str>,
+    cache_namespace: Arc<str>,
+    market_context: MarketContext,
     assets: Arc<dyn AssetProvider>,
     market_data: Arc<dyn MarketDataProvider>,
     corporate_actions: Option<Arc<dyn CorporateActionsProvider>>,
@@ -146,9 +151,12 @@ impl ProviderSet {
         assets: Arc<dyn AssetProvider>,
         market_data: Arc<dyn MarketDataProvider>,
     ) -> Self {
+        let id = id.into();
         Self {
-            id: id.into(),
+            cache_namespace: id.clone(),
+            id,
             display_name: display_name.into(),
+            market_context: MarketContext::default(),
             assets,
             market_data,
             corporate_actions: None,
@@ -189,6 +197,18 @@ impl ProviderSet {
     }
 
     #[must_use]
+    pub fn with_cache_namespace(mut self, cache_namespace: impl Into<Arc<str>>) -> Self {
+        self.cache_namespace = cache_namespace.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_market_context(mut self, market_context: MarketContext) -> Self {
+        self.market_context = market_context;
+        self
+    }
+
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.id
     }
@@ -196,6 +216,16 @@ impl ProviderSet {
     #[must_use]
     pub fn display_name(&self) -> &str {
         &self.display_name
+    }
+
+    #[must_use]
+    pub fn cache_identity(&self) -> CacheIdentity {
+        CacheIdentity::new(self.cache_namespace.clone(), self.market_context.clone())
+    }
+
+    #[must_use]
+    pub fn market_context(&self) -> &MarketContext {
+        &self.market_context
     }
 
     #[must_use]
@@ -372,6 +402,8 @@ impl fmt::Debug for ProviderSet {
             .debug_struct("ProviderSet")
             .field("id", &self.id)
             .field("display_name", &self.display_name)
+            .field("cache_namespace", &self.cache_namespace)
+            .field("market_context", &self.market_context)
             .field("corporate_actions", &self.supports_corporate_actions())
             .field("news", &self.supports_news())
             .finish_non_exhaustive()
@@ -475,6 +507,8 @@ mod tests {
 
         assert_eq!(providers.id(), "fixture");
         assert_eq!(providers.display_name(), "Fixture");
+        assert_eq!(providers.cache_identity().namespace.as_ref(), "fixture");
+        assert_eq!(providers.market_context(), &MarketContext::us_equities());
         assert!(providers.supports_news());
         assert!(providers.fetch_assets().await.expect("assets").is_empty());
         assert!(
@@ -495,6 +529,26 @@ mod tests {
                 .expect("news capability")
                 .expect("news response")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn provider_set_cache_identity_can_describe_an_independent_market() {
+        let mut market = MarketContext::us_equities();
+        market.id = Arc::from("fixture-market");
+        market.symbol_namespace = Arc::from("fixture-symbols");
+        let providers = ProviderSet::new(
+            "fixture",
+            "Fixture",
+            Arc::new(StubAssets),
+            Arc::new(StubMarketData),
+        )
+        .with_cache_namespace("fixture:v2|feed=delayed")
+        .with_market_context(market.clone());
+
+        assert_eq!(
+            providers.cache_identity(),
+            CacheIdentity::new("fixture:v2|feed=delayed", market)
         );
     }
 

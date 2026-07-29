@@ -49,6 +49,12 @@ jq -e '
   and ([.companies[].symbol] | length == (unique | length))
   and ([.companies[].cik] | length == (unique | length))
   and ([.companies[].sector] | unique | length == 9)
+  and (
+    [.companies[]
+      | select(.rank <= 100 and .shares_outstanding == null)
+    ]
+    | length == 0
+  )
   and all(.companies[];
     (.public_float | type == "number" and isfinite and . > 0)
     and (.proxy_source | type == "string" and length > 0)
@@ -87,7 +93,16 @@ actual_payload_size="$(gzip -cd "$artifact_path" | wc -c | tr -d '[:space:]')"
 [[ "$actual_payload_size" == "$manifest_payload_size" ]]
 gzip -cd "$artifact_path" | jq -e \
   --argjson expected_count "$manifest_company_count" \
-  '.schema_version == 2 and (.companies | length == $expected_count)' >/dev/null
+  '
+    .schema_version == 2
+    and (.companies | length == $expected_count)
+    and (
+      [.companies[]
+        | select(.rank <= 100 and .shares_outstanding == null)
+      ]
+      | length == 0
+    )
+  ' >/dev/null
 
 version_slug="$(printf '%s' "$catalog_version" | tr -c 'A-Za-z0-9._-' '-')"
 timestamp_slug="$(printf '%s' "$generated_at" | tr -d ':-')"

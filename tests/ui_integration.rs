@@ -494,6 +494,61 @@ fn detail_arrow_axes_keep_chart_and_news_selection_independent() {
 }
 
 #[test]
+fn detail_mouse_hover_repeats_the_previous_observation_across_an_interior_gap() {
+    let mut state = detail_state();
+    render_at(&mut state, 160, 48);
+    let plot = state
+        .chart_rect
+        .expect("detail chart exposes its plot area");
+    let gap = state
+        .chart_sample_indices
+        .iter()
+        .enumerate()
+        .find_map(|(index, sample)| {
+            (*sample == usize::MAX
+                && state.chart_sample_indices[..index]
+                    .iter()
+                    .any(|sample| *sample != usize::MAX)
+                && state.chart_sample_indices[index + 1..]
+                    .iter()
+                    .any(|sample| *sample != usize::MAX))
+            .then_some(index)
+        })
+        .expect("fixture has an interior sparse chart column");
+
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: plot.x + u16::try_from(gap).expect("gap fits in plot"),
+                row: plot.y + plot.height / 2,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    let hovered = render_at(&mut state, 160, 48);
+    let hovered_plot = state.chart_rect.expect("hovered chart keeps its plot area");
+    let cursor_x = hovered_plot.x + u16::try_from(gap).expect("gap fits in plot");
+
+    assert!(
+        (hovered_plot.y..hovered_plot.bottom()).all(|y| hovered[(cursor_x, y)].symbol() == "·"),
+        "interior sparse column should retain an indicator under the mouse"
+    );
+    assert_eq!(
+        (hovered_plot.y..hovered_plot.bottom())
+            .filter(|y| {
+                let cell = &hovered[(cursor_x, *y)];
+                cell.fg == CANVAS && cell.bg == CYAN
+            })
+            .count(),
+        1,
+        "repeated observation should keep one visible price intersection"
+    );
+}
+
+#[test]
 fn detail_chart_fills_the_plot_and_exposes_aligned_axes_and_hover() {
     let mut state = detail_state();
     let buffer = render_at(&mut state, 160, 48);
@@ -561,24 +616,31 @@ fn detail_chart_fills_the_plot_and_exposes_aligned_axes_and_hover() {
         "one-day time axis should show intraday labels"
     );
 
+    let latest_observation = state
+        .chart_sample_indices
+        .iter()
+        .rposition(|sample| *sample != usize::MAX)
+        .expect("one-day fixture has an observed session column");
+    assert!(
+        latest_observation < state.chart_sample_indices.len() - 1,
+        "active one-day session should retain a blank future tail"
+    );
     let hover_commands = handle_event(
         &mut state,
         Event::Mouse(MouseEvent {
             kind: MouseEventKind::Moved,
-            column: plot.right() - 1,
+            column: plot.x + u16::try_from(latest_observation).expect("column fits"),
             row: plot.y + plot.height / 2,
             modifiers: KeyModifiers::NONE,
         }),
     );
     assert!(hover_commands.is_empty());
-    assert_eq!(
-        state.detail_hover,
-        Some(state.chart_sample_indices.len() - 1)
-    );
+    assert_eq!(state.detail_hover, Some(latest_observation));
 
     let hovered = render_at(&mut state, 160, 48);
     let hovered_plot = state.chart_rect.expect("hovered chart keeps its plot area");
-    let cursor_x = hovered_plot.right() - 1;
+    let cursor_x =
+        hovered_plot.x + u16::try_from(latest_observation).expect("cursor column fits in plot");
     let cursor_symbol = hovered[(cursor_x, hovered_plot.y)].symbol().to_owned();
     assert_eq!(cursor_symbol, "·");
     assert!(
@@ -1543,7 +1605,7 @@ fn detail_dims_ranges_beyond_observed_history_without_disabling_them() {
 
     for (range, expected_color) in [
         (DateRange::TwoYears, TEXT),
-        (DateRange::FiveYears, MUTED),
+        (DateRange::FiveYears, TEXT),
         (DateRange::TenYears, MUTED),
         (DateRange::All, TEXT),
     ] {
@@ -1563,6 +1625,21 @@ fn detail_dims_ranges_beyond_observed_history_without_disabling_them() {
     let screen = screen_text(&buffer);
     assert!(screen.contains("Data 2Y 2M 10D since 2024-05-04"));
     assert!(screen.contains("2Y 2M 10D · 2024-05-04 to 2026-07-13"));
+}
+
+#[test]
+fn detail_keeps_ten_year_range_normal_when_it_adds_history_beyond_five_years() {
+    let mut state = detail_state();
+    let detail = state.detail.as_mut().expect("detail fixture");
+    detail.history_start_at = Some(detail.range_end_at - chrono::Duration::days(6 * 365));
+    let buffer = render_at(&mut state, 200, 60);
+    let target = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::SelectRange(DateRange::TenYears))
+        .expect("10Y range target");
+
+    assert_eq!(buffer[(target.rect.x, target.rect.y)].fg, TEXT);
 }
 
 #[test]

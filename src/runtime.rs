@@ -44,6 +44,19 @@ impl WorkerCancellation {
 
 pub async fn run(settings: Settings) -> Result<()> {
     let storage = Storage::open(&settings.db_path)?;
+    let mut providers = if settings.demo || settings.offline {
+        None
+    } else {
+        Some(configured_providers(&settings)?)
+    };
+    let (market_context, reset_incompatible_cache) = if let Some(provider) = providers.as_ref() {
+        let preparation = storage.prepare_live_cache(&provider.cache_identity())?;
+        (provider.market_context().clone(), preparation.was_reset())
+    } else if settings.offline {
+        (storage.market_context()?.unwrap_or_default(), false)
+    } else {
+        (Default::default(), false)
+    };
     let loaded_catalog = if settings.demo {
         None
     } else {
@@ -69,16 +82,24 @@ pub async fn run(settings: Settings) -> Result<()> {
             loaded_catalog
                 .expect("live mode resolves a catalog")
                 .companies,
+            !(reset_incompatible_cache || removed),
         )?;
         removed
     };
 
     let mut state = UiState {
-        status: if removed_simulated_data {
+        status: if reset_incompatible_cache {
+            format!(
+                "Cleared cache from a different provider, feed, or market; waiting for {} sync",
+                settings.provider.display_name()
+            )
+        } else if removed_simulated_data {
             format!(
                 "Removed simulated cache data; waiting for {} sync",
                 settings.provider.display_name()
             )
+        } else if settings.offline {
+            format!("Offline cache · {catalog_source} catalog")
         } else {
             if settings.provider == ProviderKind::Alpaca {
                 format!(
@@ -92,22 +113,20 @@ pub async fn run(settings: Settings) -> Result<()> {
         },
         data_provider_label: if settings.demo {
             "Simulated market".to_owned()
+        } else if settings.offline {
+            "Offline cache".to_owned()
         } else {
             settings.provider.display_name().to_owned()
         },
         simulated_data: settings.demo,
         auto_refresh_interval: (!settings.demo && !settings.offline)
             .then_some(settings.refresh_interval),
+        market_context,
         ..UiState::default()
     };
     reload_tiles(&storage, &mut state)?;
     reload_snapshot_checkpoint(&storage, &mut state)?;
 
-    let mut providers = if settings.demo || settings.offline {
-        None
-    } else {
-        Some(configured_providers(&settings)?)
-    };
     let mut terminal = TerminalSession::start().context("could not initialize terminal")?;
 
     let (catalog_tx, mut catalog_rx) = mpsc::unbounded_channel();
@@ -230,7 +249,7 @@ pub async fn run(settings: Settings) -> Result<()> {
                         .as_deref()
                         .unwrap_or("unversioned")
                         .to_owned();
-                    bootstrap_companies(&storage, catalog.companies)?;
+                    bootstrap_companies(&storage, catalog.companies, true)?;
                     reload_tiles(&storage, &mut state)?;
                     state.status = format!("SEC catalog updated · {version}");
                     if let Some(commands) = sync_commands.as_ref() {
@@ -304,25 +323,60 @@ fn retain_first_error(result: &mut Result<()>, cleanup: Result<()>) {
 
 #[cfg(test)]
 fn bootstrap_universe(storage: &Storage) -> Result<()> {
-    bootstrap_companies(storage, crate::universe::embedded_companies(Utc::now())?)
+    bootstrap_companies(
+        storage,
+        crate::universe::embedded_companies(Utc::now())?,
+        true,
+    )
 }
 
-fn bootstrap_companies(storage: &Storage, mut candidates: Vec<Company>) -> Result<()> {
+fn bootstrap_companies(
+    storage: &Storage,
+    mut candidates: Vec<Company>,
+    preserve_cached_state: bool,
+) -> Result<()> {
     let now = Utc::now();
     let existing: HashMap<String, Company> = storage
         .companies(None, false)?
         .into_iter()
         .map(|company| (company.symbol.clone(), company))
         .collect();
-    for candidate in &mut candidates {
-        if let Some(cached) = existing.get(&candidate.symbol) {
-            if candidate.shares_outstanding.is_some() && same_share_estimate(candidate, cached) {
-                candidate.market_cap = cached.market_cap;
+    if preserve_cached_state {
+        for candidate in &mut candidates {
+            if let Some(cached) = existing.get(&candidate.symbol) {
+                if candidate.shares_outstanding.is_some() && same_share_estimate(candidate, cached)
+                {
+                    candidate.market_cap = cached.market_cap;
+                }
+                if candidate.sector == cached.sector {
+                    candidate.in_universe = cached.in_universe;
+                    candidate.retained = cached.retained;
+                }
             }
-            candidate.in_universe = cached.in_universe;
-            candidate.retained = cached.retained;
         }
     }
+    let candidate_symbols = candidates
+        .iter()
+        .map(|company| company.symbol.clone())
+        .collect::<HashSet<_>>();
+    let favorite_symbols = storage
+        .favorite_symbols()?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    candidates.extend(existing.values().filter_map(|company| {
+        let replacement = crate::universe::catalog_symbol_replacement(&company.symbol)?;
+        if candidate_symbols.contains(&company.symbol) || !candidate_symbols.contains(replacement) {
+            return None;
+        }
+        let mut retired = company.clone();
+        retired.sector = None;
+        retired.raw_sector = None;
+        retired.rank = None;
+        retired.in_universe = false;
+        retired.retained = favorite_symbols.contains(&retired.symbol);
+        retired.updated_at = now;
+        Some(retired)
+    }));
     candidates.extend(benchmarks::companies(now));
     storage.upsert_companies(&candidates)?;
     for sector in Sector::ALL {
@@ -627,8 +681,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        DemoCacheState, bootstrap_universe, classify_demo_cache, recover_news_url, reload_tiles,
-        should_reset_auto_refresh,
+        DemoCacheState, bootstrap_companies, bootstrap_universe, classify_demo_cache,
+        recover_news_url, reload_tiles, should_reset_auto_refresh,
     };
     use crate::{
         app::AppCommand,
@@ -783,6 +837,44 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_retires_googl_when_catalog_selects_goog() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let candidates = crate::universe::embedded_companies(Utc::now())?;
+        let goog = candidates
+            .iter()
+            .find(|company| company.symbol == "GOOG")
+            .expect("embedded catalog selects GOOG");
+        let sector = goog.sector.expect("Alphabet has a sector");
+        let mut stale = goog.clone();
+        stale.symbol = "GOOGL".to_owned();
+        stale.name = "Alphabet Inc. Class A Common Stock".to_owned();
+        stale.retained = true;
+        stale.in_universe = true;
+        let mut discovered_goog = goog.clone();
+        discovered_goog.sector = None;
+        discovered_goog.raw_sector = None;
+        discovered_goog.rank = None;
+        discovered_goog.retained = false;
+        discovered_goog.in_universe = false;
+        storage.upsert_companies(&[stale, discovered_goog])?;
+        storage.set_favorite("GOOGL", true)?;
+
+        bootstrap_companies(&storage, candidates, true)?;
+
+        let members = storage.memberships(sector, None)?;
+        assert!(members.iter().any(|company| company.symbol == "GOOG"));
+        assert!(members.iter().all(|company| company.symbol != "GOOGL"));
+        let retired = storage.company("GOOGL")?.expect("class remains searchable");
+        assert_eq!(retired.sector, None);
+        assert_eq!(retired.rank, None);
+        assert!(!retired.in_universe);
+        assert!(retired.retained);
+        assert!(storage.is_favorite("GOOGL")?);
+        Ok(())
+    }
+
+    #[test]
     fn bootstrap_discards_caps_derived_from_changed_share_estimates() -> anyhow::Result<()> {
         let directory = tempdir()?;
         let storage = Storage::open(directory.path().join("market.sqlite3"))?;
@@ -811,10 +903,15 @@ mod tests {
         let directory = tempdir()?;
         let storage = Storage::open(directory.path().join("market.sqlite3"))?;
         let now = Utc::now();
-        let catalog_company = crate::universe::embedded_companies(now)?
+        let mut catalog_company = crate::universe::embedded_companies(now)?
             .into_iter()
-            .find(|company| company.shares_outstanding.is_none())
-            .expect("catalog contains a company without a share estimate");
+            .next()
+            .expect("catalog contains a company");
+        catalog_company.shares_outstanding = None;
+        catalog_company.shares_source = None;
+        catalog_company.shares_as_of = None;
+        catalog_company.shares_method = None;
+        catalog_company.shares_confidence = None;
         let mut stale = catalog_company.clone();
         stale.market_cap = Some(500_000_000_000.0);
         stale.shares_outstanding = Some(50_000_000.0);
@@ -824,7 +921,7 @@ mod tests {
         stale.shares_confidence = Some("low".to_owned());
         storage.upsert_companies(&[stale])?;
 
-        bootstrap_universe(&storage)?;
+        bootstrap_companies(&storage, vec![catalog_company.clone()], true)?;
 
         let stored = storage
             .company(&catalog_company.symbol)?

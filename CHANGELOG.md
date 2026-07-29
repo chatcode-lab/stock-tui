@@ -7,6 +7,57 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Added
+
+- Added a normalized market context with calendar ID, symbol namespace,
+  currency, IANA timezone, and regular-session bounds, including DST-aware US
+  equity sessions.
+- Added SQLite schema 3 cache identities so provider datasets, endpoints,
+  feeds, and market contexts are validated before cached rows are rendered.
+- Added latest-filing XBRL cover-share extraction and an SEC-cited declarative
+  policy registry for multi-class, tracking-stock, Up-C, partnership, and SPAC
+  capitalization structures.
+- Added catalog share-coverage diagnostics and a publication gate that rejects
+  unresolved current sector top-100 candidates.
+
+### Changed
+
+- Render `1D` across the latest observed full regular session, concatenate the
+  latest five observed sessions for `1W`, compress closed time in intraday
+  multi-session charts, and use ordinal spacing for daily/weekly histories.
+- Extend lazy intraday history requests enough to recover the last completed
+  session and complete session-day boundaries around weekends and holidays.
+- Reject share facts older than 550 days and fail closed when a reviewed
+  filing's exact class-member or accession-scoped economic-fact signature
+  changes.
+
+### Fixed
+
+- Prevent bars, snapshots, news, memberships, and sync checkpoints from
+  silently mixing after a provider, endpoint, feed, or market-context change.
+  Incompatible rows are cleared transactionally while favorite symbols remain
+  available for rehydration.
+- Keep long no-trade intervals connected with the prior traded price without
+  manufacturing volume, while retaining a direct thin trace between normal
+  adjacent observations.
+- Keep `GOOG` as Alphabet's concise catalog member when upgrading a cache that
+  previously selected `GOOGL`; the Class A ticker remains independently
+  searchable and favoritable rather than being treated as a price alias.
+- Keep the chart cursor visible over sparse interior columns by repeating the
+  preceding observation at the hovered column.
+- Mute a ticker range only when it adds no cached interval beyond the
+  next-shorter preset, so partial `10Y` coverage remains visibly useful.
+- Derive DELL's market cap from its current price and a reviewed SEC aggregate
+  of equal-economic Class A, B, and C shares instead of leaving the value
+  unavailable.
+- Restore share-derived market-cap estimates for the remaining 44 previously
+  unresolved catalog issuers after Dell, including the listed consumer, energy,
+  financial, industrial, and services cases, while retaining confidence and
+  policy provenance.
+- Correct reviewed capitalization scopes for ERIE, PJT, MC, and HLNE using
+  filing-reported conversion ratios or economic-unit facts, and version Visa's
+  conversion policy for its newly reported Class B-3 shares.
+
 ## [0.2.2] - 2026-07-29
 
 ### Added

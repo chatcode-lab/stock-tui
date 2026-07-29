@@ -6,6 +6,7 @@ pub mod credentials;
 pub mod demo;
 pub mod domain;
 pub mod logging;
+pub mod market;
 pub mod onboarding;
 pub mod palette;
 pub mod providers;

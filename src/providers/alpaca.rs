@@ -184,9 +184,14 @@ impl AlpacaProvider {
     /// Convert this adapter into the provider-neutral runtime facade.
     #[must_use]
     pub fn into_provider_set(self) -> ProviderSet {
+        let cache_namespace = format!(
+            "alpaca:v1|feed={}|data={}|trading={}",
+            self.feed, self.data_url, self.trading_url
+        );
         let provider = Arc::new(self);
         let corporate_actions: Arc<dyn CorporateActionsProvider> = provider.clone();
         ProviderSet::from_full_provider(Self::ID, Self::DISPLAY_NAME, provider)
+            .with_cache_namespace(cache_namespace)
             .with_corporate_actions(corporate_actions)
     }
 
@@ -938,6 +943,11 @@ fn validate_base_url(value: &str, label: &str) -> Result<String, ProviderError> 
             "{label} base URL must not contain user information"
         )));
     }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(ProviderError::InvalidRequest(format!(
+            "{label} base URL must not contain a query or fragment"
+        )));
+    }
     Ok(normalized.to_owned())
 }
 
@@ -1499,6 +1509,32 @@ mod tests {
     }
 
     #[test]
+    fn cache_identity_distinguishes_alpaca_feeds_and_endpoints() {
+        let temp = TempDir::new().expect("temp dir");
+        let mut configured = settings(&temp, "http://127.0.0.1:1");
+        let iex = AlpacaProvider::new(&configured)
+            .expect("IEX provider")
+            .into_provider_set()
+            .cache_identity();
+        configured.feed = "sip".to_owned();
+        let sip = AlpacaProvider::new(&configured)
+            .expect("SIP provider")
+            .into_provider_set()
+            .cache_identity();
+        configured.data_url = "http://127.0.0.1:2".to_owned();
+        let other_endpoint = AlpacaProvider::new(&configured)
+            .expect("other endpoint")
+            .into_provider_set()
+            .cache_identity();
+
+        assert_ne!(iex.namespace, sip.namespace);
+        assert_ne!(sip.namespace, other_endpoint.namespace);
+        assert!(iex.namespace.contains("feed=iex"));
+        assert!(iex.namespace.contains("data=http://127.0.0.1:1"));
+        assert_eq!(iex.market, crate::market::MarketContext::us_equities());
+    }
+
+    #[test]
     fn provider_urls_cutoffs_and_unicode_redaction_are_bounded() {
         let temp = TempDir::new().expect("temp dir");
         let mut configured = settings(&temp, "http://127.0.0.1:1");
@@ -1521,6 +1557,11 @@ mod tests {
         );
 
         configured.data_url = "http://example.com".to_owned();
+        assert!(matches!(
+            AlpacaProvider::new(&configured),
+            Err(ProviderError::InvalidRequest(_))
+        ));
+        configured.data_url = "https://example.com?token=must-not-be-stored".to_owned();
         assert!(matches!(
             AlpacaProvider::new(&configured),
             Err(ProviderError::InvalidRequest(_))
