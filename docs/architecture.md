@@ -204,8 +204,10 @@ multi-session ranges concatenate observed exchange-local sessions and give
 closed periods zero horizontal width; `1W` keeps the latest five. Daily and
 weekly histories use ordinal observation spacing. Normal adjacent observations
 retain a direct line, while a long in-session gap carries the prior traded
-price to the next observation. Volume shares the same mapping but never fills
-a missing observation.
+price to the next observation. Volume shares the same mapping. Its presentation
+layer repeats the preceding positive bar height through unoccupied columns and
+the remaining chart tail using a dim color, while observed volume, aggregation,
+statistics, and scaling remain unchanged.
 
 A Braille canvas renders the thin price trace over a per-cell RGB area fill,
 with price and range-aware date scales. The fill samples the same two
@@ -230,6 +232,8 @@ beyond the next-shorter preset, without changing its hit target or shortcut;
 A responsive 4-7-row volume histogram uses uniform-color lower-block caps for
 eighth-cell height precision. Fully occupied cells use background color instead
 of a full-block glyph, avoiding line-height seams through the solid portions.
+Observed bars use the primary accent; repeated-height trail columns use a
+panel-weighted accent and remain visually subdued when the cursor crosses them.
 
 ## Heatmap Semantics
 

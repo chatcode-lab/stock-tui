@@ -331,9 +331,11 @@ during an open session, the trace carries the last traded price to the next
 observation instead of drawing a disconnected hole. Closed-session boundaries
 are compressed to the same X position. Flat no-trade placeholders remain
 excluded. Volume still comes only from traded provider OHLCV bars, so missing
-observations stay empty and price-only boundary points cannot fabricate volume.
-Session grouping uses the active market's IANA timezone; labels use the user's
-local timezone.
+observations and price-only boundary points cannot fabricate stored or
+aggregated volume. For visual continuity only, the renderer repeats the
+preceding positive bar's height through later unoccupied columns and the chart
+tail using a dim trail. Session grouping uses the active market's IANA timezone;
+labels use the user's local timezone.
 
 Sort modes operate within each sector:
 

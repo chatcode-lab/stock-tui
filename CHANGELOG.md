@@ -7,6 +7,12 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Fill unoccupied ticker-detail volume columns after the first positive bar
+  with a dim same-height visual trail, including the remaining chart tail,
+  without changing observed volume, statistics, aggregation, or scale.
+
 ## [0.2.3] - 2026-07-29
 
 ### Added

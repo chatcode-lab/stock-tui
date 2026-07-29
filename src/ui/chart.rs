@@ -25,6 +25,9 @@ const TRACE_SAMPLES_PER_COLUMN: usize = 2;
 const GRID_DOT: char = '·';
 const CURSOR_DOT: char = '·';
 const GRID_COLOR: Color = Color::Rgb(55, 64, 74);
+const VOLUME_BAR_MIX: f64 = 0.72;
+const VOLUME_TRAIL_MIX: f64 = 0.26;
+const VOLUME_TRAIL_CURSOR_MIX: f64 = 0.38;
 pub(crate) const EMPTY_CHART_SAMPLE_INDEX: usize = usize::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1109,19 +1112,15 @@ fn render_volume(
         return;
     }
     let plot = Rect::new(left, inner.y, right - left, inner.height);
-    let columns = volume_columns(bars, usize::from(plot.width), timeline);
+    let columns = volume_trail_columns(&volume_columns(bars, usize::from(plot.width), timeline));
     let selected_column = crosshair.map(|position| {
         (position.clamp(0.0, 1.0) * f64::from(plot.width.saturating_sub(1))).round() as usize
     });
     let buffer = frame.buffer_mut();
-    for (column, volume) in columns.into_iter().enumerate() {
-        let relative = (volume / max_volume).clamp(0.0, 1.0);
+    for (column, sample) in columns.into_iter().enumerate() {
+        let relative = (sample.volume / max_volume).clamp(0.0, 1.0);
         let filled_eighths = volume_height_eighths(relative, usize::from(plot.height));
-        let color = if selected_column == Some(column) {
-            CYAN
-        } else {
-            blend_color(PANEL, accent, 0.72)
-        };
+        let color = volume_column_color(accent, selected_column == Some(column), sample.is_trail);
         for row in 0..usize::from(plot.height) {
             let from_bottom = usize::from(plot.height) - row - 1;
             let cell_eighths = filled_eighths.saturating_sub(from_bottom * 8).min(8);
@@ -1131,6 +1130,49 @@ fn render_volume(
             )];
             paint_volume_cell(cell, cell_eighths, color);
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct VolumeColumn {
+    volume: f64,
+    is_trail: bool,
+}
+
+fn volume_trail_columns(columns: &[f64]) -> Vec<VolumeColumn> {
+    let mut previous = None;
+
+    columns
+        .iter()
+        .copied()
+        .map(|volume| {
+            if volume.is_finite() && volume > 0.0 {
+                previous = Some(volume);
+                VolumeColumn {
+                    volume,
+                    is_trail: false,
+                }
+            } else if let Some(volume) = previous {
+                VolumeColumn {
+                    volume,
+                    is_trail: true,
+                }
+            } else {
+                VolumeColumn {
+                    volume: 0.0,
+                    is_trail: false,
+                }
+            }
+        })
+        .collect()
+}
+
+fn volume_column_color(accent: Color, selected: bool, is_trail: bool) -> Color {
+    match (selected, is_trail) {
+        (true, false) => CYAN,
+        (true, true) => blend_color(PANEL, CYAN, VOLUME_TRAIL_CURSOR_MIX),
+        (false, true) => blend_color(PANEL, accent, VOLUME_TRAIL_MIX),
+        (false, false) => blend_color(PANEL, accent, VOLUME_BAR_MIX),
     }
 }
 
@@ -1908,6 +1950,63 @@ mod tests {
         assert_eq!(
             volume_columns(&bars, 6, &timeline),
             vec![10.0, 0.0, 0.0, 0.0, 0.0, 20.0]
+        );
+    }
+
+    #[test]
+    fn volume_trails_repeat_heights_through_the_end_but_leave_leading_gaps_empty() {
+        assert_eq!(
+            volume_trail_columns(&[0.0, 10.0, 0.0, 0.0, 20.0, 0.0]),
+            vec![
+                VolumeColumn {
+                    volume: 0.0,
+                    is_trail: false,
+                },
+                VolumeColumn {
+                    volume: 10.0,
+                    is_trail: false,
+                },
+                VolumeColumn {
+                    volume: 10.0,
+                    is_trail: true,
+                },
+                VolumeColumn {
+                    volume: 10.0,
+                    is_trail: true,
+                },
+                VolumeColumn {
+                    volume: 20.0,
+                    is_trail: false,
+                },
+                VolumeColumn {
+                    volume: 20.0,
+                    is_trail: true,
+                },
+            ]
+        );
+        assert!(
+            volume_trail_columns(&[0.0, f64::NAN, 0.0])
+                .iter()
+                .all(|column| column.volume == 0.0 && !column.is_trail)
+        );
+    }
+
+    #[test]
+    fn volume_trails_remain_dimmer_when_selected() {
+        let accent = Color::Rgb(40, 200, 100);
+
+        assert_eq!(
+            volume_column_color(accent, false, false),
+            blend_color(PANEL, accent, VOLUME_BAR_MIX)
+        );
+        assert_eq!(
+            volume_column_color(accent, false, true),
+            blend_color(PANEL, accent, VOLUME_TRAIL_MIX)
+        );
+        assert_eq!(volume_column_color(accent, true, false), CYAN);
+        assert_eq!(
+            volume_column_color(accent, true, true),
+            blend_color(PANEL, CYAN, VOLUME_TRAIL_CURSOR_MIX)
         );
     }
 

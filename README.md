@@ -478,15 +478,17 @@ opened. Beyond the special `1D` snapshot case, heatmap volume prefers daily
 bars through `2Y` and weekly bars for `5Y`, `10Y`, and `ALL`, with cached
 alternative timeframes used only when the preferred aggregate is unavailable.
 Ticker-detail statistics continue to show latest-session snapshot volume,
-while the chart uses traded provider bars without manufacturing volume for
-price-only endpoints. `1D` draws the latest observed regular session across its
-full exchange-local trading window, leaving the unobserved tail blank. `1W`
-concatenates the five latest observed sessions, and the other intraday view
-omits closed periods; daily and weekly histories use ordinal observations.
+while solid chart bars use traded provider volume without manufacturing data
+for price-only endpoints. After the first positive volume bar, unoccupied
+columns repeat the preceding height in a dim visual trail, including the
+remaining chart tail; this does not change cached volume, statistics,
+aggregation, or scale. `1D` draws the latest observed regular session across
+its full exchange-local trading window, leaving the future price trace blank.
+`1W` concatenates the five latest observed sessions, and the other intraday
+view omits closed periods; daily and weekly histories use ordinal observations.
 Long gaps during an open session carry the last traded price to the next
-observation, while the corresponding volume columns remain empty. Session
-membership is calculated in the configured market timezone and labels are
-shown in the user's local timezone.
+observation. Session membership is calculated in the configured market
+timezone and labels are shown in the user's local timezone.
 In live mode, the broad-market snapshot refresh runs immediately on startup
 and every five minutes by default; `r` starts one immediately and restarts that
 timer. Opening a ticker or changing its range separately triggers a lazy detail
