@@ -7,6 +7,38 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Added
+
+- Added cached-history coverage to ticker headers and Statistics, with
+  still-selectable muted range controls when a fixed range exceeds the observed
+  span.
+- Added exact price and date/time labels beside the chart cursor when the
+  viewport has room.
+- Added an optional provider capability for forward and reverse stock splits,
+  implemented by the Alpaca adapter with bounded batching and pagination.
+
+### Changed
+
+- Map price traces and volume columns to actual timestamps across the selected
+  range, leaving long no-observation intervals blank instead of stretching
+  sparse data into a continuous plateau. Left/Right navigation skips those
+  empty timestamp columns.
+- Prefer a valid provider snapshot market cap; otherwise reconcile dated SEC
+  share estimates through intervening split ratios before multiplying by the
+  current price. A required split-coverage failure leaves the local estimate
+  unavailable.
+- Cache successful and empty per-symbol split coverage for up to 24 hours so
+  five-minute price refreshes do not repeat the same corporate-action queries.
+
+### Fixed
+
+- Retain flat zero-volume/no-trade provider bars in the raw cache while
+  excluding them from price endpoints, freshness, history coverage, timeframe
+  selection, and detail charts.
+- Keep chart price-axis padding at or above zero for low-priced securities.
+- Make Overview sector and benchmark focus mutually exclusive for both mouse
+  and keyboard navigation.
+
 ## [0.2.1] - 2026-07-29
 
 ### Changed

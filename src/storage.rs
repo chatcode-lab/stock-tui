@@ -21,23 +21,43 @@ use crate::{
 const SCHEMA_VERSION: i64 = 2;
 const STALE_AFTER_HOURS: i64 = 72;
 const MAX_MEMBERS_PER_SECTOR: usize = 100;
-const TIMEFRAME_EXISTS_SQL: &str =
-    "SELECT EXISTS(SELECT 1 FROM bars WHERE symbol = ?1 AND timeframe = ?2 LIMIT 1)";
+const TIMEFRAME_EXISTS_SQL: &str = "
+    SELECT EXISTS(
+        SELECT 1 FROM bars
+        WHERE symbol = ?1 AND timeframe = ?2
+          AND NOT (
+              volume = 0 AND COALESCE(trade_count, 0) = 0
+              AND open = high AND high = low AND low = close
+          )
+        LIMIT 1
+    )";
 const PERIOD_METRIC_SQL: &str = "WITH
     before_cutoff AS (
         SELECT close, timestamp FROM bars
         WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?3
+          AND NOT (
+              volume = 0 AND COALESCE(trade_count, 0) = 0
+              AND open = high AND high = low AND low = close
+          )
         ORDER BY timestamp DESC LIMIT 1
     ),
     after_cutoff AS (
         SELECT close, timestamp FROM bars
         WHERE symbol = ?1 AND timeframe = ?2
           AND timestamp >= ?3 AND timestamp <= ?4
+          AND NOT (
+              volume = 0 AND COALESCE(trade_count, 0) = 0
+              AND open = high AND high = low AND low = close
+          )
         ORDER BY timestamp ASC LIMIT 1
     ),
     latest AS (
         SELECT close, timestamp FROM bars
         WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?4
+          AND NOT (
+              volume = 0 AND COALESCE(trade_count, 0) = 0
+              AND open = high AND high = low AND low = close
+          )
         ORDER BY timestamp DESC LIMIT 1
     )
 SELECT
@@ -219,6 +239,7 @@ struct ResolvedPeriod {
 }
 
 type PeriodMetricRow = (Option<f64>, Option<i64>, Option<f64>, Option<i64>);
+type PriceHistoryCoverage = (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
 
 impl Storage {
     /// Opens a path-backed cache and applies all known schema migrations.
@@ -526,7 +547,12 @@ impl Storage {
     ) -> Result<Option<DateTime<Utc>>> {
         let connection = self.connection()?;
         let value: Option<i64> = connection.query_row(
-            "SELECT MAX(timestamp) FROM bars WHERE symbol = ?1 AND timeframe = ?2",
+            "SELECT MAX(timestamp) FROM bars
+             WHERE symbol = ?1 AND timeframe = ?2
+               AND NOT (
+                   volume = 0 AND COALESCE(trade_count, 0) = 0
+                   AND open = high AND high = low AND low = close
+               )",
             params![normalize_symbol(symbol)?, timeframe],
             |row| row.get(0),
         )?;
@@ -1025,6 +1051,24 @@ impl Storage {
         )
     }
 
+    fn load_price_history_coverage(&self, symbol: &str) -> Result<PriceHistoryCoverage> {
+        let connection = self.connection()?;
+        let (start, end): (Option<i64>, Option<i64>) = connection.query_row(
+            "SELECT MIN(timestamp), MAX(timestamp) FROM bars
+             WHERE symbol = ?1
+               AND NOT (
+                   volume = 0 AND COALESCE(trade_count, 0) = 0
+                   AND open = high AND high = low AND low = close
+               )",
+            [normalize_symbol(symbol)?],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok((
+            start.map(datetime_from_millis).transpose()?,
+            end.map(datetime_from_millis).transpose()?,
+        ))
+    }
+
     pub fn benchmark_tiles(&self, range: DateRange, now: DateTime<Utc>) -> Result<Vec<MarketTile>> {
         let mut tiles = Vec::with_capacity(MarketBenchmark::ALL.len());
         for benchmark in MarketBenchmark::ALL {
@@ -1069,13 +1113,24 @@ impl Storage {
             return Ok(None);
         };
         let (timeframe, metric) = self.load_symbol_period_metric(&company.symbol, range, now)?;
-        let bars = self.bars(
-            &company.symbol,
-            Some(timeframe),
-            Some(range.cutoff(now)),
-            Some(now),
-            None,
-        )?;
+        let bars = self
+            .bars(
+                &company.symbol,
+                Some(timeframe),
+                Some(range.cutoff(now)),
+                Some(now),
+                None,
+            )?
+            .into_iter()
+            .filter(Bar::is_price_observation)
+            .collect();
+        let (history_start_at, history_end_at) =
+            self.load_price_history_coverage(&company.symbol)?;
+        let range_start_at = if range == DateRange::All {
+            history_start_at.unwrap_or_else(|| range.cutoff(now))
+        } else {
+            range.cutoff(now)
+        };
         let snapshot = self.snapshot(&company.symbol)?;
         let period = resolve_period(range, range.cutoff(now), snapshot.as_ref(), metric);
         let own_tiles = company
@@ -1099,6 +1154,10 @@ impl Storage {
             company,
             snapshot,
             bars,
+            history_start_at,
+            history_end_at,
+            range_start_at,
+            range_end_at: now,
             period_start_price: period.baseline,
             period_start_at: period.baseline_at,
             period_end_price: period.price,
@@ -1904,6 +1963,28 @@ mod tests {
         }
     }
 
+    fn no_trade_bar(
+        symbol: &str,
+        timeframe: &str,
+        timestamp: DateTime<Utc>,
+        close: f64,
+        trade_count: Option<u64>,
+    ) -> Bar {
+        Bar {
+            symbol: symbol.to_owned(),
+            timeframe: timeframe.to_owned(),
+            timestamp,
+            open: close,
+            high: close,
+            low: close,
+            close,
+            volume: 0.0,
+            trade_count,
+            vwap: None,
+            source: "test".to_owned(),
+        }
+    }
+
     fn snapshot(
         symbol: &str,
         price: f64,
@@ -2529,6 +2610,82 @@ mod tests {
     }
 
     #[test]
+    fn no_trade_placeholders_do_not_extend_price_history() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(20);
+        storage.replace_universe(
+            now.date_naive(),
+            &[company(
+                "AAA",
+                "Alpha",
+                Sector::Technology,
+                300.0,
+                Some(1),
+                now,
+            )],
+        )?;
+
+        let mut weekly = bar("AAA", instant(2), 90.0, 1_000.0);
+        weekly.timeframe = "1Week".to_owned();
+        let daily = bar("AAA", instant(10), 100.0, 500.0);
+        let hourly_placeholder = no_trade_bar("AAA", "1Hour", instant(18), 150.0, None);
+        let daily_placeholder = no_trade_bar("AAA", "1Day", instant(19), 150.0, Some(0));
+        storage.upsert_bars(&[weekly, daily, hourly_placeholder, daily_placeholder])?;
+        storage.upsert_snapshots(&[snapshot("AAA", 101.0, 100.0, 600.0, instant(11))])?;
+
+        let raw_bars = storage.bars("AAA", None, None, None, None)?;
+        assert_eq!(raw_bars.len(), 4);
+        assert_eq!(
+            raw_bars
+                .iter()
+                .filter(|bar| !bar.is_price_observation())
+                .count(),
+            2
+        );
+        assert_eq!(
+            storage.latest_bar_timestamp("AAA", "1Day")?,
+            Some(instant(10))
+        );
+        assert_eq!(storage.latest_bar_timestamp("AAA", "1Hour")?, None);
+
+        let connection = storage.connection()?;
+        let mut statement = connection.prepare_cached(TIMEFRAME_EXISTS_SQL)?;
+        assert_eq!(
+            choose_timeframe(&mut statement, DateRange::Month, "AAA")?,
+            "1Day"
+        );
+        drop(statement);
+        drop(connection);
+
+        let tile = storage
+            .heatmap_tiles(
+                DateRange::Month,
+                SortMode::Gainers,
+                Some(Sector::Technology),
+                false,
+                now,
+            )?
+            .remove(0);
+        assert_eq!(tile.price, Some(101.0));
+        assert_eq!(tile.period_start_price, Some(100.0));
+        assert_eq!(tile.updated_at, Some(instant(11)));
+        assert!(tile.stale);
+
+        let detail = storage
+            .ticker_detail("AAA", DateRange::Month, now, 0)?
+            .expect("known company");
+        assert_eq!(detail.bars.len(), 1);
+        assert_eq!(detail.bars[0].timestamp, instant(10));
+        assert_eq!(detail.period_start_price, Some(100.0));
+        assert_eq!(detail.period_end_price, Some(101.0));
+        assert_eq!(detail.period_end_at, Some(instant(11)));
+        assert_eq!(detail.history_start_at, Some(instant(2)));
+        assert_eq!(detail.history_end_at, Some(instant(10)));
+        Ok(())
+    }
+
+    #[test]
     fn price_less_snapshot_does_not_refresh_an_old_bar_price() -> Result<()> {
         let directory = tempdir()?;
         let storage = Storage::open(directory.path().join("market.sqlite3"))?;
@@ -2782,16 +2939,24 @@ mod tests {
 
         let mut plan = connection.prepare(
             "EXPLAIN QUERY PLAN
-             SELECT 1 FROM bars WHERE symbol = ?1 AND timeframe = ?2 LIMIT 1",
+             SELECT EXISTS(
+                 SELECT 1 FROM bars
+                 WHERE symbol = ?1 AND timeframe = ?2
+                   AND NOT (
+                       volume = 0 AND COALESCE(trade_count, 0) = 0
+                       AND open = high AND high = low AND low = close
+                   )
+                 LIMIT 1
+             )",
         )?;
         let details = plan
             .query_map(params!["AAA", "1Day"], |row| row.get::<_, String>(3))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         assert!(
-            details.iter().any(|detail| {
-                detail.contains("SEARCH bars") && detail.contains("COVERING INDEX")
-            }),
-            "timeframe existence probe must use the bars primary-key index: {details:?}"
+            details
+                .iter()
+                .any(|detail| { detail.contains("SEARCH bars") && detail.contains("USING INDEX") }),
+            "timeframe existence probe must use a bars index: {details:?}"
         );
         Ok(())
     }

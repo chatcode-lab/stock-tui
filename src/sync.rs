@@ -5,7 +5,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    domain::{Company, DateRange, Sector, SyncPhase, SyncProgress},
+    domain::{Company, DateRange, Sector, StockSplit, SyncPhase, SyncProgress},
     providers::ProviderSet,
     storage::Storage,
 };
@@ -200,14 +200,16 @@ async fn refresh_snapshots(
         "Refreshing current prices",
         None,
     );
-    let snapshots = providers
-        .fetch_snapshots(&symbols)
-        .await
-        .map_err(|error| format!("{}: {error}", providers.display_name()))?;
+    let now = Utc::now();
+    let (snapshots, split_coverage) = tokio::join!(
+        providers.fetch_snapshots(&symbols),
+        fetch_market_cap_splits(providers, &companies, now),
+    );
+    let snapshots = snapshots.map_err(|error| format!("{}: {error}", providers.display_name()))?;
     storage
         .upsert_snapshots(&snapshots)
         .map_err(|error| error.to_string())?;
-    let updated_companies = update_market_caps(companies, &snapshots, Utc::now());
+    let updated_companies = update_market_caps(companies, &snapshots, &split_coverage, now);
     storage
         .upsert_companies(&updated_companies)
         .map_err(|error| error.to_string())?;
@@ -218,11 +220,11 @@ async fn refresh_snapshots(
             .cloned()
             .collect::<Vec<_>>();
         storage
-            .replace_memberships(Utc::now().date_naive(), sector, &candidates)
+            .replace_memberships(now.date_naive(), sector, &candidates)
             .map_err(|error| error.to_string())?;
     }
     storage
-        .set_sync_checkpoint("snapshots", Utc::now())
+        .set_sync_checkpoint("snapshots", now)
         .map_err(|error| error.to_string())?;
     send_progress(
         events,
@@ -236,9 +238,55 @@ async fn refresh_snapshots(
     Ok(())
 }
 
+#[derive(Debug)]
+enum StockSplitCoverage {
+    Unsupported,
+    Available(Vec<StockSplit>),
+    Unavailable,
+}
+
+async fn fetch_market_cap_splits(
+    providers: &ProviderSet,
+    companies: &[Company],
+    observation_end: chrono::DateTime<Utc>,
+) -> StockSplitCoverage {
+    if !providers.supports_corporate_actions() {
+        return StockSplitCoverage::Unsupported;
+    }
+    let Some(start) = companies
+        .iter()
+        .filter(|company| company.shares_outstanding.is_some())
+        .filter_map(|company| company.shares_as_of)
+        .min()
+    else {
+        return StockSplitCoverage::Available(Vec::new());
+    };
+    let symbols = companies
+        .iter()
+        .filter(|company| company.shares_outstanding.is_some())
+        .map(|company| company.symbol.clone())
+        .collect::<Vec<_>>();
+    match providers
+        .fetch_stock_splits(&symbols, start, observation_end.date_naive())
+        .await
+    {
+        Ok(Some(splits)) => StockSplitCoverage::Available(splits),
+        Ok(None) => StockSplitCoverage::Unsupported,
+        Err(error) => {
+            tracing::warn!(
+                provider = providers.id(),
+                error = %error,
+                "stock-split refresh failed; skipping local market-cap estimates"
+            );
+            StockSplitCoverage::Unavailable
+        }
+    }
+}
+
 fn update_market_caps(
     companies: Vec<Company>,
     snapshots: &[crate::domain::Snapshot],
+    split_coverage: &StockSplitCoverage,
     updated_at: chrono::DateTime<Utc>,
 ) -> Vec<Company> {
     let by_symbol: HashMap<&str, &crate::domain::Snapshot> = snapshots
@@ -248,28 +296,30 @@ fn update_market_caps(
     companies
         .into_iter()
         .map(|mut company| {
-            if company.shares_outstanding.is_none() {
-                let provider_cap = by_symbol
-                    .get(company.symbol.as_str())
-                    .and_then(|snapshot| snapshot.market_cap)
-                    .filter(|value| value.is_finite() && *value > 0.0);
-                if provider_cap.is_some() {
-                    company.market_cap = provider_cap;
-                    company.updated_at = updated_at;
-                } else {
-                    company.market_cap = company
-                        .market_cap
-                        .filter(|value| value.is_finite() && *value > 0.0);
-                }
+            let snapshot = by_symbol.get(company.symbol.as_str()).copied();
+            let provider_cap = snapshot
+                .and_then(|snapshot| snapshot.market_cap)
+                .filter(|value| value.is_finite() && *value > 0.0);
+            if provider_cap.is_some() {
+                company.market_cap = provider_cap;
+                company.updated_at = updated_at;
                 return company;
             }
+            if company.shares_outstanding.is_none() {
+                company.market_cap = company
+                    .market_cap
+                    .filter(|value| value.is_finite() && *value > 0.0);
+                return company;
+            }
+
             company.market_cap = None;
-            if let (Some(shares), Some(price)) = (
-                company.shares_outstanding,
-                by_symbol
-                    .get(company.symbol.as_str())
-                    .and_then(|snapshot| snapshot.price),
-            ) {
+            if let Some(snapshot) = snapshot
+                && let Some(price) = snapshot
+                    .price
+                    .filter(|price| price.is_finite() && *price > 0.0)
+                && let Some(shares) =
+                    adjusted_shares(&company, snapshot.updated_at.date_naive(), split_coverage)
+            {
                 let market_cap = shares * price;
                 if market_cap.is_finite() && market_cap > 0.0 {
                     company.market_cap = Some(market_cap);
@@ -279,6 +329,46 @@ fn update_market_caps(
             company
         })
         .collect()
+}
+
+fn adjusted_shares(
+    company: &Company,
+    observation_date: chrono::NaiveDate,
+    split_coverage: &StockSplitCoverage,
+) -> Option<f64> {
+    let shares = company
+        .shares_outstanding
+        .filter(|shares| shares.is_finite() && *shares > 0.0)?;
+    match split_coverage {
+        StockSplitCoverage::Unsupported => company
+            .shares_as_of
+            .filter(|date| *date == observation_date)
+            .map(|_| shares),
+        StockSplitCoverage::Unavailable => None,
+        StockSplitCoverage::Available(splits) => {
+            let shares_as_of = company
+                .shares_as_of
+                .filter(|date| *date <= observation_date)?;
+            splits
+                .iter()
+                .filter(|split| {
+                    split.symbol.eq_ignore_ascii_case(&company.symbol)
+                        && split.effective_date > shares_as_of
+                        && split.effective_date <= observation_date
+                })
+                .try_fold(shares, |adjusted, split| {
+                    if !split.old_rate.is_finite()
+                        || split.old_rate <= 0.0
+                        || !split.new_rate.is_finite()
+                        || split.new_rate <= 0.0
+                    {
+                        return None;
+                    }
+                    let adjusted = adjusted * split.new_rate / split.old_rate;
+                    (adjusted.is_finite() && adjusted > 0.0).then_some(adjusted)
+                })
+        }
+    }
 }
 
 async fn backfill_history(
@@ -416,6 +506,7 @@ async fn refresh_ticker(
 ) -> Result<(), String> {
     let now = Utc::now();
     let history_end = providers.latest_historical_end(now);
+    let company = storage.company(symbol).map_err(|error| error.to_string())?;
     let operation_count = 2 + usize::from(providers.supports_news());
     send_progress(
         events,
@@ -426,7 +517,7 @@ async fn refresh_ticker(
         None,
     );
     let symbols = vec![symbol.to_owned()];
-    let (bars, news, snapshots) = tokio::join!(
+    let (bars, news, snapshots, split_coverage) = tokio::join!(
         providers.fetch_bars(
             &symbols,
             range.preferred_timeframe(),
@@ -435,6 +526,7 @@ async fn refresh_ticker(
         ),
         providers.fetch_news(&symbols, 20),
         providers.fetch_snapshots(&symbols),
+        fetch_market_cap_splits(providers, company.as_slice(), now),
     );
     let mut errors = Vec::new();
     match bars {
@@ -460,10 +552,15 @@ async fn refresh_ticker(
                 .upsert_snapshots(&snapshots)
                 .map_err(|error| error.to_string())?;
             if !snapshots.is_empty()
-                && let Some(company) = storage.company(symbol).map_err(|error| error.to_string())?
+                && let Some(company) = company
             {
                 storage
-                    .upsert_companies(&update_market_caps(vec![company], &snapshots, now))
+                    .upsert_companies(&update_market_caps(
+                        vec![company],
+                        &snapshots,
+                        &split_coverage,
+                        now,
+                    ))
                     .map_err(|error| error.to_string())?;
             }
         }
@@ -621,7 +718,7 @@ mod tests {
     use super::*;
     use crate::{
         domain::{Bar, Snapshot},
-        providers::{AssetProvider, MarketDataProvider, ProviderError},
+        providers::{AssetProvider, CorporateActionsProvider, MarketDataProvider, ProviderError},
     };
 
     #[derive(Debug)]
@@ -661,6 +758,24 @@ mod tests {
                 .filter(|snapshot| symbols.contains(&snapshot.symbol))
                 .cloned()
                 .collect())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingCorporateActions;
+
+    #[async_trait]
+    impl CorporateActionsProvider for FailingCorporateActions {
+        async fn fetch_stock_splits(
+            &self,
+            _symbols: &[String],
+            _start: chrono::NaiveDate,
+            _end: chrono::NaiveDate,
+        ) -> Result<Vec<StockSplit>, ProviderError> {
+            Err(ProviderError::Api {
+                status: 503,
+                message: "fixture unavailable".to_owned(),
+            })
         }
     }
 
@@ -776,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_caps_prefer_catalog_shares_and_preserve_provider_enrichment_otherwise() {
+    fn snapshot_caps_prefer_provider_enrichment_and_preserve_valid_cached_caps() {
         let mut with_shares = company("SHARES", Some(Sector::Technology), true, true);
         with_shares.market_cap = Some(9_000_000.0);
         let mut without_shares = company("ENRICHED", Some(Sector::Technology), true, true);
@@ -794,6 +909,7 @@ mod tests {
         let updated = update_market_caps(
             vec![with_shares, without_shares, cached],
             &snapshots,
+            &StockSplitCoverage::Unavailable,
             instant(),
         );
         let by_symbol = updated
@@ -801,9 +917,177 @@ mod tests {
             .map(|company| (company.symbol.as_str(), company))
             .collect::<HashMap<_, _>>();
 
-        assert_eq!(by_symbol["SHARES"].market_cap, Some(1_200_000.0));
+        assert_eq!(by_symbol["SHARES"].market_cap, Some(999_000_000.0));
         assert_eq!(by_symbol["ENRICHED"].market_cap, Some(4_000_000.0));
         assert_eq!(by_symbol["CACHED"].market_cap, Some(5_000_000.0));
+    }
+
+    #[test]
+    fn reverse_split_adjusts_dated_sec_shares_before_market_cap_estimation() {
+        let mut inhd = company("INHD", Some(Sector::Industrial), true, true);
+        inhd.shares_outstanding = Some(50_400_000.0);
+        inhd.shares_as_of =
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 3, 31).expect("shares-as-of date"));
+        let mut current = snapshot("INHD", 38.60, None);
+        current.updated_at = Utc
+            .with_ymd_and_hms(2026, 6, 8, 20, 0, 0)
+            .single()
+            .expect("observation timestamp");
+        let coverage = StockSplitCoverage::Available(vec![StockSplit {
+            symbol: "INHD".to_owned(),
+            effective_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 4).expect("split date"),
+            old_rate: 20.0,
+            new_rate: 1.0,
+        }]);
+
+        let updated = update_market_caps(vec![inhd], &[current], &coverage, instant());
+
+        assert_eq!(updated[0].market_cap, Some(97_272_000.0));
+    }
+
+    #[test]
+    fn failed_supported_split_lookup_does_not_use_unadjusted_shares() {
+        let mut company = company("RISK", Some(Sector::Industrial), true, true);
+        company.market_cap = Some(900_000_000.0);
+        let updated = update_market_caps(
+            vec![company],
+            &[snapshot("RISK", 50.0, None)],
+            &StockSplitCoverage::Unavailable,
+            instant(),
+        );
+
+        assert_eq!(updated[0].market_cap, None);
+    }
+
+    #[test]
+    fn unsupported_split_provider_only_estimates_from_same_day_shares() {
+        let mut stale = company("STALE", Some(Sector::Industrial), true, true);
+        stale.shares_as_of =
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 7, 22).expect("stale shares date"));
+        let current = company("CURRENT", Some(Sector::Industrial), true, true);
+        let snapshots = [
+            snapshot("STALE", 50.0, None),
+            snapshot("CURRENT", 50.0, None),
+        ];
+
+        let updated = update_market_caps(
+            vec![stale, current],
+            &snapshots,
+            &StockSplitCoverage::Unsupported,
+            instant(),
+        );
+        let by_symbol = updated
+            .iter()
+            .map(|company| (company.symbol.as_str(), company))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(by_symbol["STALE"].market_cap, None);
+        assert_eq!(by_symbol["CURRENT"].market_cap, Some(500_000.0));
+    }
+
+    #[test]
+    fn split_adjustment_is_cumulative_and_uses_strict_start_inclusive_end_boundaries() {
+        let mut company = company("BOUND", Some(Sector::Industrial), true, true);
+        company.shares_outstanding = Some(100.0);
+        company.shares_as_of =
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).expect("shares date"));
+        let observation = Utc
+            .with_ymd_and_hms(2026, 6, 1, 20, 0, 0)
+            .single()
+            .expect("observation");
+        let mut current = snapshot("BOUND", 10.0, None);
+        current.updated_at = observation;
+        let split = |effective_date, old_rate, new_rate| StockSplit {
+            symbol: "BOUND".to_owned(),
+            effective_date,
+            old_rate,
+            new_rate,
+        };
+        let coverage = StockSplitCoverage::Available(vec![
+            split(
+                chrono::NaiveDate::from_ymd_opt(2026, 1, 1).expect("start boundary"),
+                1.0,
+                10.0,
+            ),
+            split(
+                chrono::NaiveDate::from_ymd_opt(2026, 2, 1).expect("forward split"),
+                1.0,
+                2.0,
+            ),
+            split(
+                chrono::NaiveDate::from_ymd_opt(2026, 5, 1).expect("reverse split"),
+                4.0,
+                1.0,
+            ),
+            split(
+                chrono::NaiveDate::from_ymd_opt(2026, 6, 1).expect("end boundary"),
+                1.0,
+                3.0,
+            ),
+            split(
+                chrono::NaiveDate::from_ymd_opt(2026, 6, 2).expect("future split"),
+                1.0,
+                100.0,
+            ),
+        ]);
+
+        let updated = update_market_caps(vec![company], &[current], &coverage, observation);
+
+        assert_eq!(updated[0].market_cap, Some(1_500.0));
+    }
+
+    #[tokio::test]
+    async fn split_fetch_failure_keeps_snapshots_and_provider_caps_authoritative() {
+        let temp = TempDir::new().expect("temp directory");
+        let storage = Storage::open(temp.path().join("market.sqlite3")).expect("storage");
+        let mut local = company("LOCAL", Some(Sector::Industrial), true, true);
+        local.market_cap = Some(9_000_000.0);
+        let authoritative = company("AUTH", Some(Sector::Technology), true, true);
+        storage
+            .replace_universe(instant().date_naive(), &[local, authoritative])
+            .expect("seed universe");
+        let providers = ProviderSet::new(
+            "fixture",
+            "Fixture",
+            Arc::new(EmptyAssets),
+            Arc::new(SnapshotMarketData {
+                snapshots: vec![
+                    snapshot("LOCAL", 25.0, None),
+                    snapshot("AUTH", 25.0, Some(2_500_000.0)),
+                ],
+            }),
+        )
+        .with_corporate_actions(Arc::new(FailingCorporateActions));
+        let (events, _received) = mpsc::unbounded_channel();
+
+        refresh_snapshots(&storage, &providers, &events)
+            .await
+            .expect("price refresh survives split failure");
+
+        assert_eq!(
+            storage
+                .snapshot("LOCAL")
+                .expect("snapshot lookup")
+                .expect("cached snapshot")
+                .price,
+            Some(25.0)
+        );
+        assert_eq!(
+            storage
+                .company("LOCAL")
+                .expect("company lookup")
+                .expect("local company")
+                .market_cap,
+            None
+        );
+        assert_eq!(
+            storage
+                .company("AUTH")
+                .expect("company lookup")
+                .expect("authoritative company")
+                .market_cap,
+            Some(2_500_000.0)
+        );
     }
 
     #[tokio::test]

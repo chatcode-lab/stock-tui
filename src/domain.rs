@@ -320,6 +320,18 @@ pub struct Bar {
     pub source: String,
 }
 
+impl Bar {
+    /// Whether this bar contains a traded price rather than a no-trade placeholder.
+    #[must_use]
+    pub fn is_price_observation(&self) -> bool {
+        !(self.volume == 0.0
+            && self.trade_count.unwrap_or_default() == 0
+            && self.open == self.high
+            && self.high == self.low
+            && self.low == self.close)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub symbol: String,
@@ -332,6 +344,14 @@ pub struct Snapshot {
     pub low: Option<f64>,
     pub volume: Option<f64>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StockSplit {
+    pub symbol: String,
+    pub effective_date: NaiveDate,
+    pub old_rate: f64,
+    pub new_rate: f64,
 }
 
 impl Snapshot {
@@ -384,6 +404,10 @@ pub struct TickerDetail {
     pub company: Company,
     pub snapshot: Option<Snapshot>,
     pub bars: Vec<Bar>,
+    pub history_start_at: Option<DateTime<Utc>>,
+    pub history_end_at: Option<DateTime<Utc>>,
+    pub range_start_at: DateTime<Utc>,
+    pub range_end_at: DateTime<Utc>,
     pub news: Vec<NewsItem>,
     pub starred: bool,
     pub period_start_price: Option<f64>,
@@ -455,6 +479,42 @@ pub struct ParseEnumError(String);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_bar() -> Bar {
+        Bar {
+            symbol: "TEST".to_owned(),
+            timeframe: "1Day".to_owned(),
+            timestamp: DateTime::UNIX_EPOCH,
+            open: 10.0,
+            high: 10.0,
+            low: 10.0,
+            close: 10.0,
+            volume: 0.0,
+            trade_count: None,
+            vwap: None,
+            source: "test".to_owned(),
+        }
+    }
+
+    #[test]
+    fn only_flat_zero_trade_bars_are_no_trade_placeholders() {
+        let mut bar = test_bar();
+        assert!(!bar.is_price_observation());
+
+        bar.trade_count = Some(0);
+        assert!(!bar.is_price_observation());
+
+        bar.trade_count = Some(1);
+        assert!(bar.is_price_observation());
+
+        bar.trade_count = None;
+        bar.volume = 1.0;
+        assert!(bar.is_price_observation());
+
+        bar.volume = 0.0;
+        bar.high = 10.5;
+        assert!(bar.is_price_observation());
+    }
 
     #[test]
     fn legacy_sector_mapping_is_explicit() {

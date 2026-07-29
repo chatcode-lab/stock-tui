@@ -7,17 +7,19 @@ use std::{
 };
 
 use async_trait::async_trait;
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use reqwest::{Client, Response, StatusCode, Url, header::HeaderMap};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, de::DeserializeOwned};
 use tokio::{sync::Mutex, time::Instant};
 
 pub use super::ProviderError;
-use super::{AssetProvider, MarketDataProvider, NewsProvider, ProviderSet};
+use super::{
+    AssetProvider, CorporateActionsProvider, MarketDataProvider, NewsProvider, ProviderSet,
+};
 use crate::{
     config::Settings,
-    domain::{Bar, Company, NewsItem, Snapshot},
+    domain::{Bar, Company, NewsItem, Snapshot, StockSplit},
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -25,6 +27,7 @@ const DEFAULT_MAX_RETRIES: usize = 3;
 const DEFAULT_RETRY_BASE: Duration = Duration::from_millis(250);
 const DEFAULT_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 const MAX_NEWS_ITEMS: usize = 50;
+const CORPORATE_ACTION_PAGE_SIZE: usize = 1_000;
 
 #[derive(Debug, Clone, Copy)]
 struct RetryPolicy {
@@ -181,7 +184,10 @@ impl AlpacaProvider {
     /// Convert this adapter into the provider-neutral runtime facade.
     #[must_use]
     pub fn into_provider_set(self) -> ProviderSet {
-        ProviderSet::from_full_provider(Self::ID, Self::DISPLAY_NAME, Arc::new(self))
+        let provider = Arc::new(self);
+        let corporate_actions: Arc<dyn CorporateActionsProvider> = provider.clone();
+        ProviderSet::from_full_provider(Self::ID, Self::DISPLAY_NAME, provider)
+            .with_corporate_actions(corporate_actions)
     }
 
     async fn get_json<T>(
@@ -412,6 +418,47 @@ impl AlpacaProvider {
         }
         Ok(result)
     }
+
+    async fn stock_splits_for_batch(
+        &self,
+        symbols: &[String],
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Vec<StockSplit>, ProviderError> {
+        let url = format!("{}/v1/corporate-actions", self.data_url);
+        let mut query = vec![
+            ("symbols".to_owned(), symbols.join(",")),
+            ("types".to_owned(), "forward_split,reverse_split".to_owned()),
+            ("start".to_owned(), start.to_string()),
+            ("end".to_owned(), end.to_string()),
+            ("limit".to_owned(), CORPORATE_ACTION_PAGE_SIZE.to_string()),
+            ("sort".to_owned(), "asc".to_owned()),
+        ];
+        let mut result = Vec::new();
+        let mut seen_tokens = HashSet::new();
+        loop {
+            let page: CorporateActionsResponse = self.get_json(&url, &query, "stock split").await?;
+            result.extend(
+                page.corporate_actions
+                    .forward_splits
+                    .into_iter()
+                    .chain(page.corporate_actions.reverse_splits)
+                    .map(SplitDto::into_domain)
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+            let Some(token) = page.next_page_token.filter(|token| !token.is_empty()) else {
+                break;
+            };
+            if !seen_tokens.insert(token.clone()) {
+                return Err(ProviderError::InvalidData {
+                    resource: "stock split",
+                });
+            }
+            query.retain(|(key, _)| key != "page_token");
+            query.push(("page_token".to_owned(), token));
+        }
+        Ok(result)
+    }
 }
 
 #[async_trait]
@@ -523,6 +570,38 @@ impl MarketDataProvider for AlpacaProvider {
 
     fn latest_historical_end(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         self.adjusted_historical_end(now)
+    }
+}
+
+#[async_trait]
+impl CorporateActionsProvider for AlpacaProvider {
+    async fn fetch_stock_splits(
+        &self,
+        symbols: &[String],
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Vec<StockSplit>, ProviderError> {
+        if end < start {
+            return Err(ProviderError::InvalidRequest(
+                "stock-split end must not precede start".to_owned(),
+            ));
+        }
+        let symbols = normalize_symbols(symbols);
+        if symbols.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut result = Vec::new();
+        for batch in symbols.chunks(self.snapshot_batch_size) {
+            result.extend(self.stock_splits_for_batch(batch, start, end).await?);
+        }
+        result.sort_unstable_by(|left, right| {
+            left.symbol
+                .cmp(&right.symbol)
+                .then(left.effective_date.cmp(&right.effective_date))
+        });
+        result.dedup_by(|left, right| left == right);
+        Ok(result)
     }
 }
 
@@ -726,6 +805,50 @@ struct SnapshotBarDto {
     close: Option<f64>,
     #[serde(rename = "v")]
     volume: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CorporateActionsResponse {
+    corporate_actions: CorporateActionsDto,
+    next_page_token: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CorporateActionsDto {
+    #[serde(default)]
+    forward_splits: Vec<SplitDto>,
+    #[serde(default)]
+    reverse_splits: Vec<SplitDto>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SplitDto {
+    symbol: String,
+    ex_date: NaiveDate,
+    old_rate: f64,
+    new_rate: f64,
+}
+
+impl SplitDto {
+    fn into_domain(self) -> Result<StockSplit, ProviderError> {
+        let symbol = self.symbol.trim().to_ascii_uppercase();
+        if symbol.is_empty()
+            || !self.old_rate.is_finite()
+            || self.old_rate <= 0.0
+            || !self.new_rate.is_finite()
+            || self.new_rate <= 0.0
+        {
+            return Err(ProviderError::InvalidData {
+                resource: "stock split",
+            });
+        }
+        Ok(StockSplit {
+            symbol,
+            effective_date: self.ex_date,
+            old_rate: self.old_rate,
+            new_rate: self.new_rate,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1032,6 +1155,89 @@ mod tests {
         assert!(requests[0].contains("apca-api-secret-key: fixture-secret"));
         assert!(requests[0].contains("symbols=AAPL%2CMSFT"));
         assert!(requests[1].contains("page_token=next"));
+    }
+
+    #[tokio::test]
+    async fn paginated_forward_and_reverse_splits_are_normalized() {
+        let (base_url, requests, server) = fixture_server(vec![
+            FixtureResponse {
+                status: 200,
+                headers: vec![],
+                body: r#"{"corporate_actions":{"reverse_splits":[{"symbol":" inhd ","ex_date":"2026-05-04","process_date":"2026-05-04","new_rate":1,"old_rate":20}]},"next_page_token":"next"}"#,
+            },
+            FixtureResponse {
+                status: 200,
+                headers: vec![],
+                body: r#"{"corporate_actions":{"forward_splits":[{"symbol":"NVDA","ex_date":"2024-06-10","process_date":"2024-06-10","new_rate":10,"old_rate":1}]},"next_page_token":null}"#,
+            },
+        ]);
+        let temp = TempDir::new().expect("temp dir");
+        let provider = AlpacaProvider::new(&settings(&temp, &base_url)).expect("provider");
+        let splits = provider
+            .fetch_stock_splits(
+                &["inhd".to_owned(), "NVDA".to_owned(), "INHD".to_owned()],
+                NaiveDate::from_ymd_opt(2024, 1, 1).expect("start date"),
+                NaiveDate::from_ymd_opt(2026, 7, 29).expect("end date"),
+            )
+            .await
+            .expect("splits");
+        server.join().expect("fixture server");
+
+        assert_eq!(
+            splits,
+            vec![
+                StockSplit {
+                    symbol: "INHD".to_owned(),
+                    effective_date: NaiveDate::from_ymd_opt(2026, 5, 4)
+                        .expect("reverse split date"),
+                    old_rate: 20.0,
+                    new_rate: 1.0,
+                },
+                StockSplit {
+                    symbol: "NVDA".to_owned(),
+                    effective_date: NaiveDate::from_ymd_opt(2024, 6, 10)
+                        .expect("forward split date"),
+                    old_rate: 1.0,
+                    new_rate: 10.0,
+                },
+            ]
+        );
+        let requests = requests.lock().expect("fixture requests");
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("GET /v1/corporate-actions?"));
+        assert!(requests[0].contains("symbols=INHD%2CNVDA"));
+        assert!(requests[0].contains("types=forward_split%2Creverse_split"));
+        assert!(requests[0].contains("start=2024-01-01"));
+        assert!(requests[0].contains("end=2026-07-29"));
+        assert!(requests[1].contains("page_token=next"));
+    }
+
+    #[tokio::test]
+    async fn missing_corporate_action_envelope_is_rejected() {
+        let (base_url, _requests, server) = fixture_server(vec![FixtureResponse {
+            status: 200,
+            headers: vec![],
+            body: r#"{"next_page_token":null}"#,
+        }]);
+        let temp = TempDir::new().expect("temp dir");
+        let provider = AlpacaProvider::new(&settings(&temp, &base_url)).expect("provider");
+
+        let error = provider
+            .fetch_stock_splits(
+                &["INHD".to_owned()],
+                NaiveDate::from_ymd_opt(2026, 1, 1).expect("start date"),
+                NaiveDate::from_ymd_opt(2026, 7, 29).expect("end date"),
+            )
+            .await
+            .expect_err("missing split envelope");
+        server.join().expect("fixture server");
+
+        assert!(matches!(
+            error,
+            ProviderError::InvalidData {
+                resource: "stock split"
+            }
+        ));
     }
 
     #[tokio::test]

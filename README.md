@@ -59,9 +59,9 @@ statistics, related news, sector rank, and absolute and relative gain.
 - Reorders tickers by estimated market cap with SEC public-float fallback,
   gain, volume, or symbol.
 - Provides responsive sector grids and a ticker detail screen with a
-  Braille-resolution price trace, softly filled tint, price/time axes,
-  fine-grained volume histogram, current-order rank, statistics, company
-  context, and news.
+  time-spaced Braille price trace, softly filled tint, price/time axes,
+  exact cursor labels, cached-history coverage, a fine-grained volume
+  histogram, current-order rank, statistics, company context, and news.
 - Supports mouse hover, clicking, wheel input, keyboard navigation, and
   terminal resize events.
 - Searches cached companies by symbol or company name, including retained
@@ -86,6 +86,10 @@ selected cutoff. Range changes therefore update Volume ordering, tile values,
 and brightness. Missing return or range-volume data appears neutral. When the
 selected price endpoint is more than 72 hours old, only the ticker label is
 underlined as a freshness hint while retaining a contrast-aware foreground.
+Provider bars that explicitly describe no trading (zero volume, zero or absent
+trade count, and identical OHLC prices) remain in the raw cache but do not
+become price endpoints, refresh freshness, extend history coverage, or create a
+flat chart plateau.
 
 ## Why Rust
 
@@ -359,6 +363,14 @@ Up/Down (or `k`/`j`) selects the related-news row; `Enter` opens it.
 sector, starred list, or benchmark order while preserving the selected range
 and ordering.
 
+When the chart is wide enough, its cursor labels the selected price beside the
+trace intersection and the selected date or time beside the X axis. Detail
+headers summarize the cached price-observation span and its start, while
+Statistics shows both boundary dates.
+Ranges longer than that observed span are muted in the detail rail, but remain
+fully clickable and keep their keyboard shortcuts; `ALL` always means all
+cached history.
+
 Sector and Starred cells show the ticker plus one selected value. Choosing an
 ordering resets its direction and selects its natural default value: estimated
 market cap, relative gain, volume, or price for alphabetical order. `i` then
@@ -366,7 +378,9 @@ cycles the six available values independently. `o` reverses ticker order in
 Overview, Sector, and Starred views. `v` applies Grid or Spiral placement to the
 nested Overview sector heatmaps and the expanded Sector/Starred heatmaps. In
 ticker-selectable views, mouse targets and arrow-key navigation follow the
-visible layout; Overview input remains sector-level.
+visible layout; Overview input remains sector-level. Overview focus is
+exclusive: selecting one benchmark clears sector emphasis, and selecting a
+sector clears benchmark emphasis.
 
 The `g` sector prefix applies only to the immediately following key. While it
 is armed, `Esc` or `Backspace` cancels it without navigating; any other
@@ -431,8 +445,12 @@ embedded release catalog, otherwise it uses the embedded catalog.
 
 The catalog includes SEC public float as a ranking proxy plus
 provenance-tagged common-share estimates where the official filings support
-one. On startup the client refreshes candidate snapshots, estimates ordinary
-market cap from shares and price, and selects each sector's top 100 by
+one. On startup the client refreshes candidate snapshots and prefers a valid
+provider-supplied market cap. Otherwise, a provider with corporate-action
+coverage adjusts the catalog share estimate for forward and reverse splits
+after its as-of date before multiplying by the current price. If the required
+split lookup fails, the local estimate remains unavailable instead of combining
+stale shares with a post-split price. Each sector's top 100 is then selected by
 estimated cap or numeric public float when cap is unavailable. Public float is
 never displayed as market cap.
 It then resumes two years of daily bars plus all provider-available weekly
@@ -443,7 +461,10 @@ opened. Beyond the special `1D` snapshot case, heatmap volume prefers daily
 bars through `2Y` and weekly bars for `5Y`, `10Y`, and `ALL`, with cached
 alternative timeframes used only when the preferred aggregate is unavailable.
 Ticker-detail statistics continue to show latest-session snapshot volume,
-while the chart keeps raw per-bar volume.
+while the chart uses traded provider bars without manufacturing volume for
+price-only endpoints. Chart samples keep their real timestamp spacing, so a
+trading halt or other long observation gap remains visibly blank rather than
+being stretched into a flat continuation.
 In live mode, the broad-market snapshot refresh runs immediately on startup
 and every five minutes by default; `r` starts one immediately and restarts that
 timer. Opening a ticker or changing its range separately triggers a lazy detail

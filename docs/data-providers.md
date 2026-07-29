@@ -16,6 +16,7 @@ and terms change; verify them for your account and use case.
 | Overview benchmarks | Alpaca stock data for `SPY`, `DIA`, and `QQQ` ETF proxies | Yes | Labeled as proxies; values are not literal S&P 500, Dow, or Nasdaq index levels. |
 | Current price, previous close, OHLC, volume | Alpaca stock snapshots | Yes | Coverage depends on the selected feed and subscription. |
 | Historical OHLCV, trades, VWAP | Alpaca multi-symbol bars | Yes | Requests use `adjustment=all`; the bulk cache keeps two years of daily bars and all available weekly bars. |
+| Forward and reverse stock splits | Selected provider corporate-actions capability; Alpaca Market Data API in the default adapter | Derived cap only | Reconciles dated SEC share estimates with current prices; raw split events are not persisted. |
 | News headline, date, source, summary, URL, symbols | Alpaca Historical News API (currently Benzinga content) | Yes | Loaded lazily for an opened ticker. |
 | Demo issuer identities | Embedded SEC-derived catalog | Yes | Real ticker/name associations; not a claim that the security remains active. |
 | Demo prices, rankings, volume, descriptions, news | Built-in deterministic generator | Yes | Entirely simulated and visibly labeled; no provider market data is used. |
@@ -43,6 +44,7 @@ Relevant official documentation:
 - [About the Market Data API](https://docs.alpaca.markets/us/docs/about-market-data-api)
 - [Market Data FAQ](https://docs.alpaca.markets/us/docs/market-data-faq)
 - [Historical stock data](https://docs.alpaca.markets/us/docs/historical-stock-data-1)
+- [Corporate actions endpoint](https://docs.alpaca.markets/us/reference/corporateactions-1)
 - [Historical news data](https://docs.alpaca.markets/us/docs/historical-news-data)
 - [News endpoint reference](https://docs.alpaca.markets/us/reference/news-3)
 - [Index market-data launch](https://docs.alpaca.markets/us/changelog/2026-06-03-market-data-9dddd18)
@@ -90,6 +92,11 @@ company rows, favorites, and cached observations are preserved. A later
 active-asset response reactivates catalog candidates. Alpaca's `active` status
 does not by itself guarantee current liquidity, tradability for a particular
 account, or complete quote coverage.
+
+Alpaca can emit flat zero-volume daily rows while a security has no trades,
+including during a halt. The client preserves those rows in its raw cache but
+does not use a row with zero or absent trades and identical OHLC prices as a
+price observation, freshness timestamp, history endpoint, or chart point.
 
 `sip` requires appropriate account entitlement for current consolidated data.
 When a requested snapshot feed is unavailable, the adapter may try an allowed
@@ -327,14 +334,17 @@ filing. These policies are calculation metadata, not extra sector tiles.
 
 `EntityPublicFloat` is a filer-reported issuer-level value and is **not market
 capitalization**. The build stores it as a numeric size proxy with provenance;
-it never writes it into `Company.market_cap`. When both a catalog share estimate
-and a current snapshot price from the selected market-data provider exist,
-runtime estimates market cap as price-equivalent common shares times current
-price. Each successful candidate snapshot refresh then selects 100 companies
-per sector using estimated market cap when available or numeric public float
-otherwise. Those 900 companies and the three explicitly configured benchmark
-ETF proxies receive the bulk daily and all-provider-available weekly history
-backfills.
+it never writes it into `Company.market_cap`. Runtime first accepts a valid cap
+supplied with the current provider snapshot. Otherwise, when both a catalog
+share estimate and a current snapshot price exist, a corporate-action-capable
+provider supplies intervening forward and reverse splits. Runtime applies their
+ratios to the dated price-equivalent common shares before multiplying by current
+price. A failed required split lookup leaves the local estimate unavailable
+instead of combining stale shares with a post-split price. Each successful
+candidate snapshot refresh then selects 100 companies per sector using
+estimated market cap when available or numeric public float otherwise. Those
+900 companies and the three explicitly configured benchmark ETF proxies
+receive the bulk daily and all-provider-available weekly history backfills.
 
 This means a company can move into the visible top 100 as prices change if it
 is already in the resolved candidate pool and has usable shares. A large
@@ -373,8 +383,9 @@ Consequently:
   screening catches only obvious anomalies.
 - A low-confidence weighted-average count is not a point-in-time count.
   Price-equivalent multi-class estimates depend on reviewed conversion or
-  economic-equivalence assumptions and can become stale after an amendment or
-  corporate action.
+  economic-equivalence assumptions. The Alpaca adapter reconciles intervening
+  forward and reverse splits, but amendments and other corporate actions can
+  still make an estimate stale.
 - Shares can remain absent or ambiguous for multi-class issuers, ADRs, and
   foreign filers, and a current SEC ticker identity can temporarily fail to
   join older facts after a CIK reorganization.
@@ -478,10 +489,14 @@ published indexes.
 The heatmap can order by market capitalization, but neither Alpaca's basic
 asset payload nor the SEC source set is a complete fundamentals feed. The SEC
 public-float proxy and share estimates can become stale between catalog
-releases. When shares are available, a new snapshot estimates market cap as
-price-equivalent common shares times the canonical ticker price. This is
-ordinary common-equity market cap, not fully diluted value: preferred shares,
-RSUs, options, and unexercised convertibles are excluded.
+releases. A valid provider snapshot cap takes precedence. Otherwise, when
+shares are available and the adapter can establish split coverage from their
+as-of date, the client applies intervening forward and reverse split ratios and
+estimates market cap as adjusted price-equivalent common shares times the
+canonical ticker price. If that required lookup fails, the local estimate is
+cleared rather than knowingly mixing pre-split shares with a post-split price.
+This is ordinary common-equity market cap, not fully diluted value: preferred
+shares, RSUs, options, and unexercised convertibles are excluded.
 
 Market-cap ordering compares the estimated cap where present and the numeric
 public-float proxy otherwise, then uses catalog rank and symbol for stable
@@ -492,10 +507,10 @@ sum for longer ranges; ticker-detail statistics retain that latest-session
 snapshot volume. Alphabetical ordering uses ticker symbol.
 
 This remains an approximation. Different traded classes can have different
-prices; treasury-share treatment, ADR ratios, amendments, filing lag, and
-corporate actions can all cause divergence from a commercial fundamentals
-provider. No Yahoo page, cookie, or unofficial scraped feed is used at build or
-runtime.
+prices; treasury-share treatment, ADR ratios, amendments, filing lag, delayed
+corporate-action publication, and actions other than forward/reverse splits can
+all cause divergence from a commercial fundamentals provider. No Yahoo page,
+cookie, or unofficial scraped feed is used at build or runtime.
 
 ## Adding A Provider
 
@@ -512,11 +527,15 @@ A provider contribution must include:
 7. A mapping strategy that leaves unknown sectors and instruments explicit.
 
 At the code boundary, an adapter implements `AssetProvider` and
-`MarketDataProvider`; `NewsProvider` is optional and may be supplied
-independently. It is assembled into `ProviderSet`, selected through
-`--provider`/configuration, and must keep provider payloads and errors out of
-the domain, storage, and rendering layers. A new provider also needs its own
-credential/onboarding branch where applicable.
+`MarketDataProvider`; `CorporateActionsProvider` and `NewsProvider` are
+optional and may be supplied independently. A provider-supplied snapshot cap
+therefore remains the portable enrichment path when an adapter cannot supply
+split history. An older local share estimate is used without split coverage
+only when its as-of date matches the snapshot date. The capabilities are
+assembled into `ProviderSet`, selected through `--provider`/configuration, and
+must keep provider payloads and errors out of the domain, storage, and rendering
+layers. A new provider also needs its own credential/onboarding branch where
+applicable.
 
 `StockApiProvider` is the reference for an adapter that does not reuse Alpaca
 credentials and can operate either anonymously or with its own bearer token. It

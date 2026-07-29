@@ -7,6 +7,7 @@ use crate::{
     benchmarks::MarketBenchmark,
     domain::{DateRange, Sector, SortMode},
     ui::{
+        chart::EMPTY_CHART_SAMPLE_INDEX,
         layout::{sector_cell_for_rank, sector_rank_for_cell},
         state::{DetailTab, Overlay, Route, UiAction, UiState},
     },
@@ -266,22 +267,21 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
             state.hovered_symbol = None;
             if let Some(selected) = state.selected_benchmark {
                 if vertical < 0 {
-                    state.selected_sector = 6 + selected.min(2);
-                    state.selected_benchmark = None;
+                    state.focus_overview_sector(6 + selected.min(2));
                 } else if horizontal != 0 {
-                    state.selected_benchmark = Some(offset(selected, horizontal, 2));
+                    state.focus_overview_benchmark(offset(selected, horizontal, 2));
                 }
                 return Vec::new();
             }
             let row = state.selected_sector / 3;
             let column = state.selected_sector % 3;
             if row == 2 && vertical > 0 {
-                state.selected_benchmark = Some(column);
+                state.focus_overview_benchmark(column);
                 return Vec::new();
             }
             let row = offset(row, vertical, 2);
             let column = offset(column, horizontal, 2);
-            state.selected_sector = row * 3 + column;
+            state.focus_overview_sector(row * 3 + column);
         }
         Route::Sector(_) | Route::Favorites => {
             state.hovered_symbol = None;
@@ -312,14 +312,11 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
         }
         Route::Ticker(_) => {
             if horizontal != 0 {
-                let current = state
-                    .detail_hover
-                    .unwrap_or_else(|| state.chart_sample_indices.len().saturating_sub(1));
-                state.detail_hover = Some(offset(
-                    current,
+                state.detail_hover = move_chart_selection(
+                    &state.chart_sample_indices,
+                    state.detail_hover,
                     horizontal,
-                    state.chart_sample_indices.len().saturating_sub(1),
-                ));
+                );
             }
             if vertical != 0 {
                 let maximum = state
@@ -331,6 +328,37 @@ fn move_selection(state: &mut UiState, horizontal: isize, vertical: isize) -> Ve
         }
     }
     Vec::new()
+}
+
+fn move_chart_selection(
+    samples: &[usize],
+    current: Option<usize>,
+    direction: isize,
+) -> Option<usize> {
+    if samples.is_empty() || direction == 0 {
+        return current;
+    }
+    let last_observation = samples
+        .iter()
+        .rposition(|sample| *sample != EMPTY_CHART_SAMPLE_INDEX)?;
+    let current = match current {
+        Some(current) => current.min(samples.len() - 1),
+        None if direction > 0 => return Some(last_observation),
+        None => last_observation,
+    };
+    let mut candidate = current;
+    loop {
+        let Some(next) = candidate.checked_add_signed(direction) else {
+            return Some(current);
+        };
+        if next >= samples.len() {
+            return Some(current);
+        }
+        candidate = next;
+        if samples[candidate] != EMPTY_CHART_SAMPLE_INDEX {
+            return Some(candidate);
+        }
+    }
 }
 
 fn activate_selection(state: &mut UiState) -> Vec<AppCommand> {
@@ -489,12 +517,12 @@ fn apply_action(state: &mut UiState, action: UiAction) -> Vec<AppCommand> {
         }
         UiAction::OpenSector(sector) => {
             state.route = Route::Sector(sector);
-            state.selected_sector = Sector::ALL
+            let sector_index = Sector::ALL
                 .iter()
                 .position(|item| *item == sector)
                 .unwrap_or(0);
+            state.focus_overview_sector(sector_index);
             state.selected_ticker = 0;
-            state.selected_benchmark = None;
             state.hovered_symbol = None;
             state.detail_return_route = None;
             Vec::new()
@@ -546,11 +574,10 @@ fn switch_view(state: &mut UiState, direction: isize) -> Vec<AppCommand> {
                 .unwrap_or(0);
             let next = cycle_index(current, direction, Sector::ALL.len());
             state.route = Route::Sector(Sector::ALL[next]);
-            state.selected_sector = next;
+            state.focus_overview_sector(next);
             state.selected_ticker = state
                 .selected_ticker
                 .min(state.visible_tiles().len().saturating_sub(1));
-            state.selected_benchmark = None;
             state.hovered_symbol = None;
             state.detail_return_route = None;
             Vec::new()
@@ -571,7 +598,7 @@ fn switch_view(state: &mut UiState, direction: isize) -> Vec<AppCommand> {
             let next = cycle_index(current, direction, symbols.len());
             let next_symbol = symbols[next].clone();
             if context.is_none() && MarketBenchmark::for_symbol(&symbol).is_some() {
-                state.selected_benchmark = Some(next);
+                state.focus_overview_benchmark(next);
             } else {
                 state.detail_return_route = state.detail_return_route.clone().or(context);
                 state.selected_ticker = next;
@@ -989,6 +1016,39 @@ mod tests {
         assert_eq!(state.selected_ticker, 3);
         move_selection(&mut state, 0, -1);
         assert_eq!(state.selected_ticker, 0);
+    }
+
+    #[test]
+    fn ticker_chart_navigation_skips_unobserved_time_columns() {
+        let mut state = UiState {
+            route: Route::Ticker("TEST".to_owned()),
+            chart_sample_indices: vec![
+                10,
+                EMPTY_CHART_SAMPLE_INDEX,
+                11,
+                EMPTY_CHART_SAMPLE_INDEX,
+                EMPTY_CHART_SAMPLE_INDEX,
+                EMPTY_CHART_SAMPLE_INDEX,
+            ],
+            detail_hover: Some(5),
+            ..UiState::default()
+        };
+
+        move_selection(&mut state, -1, 0);
+        assert_eq!(state.detail_hover, Some(2));
+        move_selection(&mut state, 1, 0);
+        assert_eq!(state.detail_hover, Some(2));
+
+        state.detail_hover = Some(0);
+        move_selection(&mut state, 1, 0);
+        assert_eq!(state.detail_hover, Some(2));
+
+        state.detail_hover = None;
+        move_selection(&mut state, 1, 0);
+        assert_eq!(state.detail_hover, Some(2));
+        state.detail_hover = None;
+        move_selection(&mut state, -1, 0);
+        assert_eq!(state.detail_hover, Some(0));
     }
 
     #[test]

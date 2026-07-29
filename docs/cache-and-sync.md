@@ -85,6 +85,12 @@ OHLCV observations keyed by `(symbol, timeframe, timestamp)`. Optional trade
 count and VWAP and a source label are stored alongside open, high, low, close,
 and volume. Repeated history windows upsert the same keys.
 
+Some providers return a daily placeholder while a security has no trades. A
+bar with zero volume, zero or absent trade count, and identical OHLC prices is
+retained here for raw-cache fidelity, but storage does not treat it as a price
+observation. It cannot select a timeframe or period endpoint, refresh a
+ticker's freshness, extend displayed history coverage, or enter a detail chart.
+
 ### `snapshots`
 
 The newest per-symbol current price, previous close, session open/high/low,
@@ -131,10 +137,17 @@ A live database is prepared in stages:
    names/exchanges are merged without erasing catalog sector, proxy,
    share-estimate, or market-cap metadata.
 4. Request current snapshots for all retained sector candidates and the three
-   benchmark ETF proxies in configurable batches (100 by default).
-5. Where a catalog share estimate is available, calculate estimated market cap
-   from price-equivalent common shares times current price. Re-select 100
-   members per sector by that estimate or the numeric public-float proxy, and
+   benchmark ETF proxies in configurable batches (100 by default). When the
+   adapter supports corporate actions, request forward and reverse splits from
+   the oldest relevant catalog share date through the refresh date in
+   parallel.
+5. Prefer a valid market cap supplied with the provider snapshot. Otherwise,
+   where a catalog share estimate and corporate-action coverage are available,
+   apply intervening split ratios through that snapshot's observation date
+   before multiplying price-equivalent common shares by current price. If
+   required split coverage fails, leave the local estimate unavailable rather
+   than multiply stale shares by a post-split price. Re-select 100 members per
+   sector by the resulting estimate or the numeric public-float proxy, and
    store a dated snapshot. The proxy affects selection but never populates the
    market-cap field shown in ticker statistics.
 6. Start adjusted history requests for those selected 900 companies and three
@@ -184,21 +197,28 @@ by a background pruning job. Repeated overlap upserts do not duplicate rows.
 
 The worker refreshes candidate snapshots once on startup and at the configured
 cadence, five minutes by default. Each successful refresh can update estimated
-market caps and writes that day's top-100 membership. `r` or the Refresh rail
-action asks for an immediate snapshot refresh and restarts the cadence timer,
-preventing a scheduled refresh immediately afterward. No streaming or
-per-trade connection is used. If the prior history job has finished, a
-successful refresh also starts another incremental history pass so newly
-selected members are backfilled without restarting the application. Demo and
-offline modes do not schedule or request remote refreshes.
+market caps and writes that day's top-100 membership. Snapshot and available
+split requests run together; a split-request error does not discard valid
+prices or provider-supplied caps, but it suppresses share-derived caps for that
+refresh. Successful per-symbol split coverage, including an empty result, is
+cached in memory for up to 24 hours and reused by broad and lazy ticker
+refreshes. `r` or the Refresh rail action asks for an immediate snapshot
+refresh and restarts the cadence timer, preventing a scheduled refresh
+immediately afterward. No streaming or per-trade connection is used. If the
+prior history job has finished, a successful refresh also starts another
+incremental history pass so newly selected members are backfilled without
+restarting the application. Demo and offline modes do not schedule or request
+remote refreshes.
 
 Snapshots drive `1D` return when price and previous close are present. The UI
-falls back to cached bars when snapshot fields are unavailable. A tile is
-considered stale when its newest snapshot/bar timestamp is absent or more than
-72 hours old; weekends and holidays can therefore look stale after a long
-closure, which is an informational hint rather than a feed diagnosis. Stale
-ticker labels are underlined while retaining the same contrast-aware foreground
-as current labels.
+falls back to cached price-observation bars when snapshot fields are
+unavailable. A zero-volume, zero-trade flat placeholder cannot refresh the
+endpoint timestamp. A tile is considered stale when its newest snapshot or
+price-observation timestamp is absent or more than 72 hours old; weekends and
+holidays can therefore look stale after a long closure, which is an
+informational hint rather than a feed diagnosis. Stale ticker labels are
+underlined while retaining the same contrast-aware foreground as current
+labels.
 
 Every broad refresh requests every currently retained candidate and benchmark
 proxy. A successful request does not guarantee a new observation for every
@@ -214,7 +234,9 @@ Opening a ticker first loads its cached record, then concurrently requests:
 
 - bars for the selected range's preferred timeframe; and
 - up to 20 newest ticker-related news records; and
-- a current snapshot for price, OHLC, volume, and day return.
+- a current snapshot for price, OHLC, volume, and day return; and
+- forward and reverse splits needed to reconcile a dated local share estimate,
+  when the selected provider exposes that capability.
 
 Preferred chart timeframes are:
 
@@ -225,9 +247,12 @@ Preferred chart timeframes are:
 | `3M`, `6M`, `1Y`, `2Y` | `1Day` |
 | `5Y`, `10Y`, `ALL` | `1Week` |
 
-While a preferred timeframe is not cached, storage chooses an available
-fallback appropriate for that range. Changing the range on a detail view
-triggers another lazy request and redraws from whatever is already cached.
+While a preferred timeframe has no price observations, storage chooses an
+available fallback appropriate for that range. Changing the range on a detail
+view triggers another lazy request and redraws from whatever is already cached.
+The detail header summarizes the complete cached price-observation span, and
+Statistics shows its first and last dates. Longer fixed ranges are visually
+muted while remaining selectable; `ALL` always uses the complete cached span.
 
 News is not globally downloaded for every sector company or benchmark proxy.
 This keeps startup and provider usage bounded. Cached headlines remain
@@ -236,15 +261,17 @@ available offline.
 ## Period Calculations And Sorting
 
 The period endpoint is the newest valid price by timestamp between the current
-snapshot and the latest cached bar. Its timestamp also controls the tile's
-freshness marker, so an older snapshot cannot override a newer bar and a
-price-less snapshot cannot make an old bar price appear current. For non-day
-ranges, the baseline is the last close at or before the exact cutoff, falling
-back to the first close after it. For `1D`, a selected snapshot endpoint uses
-its previous close when available and otherwise uses that cached cutoff
-baseline. Return is endpoint price divided by baseline minus one. Calendar-day
-cutoffs mean the number of trading sessions varies with weekends and holidays.
-`ALL` uses the earliest bar present in the provider-backed local cache.
+snapshot and the latest cached price-observation bar. Its timestamp also
+controls the tile's freshness marker, so an older snapshot cannot override a
+newer traded bar, a price-less snapshot cannot make an old price appear
+current, and a no-trade placeholder cannot manufacture a fresh close. For
+non-day ranges, the baseline is the last observed close at or before the exact
+cutoff, falling back to the first observed close after it. For `1D`, a selected
+snapshot endpoint uses its previous close when available and otherwise uses
+that cached cutoff baseline. Return is endpoint price divided by baseline minus
+one. Calendar-day cutoffs mean the number of trading sessions varies with
+weekends and holidays. `ALL` uses the earliest price observation present in the
+provider-backed local cache.
 Heatmap volume is calculated separately from that price endpoint. `1D` uses
 latest-session cumulative snapshot volume when the snapshot supplies the
 selected price, otherwise it sums cached bars inside the day cutoff. Longer
@@ -258,7 +285,10 @@ Missing range history remains neutral and sorts after known volume.
 
 Ticker price charts add price-only boundary points for the cutoff baseline and
 selected endpoint when those values are not already represented by a cached
-bar. Volume charts continue to use the unmodified provider OHLCV bars.
+price-observation bar. Both plots use real timestamps across the selected
+window, leave long no-observation intervals blank, and exclude flat no-trade
+placeholders. Volume still comes only from traded provider OHLCV bars; the
+price-only boundary points cannot fabricate it.
 
 Sort modes operate within each sector:
 

@@ -204,6 +204,20 @@ impl Default for UiState {
 }
 
 impl UiState {
+    pub fn focus_overview_sector(&mut self, index: usize) {
+        self.selected_sector = index.min(Sector::ALL.len() - 1);
+        self.selected_benchmark = None;
+    }
+
+    pub fn focus_overview_benchmark(&mut self, index: usize) {
+        self.selected_benchmark = Some(index.min(MarketBenchmark::ALL.len() - 1));
+    }
+
+    #[must_use]
+    pub fn overview_sector_is_focused(&self, index: usize) -> bool {
+        self.selected_benchmark.is_none() && self.selected_sector == index
+    }
+
     pub fn select_sort(&mut self, sort: SortMode) {
         self.sort = sort;
         self.sort_descending = sort.default_descending();
@@ -323,16 +337,19 @@ impl UiState {
         if self.overlay.is_none() {
             match target.as_ref().map(|(action, _)| action) {
                 Some(UiAction::OpenSector(sector)) if matches!(self.route, Route::Overview) => {
-                    self.selected_sector = Sector::ALL
+                    let index = Sector::ALL
                         .iter()
                         .position(|candidate| candidate == sector)
                         .unwrap_or(self.selected_sector);
-                    self.selected_benchmark = None;
+                    self.focus_overview_sector(index);
                 }
                 Some(UiAction::OpenTicker(symbol)) if matches!(self.route, Route::Overview) => {
-                    self.selected_benchmark = MarketBenchmark::ALL
+                    if let Some(index) = MarketBenchmark::ALL
                         .iter()
-                        .position(|benchmark| benchmark.symbol == symbol);
+                        .position(|benchmark| benchmark.symbol == symbol)
+                    {
+                        self.focus_overview_benchmark(index);
+                    }
                 }
                 Some(UiAction::OpenTicker(symbol))
                     if matches!(self.route, Route::Sector(_) | Route::Favorites) =>

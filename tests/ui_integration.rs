@@ -9,7 +9,7 @@ use stock_tui::{
     domain::{
         Bar, Company, DateRange, MarketTile, NewsItem, Sector, Snapshot, SortMode, TickerDetail,
     },
-    palette::{CANVAS, CYAN, HeatScale, MUTED, PANEL, Theme},
+    palette::{CANVAS, CYAN, HeatScale, MUTED, PANEL, TEXT, Theme},
     ui::{
         layout::{AppLayout, SectorView, sector_cell_for_rank, uniform_grid},
         render,
@@ -463,6 +463,13 @@ fn detail_arrow_axes_keep_chart_and_news_selection_independent() {
         .is_empty()
     );
     assert_eq!(state.detail_hover, Some(usize::from(hovered_index)));
+    let next_observation = state
+        .chart_sample_indices
+        .iter()
+        .enumerate()
+        .skip(usize::from(hovered_index) + 1)
+        .find_map(|(index, sample)| (*sample != usize::MAX).then_some(index))
+        .expect("fixture has an observation to the right of the blank interval");
 
     state.selected_news = 1;
     assert!(press(&mut state, KeyCode::Up, KeyModifiers::NONE).is_empty());
@@ -470,7 +477,7 @@ fn detail_arrow_axes_keep_chart_and_news_selection_independent() {
     assert_eq!(state.detail_hover, Some(usize::from(hovered_index)));
 
     assert!(press(&mut state, KeyCode::Right, KeyModifiers::NONE).is_empty());
-    assert_eq!(state.detail_hover, Some(usize::from(hovered_index) + 1));
+    assert_eq!(state.detail_hover, Some(next_observation));
     assert_eq!(state.selected_news, 0);
     assert_eq!(
         press(&mut state, KeyCode::Enter, KeyModifiers::NONE),
@@ -481,7 +488,7 @@ fn detail_arrow_axes_keep_chart_and_news_selection_independent() {
 
     state.detail_tab = DetailTab::News;
     assert!(press(&mut state, KeyCode::Left, KeyModifiers::NONE).is_empty());
-    assert_eq!(state.detail_hover, Some(usize::from(hovered_index)));
+    assert_eq!(state.detail_hover, Some(next_observation));
     assert!(press(&mut state, KeyCode::Down, KeyModifiers::NONE).is_empty());
     assert_eq!(state.selected_news, 1);
 }
@@ -1025,6 +1032,20 @@ fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
     assert_eq!(state.selected_benchmark, Some(2));
 
     let selected_buffer = render_at(&mut state, 120, 40);
+    let sector_targets = state
+        .hit_targets
+        .iter()
+        .filter(|target| matches!(target.action, UiAction::OpenSector(_)))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(sector_targets.len(), Sector::ALL.len());
+    assert!(
+        sector_targets.iter().all(|target| {
+            (target.rect.y..target.rect.bottom())
+                .all(|y| selected_buffer[(target.rect.x, y)].symbol() == "│")
+        }),
+        "benchmark focus should suppress every sector selection marker"
+    );
     assert!((qqq.rect.x..qqq.rect.right()).any(|x| {
         selected_buffer[(x, qqq.rect.y)]
             .modifier
@@ -1054,6 +1075,20 @@ fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
         .is_empty()
     );
     assert_eq!(state.selected_benchmark, None);
+    let sector_buffer = render_at(&mut state, 120, 40);
+    assert!(
+        (technology.rect.y..technology.rect.bottom())
+            .all(|y| sector_buffer[(technology.rect.x, y)].symbol() == "▌"),
+        "sector hover should clear benchmark focus and restore the sector marker"
+    );
+    assert!(
+        (qqq.rect.x..qqq.rect.right()).all(|x| {
+            !sector_buffer[(x, qqq.rect.y)]
+                .modifier
+                .contains(Modifier::BOLD)
+        }),
+        "sector focus should remove benchmark emphasis"
+    );
     assert!(
         handle_event(
             &mut state,
@@ -1089,6 +1124,52 @@ fn overview_benchmark_footer_renders_selects_and_opens_equal_cells() {
             "compact benchmark footer hides {symbol}"
         );
     }
+}
+
+#[test]
+fn overview_keyboard_focus_is_exclusive_between_sectors_and_benchmarks() {
+    let mut state = fixture_state();
+    state.focus_overview_sector(7);
+
+    let sector_buffer = render_at(&mut state, 120, 40);
+    let materials = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenSector(Sector::Materials))
+        .cloned()
+        .expect("overview render registers the materials panel");
+    assert!(
+        (materials.rect.y..materials.rect.bottom())
+            .all(|y| sector_buffer[(materials.rect.x, y)].symbol() == "▌")
+    );
+
+    assert!(press(&mut state, KeyCode::Down, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.selected_benchmark, Some(1));
+    assert_eq!(state.selected_sector, 7, "sector cursor should be retained");
+    let benchmark_buffer = render_at(&mut state, 120, 40);
+    let sector_targets = state
+        .hit_targets
+        .iter()
+        .filter(|target| matches!(target.action, UiAction::OpenSector(_)))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        sector_targets.iter().all(|target| {
+            (target.rect.y..target.rect.bottom())
+                .all(|y| benchmark_buffer[(target.rect.x, y)].symbol() == "│")
+        }),
+        "keyboard benchmark focus should suppress sector emphasis"
+    );
+
+    assert!(press(&mut state, KeyCode::Up, KeyModifiers::NONE).is_empty());
+    assert_eq!(state.selected_benchmark, None);
+    assert_eq!(state.selected_sector, 7);
+    let restored = render_at(&mut state, 120, 40);
+    assert!(
+        (materials.rect.y..materials.rect.bottom())
+            .all(|y| restored[(materials.rect.x, y)].symbol() == "▌"),
+        "moving up should restore focus to the aligned sector"
+    );
 }
 
 #[test]
@@ -1456,6 +1537,35 @@ fn every_range_remains_clickable_at_the_minimum_supported_height() {
 }
 
 #[test]
+fn detail_dims_ranges_beyond_observed_history_without_disabling_them() {
+    let mut state = detail_state();
+    let buffer = render_at(&mut state, 200, 60);
+
+    for (range, expected_color) in [
+        (DateRange::TwoYears, TEXT),
+        (DateRange::FiveYears, MUTED),
+        (DateRange::TenYears, MUTED),
+        (DateRange::All, TEXT),
+    ] {
+        let target = state
+            .hit_targets
+            .iter()
+            .find(|target| target.action == UiAction::SelectRange(range))
+            .unwrap_or_else(|| panic!("{} range target is missing", range.label()));
+        assert_eq!(
+            buffer[(target.rect.x, target.rect.y)].fg,
+            expected_color,
+            "{} range has the wrong coverage cue",
+            range.label()
+        );
+    }
+
+    let screen = screen_text(&buffer);
+    assert!(screen.contains("Data 2Y 2M 10D since 2024-05-04"));
+    assert!(screen.contains("2Y 2M 10D · 2024-05-04 to 2026-07-13"));
+}
+
+#[test]
 fn overview_order_and_view_rail_controls_remain_clickable_at_minimum_size() {
     let mut state = fixture_state();
     let screen = screen_text(&render_at(&mut state, 60, 20));
@@ -1648,6 +1758,10 @@ fn fixture_detail() -> TickerDetail {
             updated_at: fixture_time(),
         }),
         bars,
+        history_start_at: Some(fixture_time() - Duration::days(800)),
+        history_end_at: Some(fixture_time()),
+        range_start_at: fixture_time() - Duration::days(7),
+        range_end_at: fixture_time(),
         news,
         starred: true,
         period_start_price: Some(103.75 / 1.0725),

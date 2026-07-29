@@ -3,15 +3,23 @@
 pub mod alpaca;
 pub mod stock_api;
 
-use std::{fmt, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
+use tokio::sync::Mutex;
 
-use crate::domain::{Bar, Company, NewsItem, Snapshot};
+use crate::domain::{Bar, Company, NewsItem, Snapshot, StockSplit};
 
 pub use alpaca::AlpacaProvider;
 pub use stock_api::StockApiProvider;
+
+const CORPORATE_ACTION_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Failures shared by all provider adapters.
 #[derive(Debug, thiserror::Error)]
@@ -80,6 +88,17 @@ pub trait MarketDataProvider: Send + Sync {
     }
 }
 
+/// Split history used to reconcile dated share counts with current prices.
+#[async_trait]
+pub trait CorporateActionsProvider: Send + Sync {
+    async fn fetch_stock_splits(
+        &self,
+        symbols: &[String],
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Vec<StockSplit>, ProviderError>;
+}
+
 /// News is deliberately separate so callers fetch it only for visible ticker details.
 #[async_trait]
 pub trait NewsProvider: Send + Sync {
@@ -88,6 +107,20 @@ pub trait NewsProvider: Send + Sync {
         symbols: &[String],
         limit: usize,
     ) -> Result<Vec<NewsItem>, ProviderError>;
+}
+
+#[derive(Debug)]
+struct CachedStockSplits {
+    start: NaiveDate,
+    end: NaiveDate,
+    fetched_at: Instant,
+    splits: Vec<StockSplit>,
+}
+
+#[derive(Debug, Default)]
+struct CorporateActionsCache {
+    by_symbol: HashMap<String, CachedStockSplits>,
+    retry_after: Option<Instant>,
 }
 
 /// Provider-neutral capabilities used by synchronization.
@@ -100,6 +133,8 @@ pub struct ProviderSet {
     display_name: Arc<str>,
     assets: Arc<dyn AssetProvider>,
     market_data: Arc<dyn MarketDataProvider>,
+    corporate_actions: Option<Arc<dyn CorporateActionsProvider>>,
+    corporate_actions_cache: Arc<Mutex<CorporateActionsCache>>,
     news: Option<Arc<dyn NewsProvider>>,
 }
 
@@ -116,6 +151,8 @@ impl ProviderSet {
             display_name: display_name.into(),
             assets,
             market_data,
+            corporate_actions: None,
+            corporate_actions_cache: Arc::new(Mutex::new(CorporateActionsCache::default())),
             news: None,
         }
     }
@@ -137,6 +174,15 @@ impl ProviderSet {
     }
 
     #[must_use]
+    pub fn with_corporate_actions(
+        mut self,
+        corporate_actions: Arc<dyn CorporateActionsProvider>,
+    ) -> Self {
+        self.corporate_actions = Some(corporate_actions);
+        self
+    }
+
+    #[must_use]
     pub fn with_news(mut self, news: Arc<dyn NewsProvider>) -> Self {
         self.news = Some(news);
         self
@@ -155,6 +201,11 @@ impl ProviderSet {
     #[must_use]
     pub fn supports_news(&self) -> bool {
         self.news.is_some()
+    }
+
+    #[must_use]
+    pub fn supports_corporate_actions(&self) -> bool {
+        self.corporate_actions.is_some()
     }
 
     pub async fn fetch_assets(&self) -> Result<Vec<Company>, ProviderError> {
@@ -180,6 +231,115 @@ impl ProviderSet {
         self.market_data.fetch_snapshots(symbols).await
     }
 
+    pub async fn fetch_stock_splits(
+        &self,
+        symbols: &[String],
+        start: NaiveDate,
+        end: NaiveDate,
+    ) -> Result<Option<Vec<StockSplit>>, ProviderError> {
+        if end < start {
+            return Err(ProviderError::InvalidRequest(
+                "stock-split end must not precede start".to_owned(),
+            ));
+        }
+        let Some(corporate_actions) = &self.corporate_actions else {
+            return Ok(None);
+        };
+        let mut seen = HashSet::new();
+        let symbols = symbols
+            .iter()
+            .map(|symbol| symbol.trim().to_ascii_uppercase())
+            .filter(|symbol| !symbol.is_empty() && seen.insert(symbol.clone()))
+            .collect::<Vec<_>>();
+        if symbols.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+
+        let now = Instant::now();
+        let (missing, mut result, cooling_down) = {
+            let mut cache = self.corporate_actions_cache.lock().await;
+            cache.by_symbol.retain(|_, cached| {
+                now.saturating_duration_since(cached.fetched_at) < CORPORATE_ACTION_CACHE_TTL
+            });
+            let mut missing = Vec::new();
+            let mut result = Vec::new();
+            for symbol in &symbols {
+                match cache.by_symbol.get(symbol) {
+                    Some(cached) if cached.start <= start && cached.end >= end => {
+                        result.extend(
+                            cached
+                                .splits
+                                .iter()
+                                .filter(|split| {
+                                    split.effective_date >= start && split.effective_date <= end
+                                })
+                                .cloned(),
+                        );
+                    }
+                    _ => missing.push(symbol.clone()),
+                }
+            }
+            let cooling_down = cache
+                .retry_after
+                .is_some_and(|retry_after| retry_after > now);
+            (missing, result, cooling_down)
+        };
+        if missing.is_empty() {
+            sort_and_deduplicate_splits(&mut result);
+            return Ok(Some(result));
+        }
+        if cooling_down {
+            return Err(ProviderError::Api {
+                status: 503,
+                message: "corporate-action lookup is cooling down after a recent failure"
+                    .to_owned(),
+            });
+        }
+
+        let fetched = match corporate_actions
+            .fetch_stock_splits(&missing, start, end)
+            .await
+        {
+            Ok(fetched) => fetched,
+            Err(error) => {
+                self.corporate_actions_cache.lock().await.retry_after =
+                    Some(now + CORPORATE_ACTION_CACHE_TTL);
+                return Err(error);
+            }
+        };
+        let missing_set = missing.iter().map(String::as_str).collect::<HashSet<_>>();
+        let fetched = fetched
+            .into_iter()
+            .filter_map(|mut split| {
+                split.symbol = split.symbol.trim().to_ascii_uppercase();
+                missing_set.contains(split.symbol.as_str()).then_some(split)
+            })
+            .collect::<Vec<_>>();
+        {
+            let mut cache = self.corporate_actions_cache.lock().await;
+            cache.retry_after = None;
+            for symbol in missing {
+                let splits = fetched
+                    .iter()
+                    .filter(|split| split.symbol == symbol)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                result.extend(splits.iter().cloned());
+                cache.by_symbol.insert(
+                    symbol,
+                    CachedStockSplits {
+                        start,
+                        end,
+                        fetched_at: now,
+                        splits,
+                    },
+                );
+            }
+        }
+        sort_and_deduplicate_splits(&mut result);
+        Ok(Some(result))
+    }
+
     #[must_use]
     pub fn latest_historical_end(&self, now: DateTime<Utc>) -> DateTime<Utc> {
         self.market_data.latest_historical_end(now)
@@ -197,12 +357,22 @@ impl ProviderSet {
     }
 }
 
+fn sort_and_deduplicate_splits(splits: &mut Vec<StockSplit>) {
+    splits.sort_unstable_by(|left, right| {
+        left.symbol
+            .cmp(&right.symbol)
+            .then(left.effective_date.cmp(&right.effective_date))
+    });
+    splits.dedup_by(|left, right| left == right);
+}
+
 impl fmt::Debug for ProviderSet {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ProviderSet")
             .field("id", &self.id)
             .field("display_name", &self.display_name)
+            .field("corporate_actions", &self.supports_corporate_actions())
             .field("news", &self.supports_news())
             .finish_non_exhaustive()
     }
@@ -210,6 +380,8 @@ impl fmt::Debug for ProviderSet {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
 
     #[derive(Debug)]
@@ -260,6 +432,33 @@ mod tests {
             _limit: usize,
         ) -> Result<Vec<NewsItem>, ProviderError> {
             Ok(Vec::new())
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct StubCorporateActions {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CorporateActionsProvider for StubCorporateActions {
+        async fn fetch_stock_splits(
+            &self,
+            symbols: &[String],
+            _start: NaiveDate,
+            _end: NaiveDate,
+        ) -> Result<Vec<StockSplit>, ProviderError> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(symbols
+                .iter()
+                .filter(|symbol| symbol.as_str() == "INHD")
+                .map(|symbol| StockSplit {
+                    symbol: symbol.clone(),
+                    effective_date: NaiveDate::from_ymd_opt(2026, 5, 4).expect("split date"),
+                    old_rate: 20.0,
+                    new_rate: 1.0,
+                })
+                .collect())
         }
     }
 
@@ -316,6 +515,55 @@ mod tests {
                 .expect("unsupported news is not an error")
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn corporate_action_cache_reuses_full_refresh_coverage_for_ticker_requests() {
+        let corporate_actions = Arc::new(StubCorporateActions::default());
+        let providers = ProviderSet::new(
+            "fixture",
+            "Fixture",
+            Arc::new(StubAssets),
+            Arc::new(StubMarketData),
+        )
+        .with_corporate_actions(corporate_actions.clone());
+        let start = NaiveDate::from_ymd_opt(2024, 1, 1).expect("start");
+        let later_start = NaiveDate::from_ymd_opt(2026, 1, 1).expect("later start");
+        let post_split_start = NaiveDate::from_ymd_opt(2026, 6, 1).expect("post-split start");
+        let end = NaiveDate::from_ymd_opt(2026, 7, 29).expect("end");
+
+        let initial = providers
+            .fetch_stock_splits(&["INHD".to_owned(), "NVDA".to_owned()], start, end)
+            .await
+            .expect("initial lookup")
+            .expect("supported capability");
+        let ticker = providers
+            .fetch_stock_splits(&["INHD".to_owned()], later_start, end)
+            .await
+            .expect("cached ticker lookup")
+            .expect("supported capability");
+        let empty_ticker = providers
+            .fetch_stock_splits(&["NVDA".to_owned()], later_start, end)
+            .await
+            .expect("cached empty ticker lookup")
+            .expect("supported capability");
+        let post_split = providers
+            .fetch_stock_splits(&["INHD".to_owned()], post_split_start, end)
+            .await
+            .expect("cached narrowed ticker lookup")
+            .expect("supported capability");
+
+        assert_eq!(initial.len(), 1);
+        assert_eq!(ticker, initial);
+        assert!(empty_ticker.is_empty());
+        assert!(post_split.is_empty());
+        assert_eq!(corporate_actions.calls.load(Ordering::Relaxed), 1);
+
+        providers
+            .fetch_stock_splits(&["OTHER".to_owned()], later_start, end)
+            .await
+            .expect("uncached ticker lookup");
+        assert_eq!(corporate_actions.calls.load(Ordering::Relaxed), 2);
     }
 
     #[test]

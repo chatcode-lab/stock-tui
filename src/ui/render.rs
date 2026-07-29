@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::{DateTime, Local, Utc};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -13,7 +13,7 @@ use crate::{
     domain::{DateRange, MarketTile, NewsItem, SortMode, TickerDetail},
     palette::{AMBER, BORDER, CANVAS, CYAN, HeatScale, MUTED, PANEL, PANEL_ALT, TEXT, detail_tint},
     ui::{
-        chart::render_price_volume,
+        chart::{ChartTimeWindow, render_price_volume},
         heatmap,
         layout::{AppLayout, LayoutMode, uniform_grid},
         state::{DetailTab, Overlay, Route, SectorMetric, UiAction, UiState},
@@ -361,11 +361,18 @@ fn render_range_buttons(
         };
         let rect = Rect::new(x, y + row, width, 1);
         let active = state.date_range == range;
+        let exceeds_history = matches!(state.route, Route::Ticker(_))
+            && state
+                .detail
+                .as_ref()
+                .is_some_and(|detail| range_exceeds_history(detail, range));
         let style = if active {
             Style::default()
                 .fg(CANVAS)
                 .bg(CYAN)
                 .add_modifier(Modifier::BOLD)
+        } else if exceeds_history {
+            Style::default().fg(MUTED).bg(PANEL)
         } else {
             Style::default().fg(TEXT).bg(PANEL)
         };
@@ -672,6 +679,10 @@ fn render_full_detail(
         &detail.bars,
         detail.period_start_at.zip(detail.period_start_price),
         detail.period_end_at.zip(detail.period_end_price),
+        ChartTimeWindow {
+            start: detail.range_start_at,
+            end: detail.range_end_at,
+        },
         accent,
     );
     render_description(frame, detail, left[1], tint);
@@ -708,6 +719,10 @@ fn render_compact_detail(
             &detail.bars,
             detail.period_start_at.zip(detail.period_start_price),
             detail.period_end_at.zip(detail.period_end_price),
+            ChartTimeWindow {
+                start: detail.range_start_at,
+                end: detail.range_end_at,
+            },
             performance_accent(detail.period_return),
         ),
         DetailTab::Statistics => render_statistics(frame, detail, rows[2], tint),
@@ -733,7 +748,7 @@ fn render_detail_header(
         .map(|(price, baseline)| price - baseline)
         .filter(|gain| gain.is_finite())
         .map_or_else(|| "--".to_owned(), format_signed_price);
-    let classification = MarketBenchmark::for_symbol(&detail.company.symbol).map_or_else(
+    let mut classification = MarketBenchmark::for_symbol(&detail.company.symbol).map_or_else(
         || {
             let rank = state
                 .detail_rank()
@@ -754,6 +769,10 @@ fn render_detail_header(
         },
         |benchmark| format!("{} benchmark  ·  ETF proxy", benchmark.label),
     );
+    if let Some(history) = compact_history_coverage(detail) {
+        classification.push_str("  ·  ");
+        classification.push_str(&history);
+    }
     let favorite = if detail.starred { "★" } else { "☆" };
     let favorite_offset = detail.company.symbol.width() as u16 + 2;
     let lines = vec![
@@ -848,6 +867,7 @@ fn render_statistics(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, t
             snapshot.and_then(|quote| quote.volume).map(format_compact),
         ),
         ("EST. CAP", detail.company.market_cap.map(format_money)),
+        ("HISTORY", history_coverage(detail)),
         ("SECTOR", detail.sector_return.map(format_percent)),
     ];
     let lines: Vec<Line<'_>> = rows
@@ -873,6 +893,65 @@ fn render_statistics(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, t
             ),
         area,
     );
+}
+
+fn range_exceeds_history(detail: &TickerDetail, range: DateRange) -> bool {
+    const TOLERANCE_DAYS: u64 = 7;
+
+    if range == DateRange::All {
+        return false;
+    }
+    let Some((start, end)) = detail.history_start_at.zip(detail.history_end_at) else {
+        return true;
+    };
+    let observed_days = end
+        .signed_duration_since(start)
+        .num_days()
+        .max(0)
+        .unsigned_abs();
+    observed_days.saturating_add(TOLERANCE_DAYS) < range.days()
+}
+
+fn compact_history_coverage(detail: &TickerDetail) -> Option<String> {
+    let (start, end) = detail.history_start_at.zip(detail.history_end_at)?;
+    Some(format!(
+        "Data {} since {}",
+        format_history_span(start, end),
+        start.date_naive()
+    ))
+}
+
+fn history_coverage(detail: &TickerDetail) -> Option<String> {
+    let (start, end) = detail.history_start_at.zip(detail.history_end_at)?;
+    Some(format!(
+        "{} · {} to {}",
+        format_history_span(start, end),
+        start.date_naive(),
+        end.date_naive()
+    ))
+}
+
+fn format_history_span(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
+    let total_days = end
+        .signed_duration_since(start)
+        .num_days()
+        .max(0)
+        .unsigned_abs();
+    let years = total_days / 365;
+    let after_years = total_days % 365;
+    let months = after_years / 30;
+    let days = after_years % 30;
+    let mut parts = Vec::with_capacity(3);
+    if years > 0 {
+        parts.push(format!("{years}Y"));
+    }
+    if months > 0 {
+        parts.push(format!("{months}M"));
+    }
+    if days > 0 || parts.is_empty() {
+        parts.push(format!("{days}D"));
+    }
+    parts.join(" ")
 }
 
 fn render_description(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, tint: Color) {

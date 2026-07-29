@@ -101,9 +101,9 @@ Asset item:
 `market_cap` and `updated_at` are optional. A supplied market cap must be
 positive and finite. When `updated_at` is absent, the client uses receipt time.
 The client keeps its SEC-derived sector, share estimate, size proxy, rank, and
-provenance. A valid API market cap is retained when the local catalog has no
-share estimate; otherwise a current `shares x snapshot price` estimate remains
-authoritative.
+provenance. A valid asset market cap is retained when the local catalog has no
+share estimate. A valid value on the subsequent snapshot always takes
+precedence over a local `shares x price` approximation.
 
 Assets support opaque pagination. The client rejects repeated tokens, more
 than 100 pages, more than 100,000 accumulated assets, or a response body above
@@ -145,14 +145,17 @@ positive when present; volume must be non-negative. `high` cannot be below
 `low`. `as_of` is required. The response must not include unrequested symbols
 or a pagination token.
 
-`market_cap` is optional, positive, and finite. The client uses it immediately
-for a company that has no local share estimate; otherwise its local
-price-equivalent shares multiplied by the same snapshot price remain
-authoritative. `market_cap_estimate` is optional service provenance and is
+`market_cap` is optional, positive, and finite. The client uses a valid supplied
+value immediately and gives it precedence over a local `shares x price`
+approximation. The `stock-api` adapter does not currently expose a separate
+corporate-actions capability, so absent a provider cap the client uses a local
+share estimate only when its as-of date matches the snapshot date; an older
+count remains unavailable rather than combining pre-split shares with a
+post-split price. `market_cap_estimate` is optional service provenance and is
 currently ignored by the client, but compatible services should preserve the
 shown value, currency, price/share dates, calculation time, method, and
-confidence fields rather than implying that an estimate is a provider-reported
-fundamental.
+confidence fields rather than implying that an estimate is a
+provider-reported fundamental.
 
 The client sends no more than 100 symbols per snapshot request.
 
@@ -193,6 +196,11 @@ range. Volume must be non-negative. `trade_count` and `vwap` are nullable.
 `source` is a required, provider-neutral provenance label stored with the bar;
 the service must supply any attribution required by its data rights. The
 response timeframe and symbols must match the request.
+
+A service may preserve a no-trade placeholder as a flat bar with zero volume
+and zero or absent trade count. The client retains such a row in raw SQLite but
+does not treat it as a price observation, freshness update, history boundary,
+or chart point.
 
 The client sends no more than 50 symbols per bars request. Bars support opaque
 pagination with the same token/page/body protections as assets and a maximum

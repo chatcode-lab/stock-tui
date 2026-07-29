@@ -180,7 +180,7 @@ fn render_overview(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, scale
             continue;
         }
         let tiles = grouped.get(&sector).map(Vec::as_slice).unwrap_or_default();
-        let selected = sector_index == state.selected_sector;
+        let selected = state.overview_sector_is_focused(sector_index);
         render_sector_header(frame.buffer_mut(), panel, sector, tiles, selected);
         targets.push(HitTarget {
             rect: panel,

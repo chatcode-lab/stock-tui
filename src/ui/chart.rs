@@ -8,7 +8,7 @@ use ratatui::{
     text::Line as TextLine,
     widgets::{
         Block, Borders, Paragraph,
-        canvas::{Canvas, Line},
+        canvas::{Canvas, Line, Points},
     },
 };
 
@@ -22,20 +22,60 @@ const TRACE_SAMPLES_PER_COLUMN: usize = 2;
 const GRID_DOT: char = '·';
 const CURSOR_DOT: char = '·';
 const GRID_COLOR: Color = Color::Rgb(55, 64, 74);
+pub(crate) const EMPTY_CHART_SAMPLE_INDEX: usize = usize::MAX;
 
-pub fn render_price_volume(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChartTimeWindow {
+    pub(crate) start: DateTime<Utc>,
+    pub(crate) end: DateTime<Utc>,
+}
+
+impl ChartTimeWindow {
+    fn position(self, timestamp: DateTime<Utc>) -> Option<f64> {
+        if timestamp < self.start || timestamp > self.end {
+            return None;
+        }
+        let span = self
+            .end
+            .signed_duration_since(self.start)
+            .num_milliseconds();
+        if span <= 0 {
+            return None;
+        }
+        let offset = timestamp
+            .signed_duration_since(self.start)
+            .num_milliseconds();
+        Some((offset as f64 / span as f64).clamp(0.0, 1.0))
+    }
+
+    fn timestamp_at(self, position: f64) -> Option<DateTime<Utc>> {
+        let start = self.start.timestamp_millis();
+        let span = self.end.timestamp_millis().checked_sub(start)?;
+        if span <= 0 {
+            return None;
+        }
+        let offset = (span as f64 * position.clamp(0.0, 1.0)).round() as i64;
+        DateTime::from_timestamp_millis(start.checked_add(offset)?)
+    }
+}
+
+pub(crate) fn render_price_volume(
     frame: &mut Frame<'_>,
     state: &mut UiState,
     area: Rect,
     bars: &[Bar],
     period_start: Option<(DateTime<Utc>, f64)>,
     period_end: Option<(DateTime<Utc>, f64)>,
+    time_window: ChartTimeWindow,
     accent: Color,
 ) {
     if area.height < 5 || area.width < 10 {
         return;
     }
-    let price_bars = reconciled_price_bars(bars, period_start, period_end);
+    let price_bars = reconciled_price_bars(bars, period_start, period_end)
+        .into_iter()
+        .filter(|bar| time_window.position(bar.timestamp).is_some())
+        .collect::<Vec<_>>();
     if price_bars.is_empty() {
         frame.render_widget(
             Paragraph::new("Waiting for cached history")
@@ -72,10 +112,7 @@ pub fn render_price_volume(
         );
         return;
     }
-    let padding = ((data_high - data_low) * 0.08)
-        .max(data_high.abs() * 0.002)
-        .max(0.01);
-    let bounds = [data_low - padding, data_high + padding];
+    let bounds = padded_price_bounds(data_low, data_high);
     let y_labels = price_axis_labels(bounds, chart_area.height);
 
     let inner = chart_area.inner(Margin::new(1, 1));
@@ -102,22 +139,24 @@ pub fn render_price_volume(
     state.chart_rect = Some(plot_area);
 
     let usable_width = usize::from(plot_area.width).max(1);
-    let sampled = sample_bars(&price_bars, usable_width);
-    state.chart_sample_indices = sampled.iter().map(|(index, _)| *index).collect();
+    let sampled = sample_bars_by_time(&price_bars, usable_width, time_window);
+    state.chart_sample_indices = sampled
+        .iter()
+        .map(|sample| sample.map_or(EMPTY_CHART_SAMPLE_INDEX, |(index, _)| index))
+        .collect();
     let hover_index = state
         .detail_hover
         .map(|index| index.min(sampled.len().saturating_sub(1)));
     state.detail_hover = hover_index;
-    let title_bar = hover_index
+    let hover_bar = hover_index
         .and_then(|index| sampled.get(index))
-        .map_or_else(
-            || price_bars.last().expect("price bars are non-empty"),
-            |(_, bar)| *bar,
-        );
+        .and_then(|sample| sample.map(|(_, bar)| bar));
+    let title_bar =
+        hover_bar.unwrap_or_else(|| price_bars.last().expect("price bars are non-empty"));
     let first_close = period_start
         .map(|(_, price)| price)
         .filter(|price| valid_price(*price))
-        .or_else(|| sampled.first().map(|(_, bar)| bar.close))
+        .or_else(|| price_bars.first().map(|bar| bar.close))
         .unwrap_or(title_bar.close);
     let change = if first_close == 0.0 {
         0.0
@@ -147,11 +186,15 @@ pub fn render_price_volume(
         &price_bars,
         usable_width.saturating_mul(TRACE_SAMPLES_PER_COLUMN),
     );
-    let points = normalized_price_points(&trace_sampled);
-    let canvas_points = points.clone();
-    let crosshair = hover_index.map(|index| normalized_position(index, sampled.len()));
-    let hover_marker = crosshair
-        .and_then(|position| interpolated_price(&points, position).map(|price| (position, price)));
+    let typical_interval = typical_bar_interval_millis(&price_bars);
+    let point_segments = timestamped_price_segments(&trace_sampled, time_window, typical_interval);
+    let canvas_segments = point_segments.clone();
+    let crosshair = hover_bar.and_then(|bar| time_window.position(bar.timestamp));
+    let hover_marker = crosshair.and_then(|position| {
+        interpolated_segment_price(&point_segments, position)
+            .or_else(|| hover_bar.map(|bar| bar.close))
+            .map(|price| (position, price))
+    });
     let grid_values = price_axis_values(bounds, y_labels.len());
     let canvas = Canvas::default()
         .marker(Marker::Braille)
@@ -159,22 +202,96 @@ pub fn render_price_volume(
         .x_bounds([0.0, 1.0])
         .y_bounds(bounds)
         .paint(move |context| {
-            for pair in canvas_points.windows(2) {
-                context.draw(&Line::new(
-                    pair[0].0, pair[0].1, pair[1].0, pair[1].1, accent,
-                ));
+            for segment in &canvas_segments {
+                if segment.len() == 1 {
+                    context.draw(&Points::new(segment, accent));
+                } else {
+                    for pair in segment.windows(2) {
+                        context.draw(&Line::new(
+                            pair[0].0, pair[0].1, pair[1].0, pair[1].1, accent,
+                        ));
+                    }
+                }
             }
         });
     render_reference_grid(frame.buffer_mut(), plot_area, bounds, &grid_values);
     frame.render_widget(canvas, plot_area);
-    render_area_gradient(frame.buffer_mut(), plot_area, &points, bounds, accent);
+    render_area_gradient(
+        frame.buffer_mut(),
+        plot_area,
+        &point_segments,
+        bounds,
+        accent,
+    );
     render_price_axis(frame.buffer_mut(), plot_area, bounds, &y_labels);
-    if let Some(marker) = hover_marker {
+    render_time_axis(frame, x_axis_area, time_window, state.date_range);
+    if let (Some(marker), Some(bar)) = (hover_marker, hover_bar) {
+        render_hover_labels(
+            frame.buffer_mut(),
+            plot_area,
+            x_axis_area,
+            marker,
+            bar,
+            bounds,
+            state.date_range,
+        );
         render_hover_indicator(frame.buffer_mut(), plot_area, marker, bounds);
     }
-    render_time_axis(frame, x_axis_area, &sampled, state.date_range);
 
-    render_volume(frame, sections[1], plot_area, bars, accent, crosshair);
+    render_volume(
+        frame,
+        sections[1],
+        plot_area,
+        bars,
+        accent,
+        crosshair,
+        time_window,
+    );
+}
+
+fn padded_price_bounds(data_low: f64, data_high: f64) -> [f64; 2] {
+    let padding = ((data_high - data_low) * 0.08)
+        .max(data_high.abs() * 0.002)
+        .max(0.01);
+    [(data_low - padding).max(0.0), data_high + padding]
+}
+
+fn sample_bars_by_time(
+    bars: &[Bar],
+    width: usize,
+    window: ChartTimeWindow,
+) -> Vec<Option<(usize, &Bar)>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut samples = vec![None; width];
+    for (index, bar) in bars.iter().enumerate() {
+        let Some(position) = window.position(bar.timestamp) else {
+            continue;
+        };
+        let column = normalized_cell_index(position, width);
+        let column_position = normalized_position(column, width);
+        let candidate_distance = (position - column_position).abs();
+        let replace = samples[column].is_none_or(|(_, current): (usize, &Bar)| {
+            window
+                .position(current.timestamp)
+                .is_none_or(|current_position| {
+                    candidate_distance <= (current_position - column_position).abs()
+                })
+        });
+        if replace {
+            samples[column] = Some((index, bar));
+        }
+    }
+    samples
+}
+
+fn normalized_cell_index(position: f64, cells: usize) -> usize {
+    if cells <= 1 {
+        0
+    } else {
+        (position.clamp(0.0, 1.0) * (cells - 1) as f64).round() as usize
+    }
 }
 
 fn reconciled_price_bars(
@@ -328,13 +445,8 @@ fn render_reference_grid(buffer: &mut Buffer, area: Rect, bounds: [f64; 2], valu
     }
 }
 
-fn render_time_axis(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    sampled: &[(usize, &Bar)],
-    range: DateRange,
-) {
-    if area.width == 0 || area.height == 0 || sampled.is_empty() {
+fn render_time_axis(frame: &mut Frame<'_>, area: Rect, window: ChartTimeWindow, range: DateRange) {
+    if area.width == 0 || area.height == 0 || window.timestamp_at(0.0).is_none() {
         return;
     }
     frame
@@ -348,8 +460,11 @@ fn render_time_axis(
         2
     };
     for slot in 0..count {
-        let sample_index = slot * (sampled.len() - 1) / (count - 1);
-        let label = format_axis_time(sampled[sample_index].1.timestamp, range, area.width);
+        let position = slot as f64 / (count - 1) as f64;
+        let Some(timestamp) = window.timestamp_at(position) else {
+            continue;
+        };
+        let label = format_axis_time(timestamp, range, area.width);
         let anchor = usize::from(area.width.saturating_sub(1)) * slot / (count - 1);
         let offset = if slot == 0 {
             0
@@ -416,6 +531,7 @@ fn normalized_position(index: usize, count: usize) -> f64 {
     }
 }
 
+#[cfg(test)]
 fn normalized_price_points(sampled: &[(usize, &Bar)]) -> Vec<(f64, f64)> {
     let mut points: Vec<_> = sampled
         .iter()
@@ -449,14 +565,29 @@ fn interpolated_price(points: &[(f64, f64)], position: f64) -> Option<f64> {
     }
 }
 
+fn interpolated_price_within(points: &[(f64, f64)], position: f64) -> Option<f64> {
+    let first = points.first()?;
+    let last = points.last()?;
+    if position < first.0 || position > last.0 {
+        return None;
+    }
+    interpolated_price(points, position)
+}
+
+fn interpolated_segment_price(point_segments: &[Vec<(f64, f64)>], position: f64) -> Option<f64> {
+    point_segments
+        .iter()
+        .find_map(|points| interpolated_price_within(points, position))
+}
+
 fn render_area_gradient(
     buffer: &mut Buffer,
     area: Rect,
-    points: &[(f64, f64)],
+    point_segments: &[Vec<(f64, f64)>],
     bounds: [f64; 2],
     accent: Color,
 ) {
-    if area.is_empty() || points.is_empty() {
+    if area.is_empty() || point_segments.is_empty() {
         return;
     }
     let span = bounds[1] - bounds[0];
@@ -464,9 +595,9 @@ fn render_area_gradient(
         return;
     }
     for column in 0..area.width {
-        let Some(price) =
+        let Some(price) = point_segments.iter().find_map(|points| {
             braille_column_price(points, usize::from(column), usize::from(area.width))
-        else {
+        }) else {
             continue;
         };
         for row in 0..area.height {
@@ -481,16 +612,35 @@ fn render_area_gradient(
 }
 
 fn braille_column_price(points: &[(f64, f64)], column: usize, width: usize) -> Option<f64> {
+    if points.len() == 1 {
+        return (normalized_cell_index(points[0].0, width) == column).then_some(points[0].1);
+    }
     let dot_count = width.checked_mul(2)?;
     if dot_count <= 1 {
-        return interpolated_price(points, 0.0);
+        return interpolated_price_within(points, 0.0);
     }
     let left_dot = column.saturating_mul(2).min(dot_count - 1);
     let right_dot = (left_dot + 1).min(dot_count - 1);
     let denominator = (dot_count - 1) as f64;
-    let left = interpolated_price(points, left_dot as f64 / denominator)?;
-    let right = interpolated_price(points, right_dot as f64 / denominator)?;
-    Some((left + right) * 0.5)
+    let left_position = left_dot as f64 / denominator;
+    let right_position = right_dot as f64 / denominator;
+    let left = interpolated_price_within(points, left_position);
+    let right = interpolated_price_within(points, right_position);
+    match (left, right) {
+        (Some(left), Some(right)) => Some((left + right) * 0.5),
+        (Some(price), None) | (None, Some(price)) => Some(price),
+        (None, None) => {
+            let first = points.first()?;
+            let last = points.last()?;
+            if last.0 < left_position || first.0 > right_position {
+                None
+            } else {
+                let sample_position = ((left_position + right_position) * 0.5)
+                    .clamp(first.0.min(last.0), first.0.max(last.0));
+                interpolated_price(points, sample_position)
+            }
+        }
+    }
 }
 
 fn area_gradient_amount(
@@ -551,6 +701,81 @@ fn render_hover_indicator(
         );
 }
 
+fn render_hover_labels(
+    buffer: &mut Buffer,
+    plot_area: Rect,
+    x_axis_area: Rect,
+    (position, intersection_price): (f64, f64),
+    selected_bar: &Bar,
+    bounds: [f64; 2],
+    range: DateRange,
+) {
+    if plot_area.is_empty() || bounds[1] <= bounds[0] {
+        return;
+    }
+    let cursor_x = terminal_cell_offset(position, plot_area.width);
+    let label_style = Style::default()
+        .fg(CANVAS)
+        .bg(CYAN)
+        .add_modifier(Modifier::BOLD);
+    let price_label = format_hover_price(selected_bar.close);
+    if let Some(x) = hover_label_x(plot_area, cursor_x, price_label.len(), position) {
+        let y_position =
+            ((bounds[1] - intersection_price) / (bounds[1] - bounds[0])).clamp(0.0, 1.0);
+        let y = plot_area.y + braille_cell_offset(y_position, plot_area.height, 4);
+        buffer.set_stringn(
+            x,
+            y,
+            price_label,
+            usize::from(plot_area.right() - x),
+            label_style,
+        );
+    }
+
+    if x_axis_area.is_empty() {
+        return;
+    }
+    let time_label = format_axis_time(selected_bar.timestamp, range, x_axis_area.width);
+    if let Some(x) = hover_label_x(x_axis_area, cursor_x, time_label.len(), position) {
+        buffer.set_stringn(
+            x,
+            x_axis_area.y,
+            time_label,
+            usize::from(x_axis_area.right() - x),
+            label_style,
+        );
+    }
+}
+
+fn hover_label_x(area: Rect, cursor_x: u16, label_width: usize, position: f64) -> Option<u16> {
+    const LABEL_GAP: usize = 1;
+
+    let width = usize::from(area.width);
+    let cursor = usize::from(cursor_x.min(area.width.saturating_sub(1)));
+    if label_width == 0 || label_width + LABEL_GAP >= width {
+        return None;
+    }
+    let right = cursor + LABEL_GAP + 1;
+    let right_x = (right + label_width <= width).then_some(right);
+    let left_x = cursor
+        .checked_sub(label_width + LABEL_GAP)
+        .filter(|left| left + label_width <= width);
+    let offset = if position <= 0.5 {
+        right_x.or(left_x)
+    } else {
+        left_x.or(right_x)
+    }?;
+    Some(area.x + u16::try_from(offset).ok()?)
+}
+
+fn format_hover_price(value: f64) -> String {
+    if value.abs() >= 1.0 {
+        format!("${value:.2}")
+    } else {
+        format!("${value:.4}")
+    }
+}
+
 fn terminal_cell_offset(position: f64, cells: u16) -> u16 {
     (position.clamp(0.0, 1.0) * f64::from(cells.saturating_sub(1))).round() as u16
 }
@@ -578,9 +803,11 @@ fn render_volume(
     bars: &[Bar],
     accent: Color,
     crosshair: Option<f64>,
+    time_window: ChartTimeWindow,
 ) {
     let max_volume = bars
         .iter()
+        .filter(|bar| time_window.position(bar.timestamp).is_some())
         .map(|bar| bar.volume)
         .filter(|volume| volume.is_finite() && *volume >= 0.0)
         .fold(0.0_f64, f64::max);
@@ -607,7 +834,7 @@ fn render_volume(
         return;
     }
     let plot = Rect::new(left, inner.y, right - left, inner.height);
-    let columns = volume_columns(bars, usize::from(plot.width));
+    let columns = volume_columns(bars, usize::from(plot.width), time_window);
     let selected_column = crosshair.map(|position| {
         (position.clamp(0.0, 1.0) * f64::from(plot.width.saturating_sub(1))).round() as usize
     });
@@ -642,37 +869,24 @@ fn volume_height_eighths(relative: f64, rows: usize) -> usize {
         .max(1.0) as usize
 }
 
-fn volume_columns(bars: &[Bar], width: usize) -> Vec<f64> {
-    if bars.is_empty() || width == 0 {
+fn volume_columns(bars: &[Bar], width: usize, window: ChartTimeWindow) -> Vec<f64> {
+    if width == 0 {
         return Vec::new();
     }
-    if bars.len() <= width {
-        return (0..width)
-            .map(|column| {
-                let index = column.saturating_mul(bars.len()) / width;
-                let volume = bars[index.min(bars.len() - 1)].volume;
-                if volume.is_finite() {
-                    volume.max(0.0)
-                } else {
-                    0.0
-                }
-            })
-            .collect();
+    let mut columns = vec![0.0_f64; width];
+    for bar in bars {
+        let Some(position) = window.position(bar.timestamp) else {
+            continue;
+        };
+        let volume = if bar.volume.is_finite() {
+            bar.volume.max(0.0)
+        } else {
+            0.0
+        };
+        let column = normalized_cell_index(position, width);
+        columns[column] = columns[column].max(volume);
     }
-    (0..width)
-        .map(|column| {
-            let start = column.saturating_mul(bars.len()) / width;
-            let end = (column + 1)
-                .saturating_mul(bars.len())
-                .div_ceil(width)
-                .min(bars.len());
-            bars[start..end]
-                .iter()
-                .map(|bar| bar.volume)
-                .filter(|volume| volume.is_finite() && *volume > 0.0)
-                .fold(0.0_f64, f64::max)
-        })
-        .collect()
+    columns
 }
 
 fn volume_block(eighths: usize) -> &'static str {
@@ -729,6 +943,64 @@ fn trace_bars(bars: &[Bar], max_points: usize) -> Vec<(usize, &Bar)> {
     }
 }
 
+fn typical_bar_interval_millis(bars: &[Bar]) -> Option<i64> {
+    let mut intervals = bars
+        .windows(2)
+        .filter_map(|pair| {
+            let interval = pair[1]
+                .timestamp
+                .signed_duration_since(pair[0].timestamp)
+                .num_milliseconds();
+            (interval > 0).then_some(interval)
+        })
+        .collect::<Vec<_>>();
+    if intervals.is_empty() {
+        return None;
+    }
+    intervals.sort_unstable();
+    Some(intervals[intervals.len() / 2])
+}
+
+fn timestamped_price_segments(
+    sampled: &[(usize, &Bar)],
+    window: ChartTimeWindow,
+    typical_interval_millis: Option<i64>,
+) -> Vec<Vec<(f64, f64)>> {
+    const GAP_INTERVAL_MULTIPLIER: i64 = 3;
+
+    let mut segments = Vec::new();
+    let mut segment = Vec::new();
+    let mut previous: Option<(usize, &Bar)> = None;
+    for &(index, bar) in sampled {
+        let Some(position) = window.position(bar.timestamp) else {
+            continue;
+        };
+        let starts_new_segment = previous.is_some_and(|(previous_index, previous_bar)| {
+            let interval = bar
+                .timestamp
+                .signed_duration_since(previous_bar.timestamp)
+                .num_milliseconds();
+            let observation_steps = index.saturating_sub(previous_index).max(1) as i64;
+            typical_interval_millis.is_some_and(|typical| {
+                let expected = typical
+                    .saturating_mul(observation_steps)
+                    .saturating_mul(GAP_INTERVAL_MULTIPLIER);
+                interval > expected
+            })
+        });
+        if starts_new_segment && !segment.is_empty() {
+            segments.push(segment);
+            segment = Vec::new();
+        }
+        segment.push((position, bar.close));
+        previous = Some((index, bar));
+    }
+    if !segment.is_empty() {
+        segments.push(segment);
+    }
+    segments
+}
+
 fn sample_bars(bars: &[Bar], width: usize) -> Vec<(usize, &Bar)> {
     if bars.is_empty() || width == 0 {
         return Vec::new();
@@ -763,6 +1035,13 @@ mod tests {
             trade_count: None,
             vwap: None,
             source: "test".to_owned(),
+        }
+    }
+
+    fn covering_window(bars: &[Bar]) -> ChartTimeWindow {
+        ChartTimeWindow {
+            start: bars.first().expect("test bars are non-empty").timestamp,
+            end: bars.last().expect("test bars are non-empty").timestamp,
         }
     }
 
@@ -809,6 +1088,54 @@ mod tests {
     }
 
     #[test]
+    fn timestamp_mapping_preserves_observation_gaps_and_blank_tail() {
+        let bars = vec![bar(0), bar(1), bar(10), bar(11)];
+        let window = ChartTimeWindow {
+            start: bars[0].timestamp,
+            end: bars[0].timestamp + Duration::days(12),
+        };
+        let samples = sample_bars_by_time(&bars, 13, window);
+        let trace = trace_bars(&bars, 26);
+        let segments =
+            timestamped_price_segments(&trace, window, typical_bar_interval_millis(&bars));
+        let volumes = volume_columns(&bars, 13, window);
+
+        assert!(samples[0].is_some());
+        assert!(samples[1].is_some());
+        assert!(samples[2..10].iter().all(Option::is_none));
+        assert!(samples[10].is_some());
+        assert!(samples[11].is_some());
+        assert!(samples[12].is_none());
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].len(), 2);
+        assert_eq!(segments[1].len(), 2);
+        assert_eq!(&volumes[2..10], &[0.0; 8]);
+        assert_eq!(volumes[12], 0.0);
+        assert!(
+            segments
+                .iter()
+                .all(|segment| braille_column_price(segment, 12, 13).is_none())
+        );
+    }
+
+    #[test]
+    fn chart_time_window_maps_endpoints_without_ordinal_stretching() {
+        let start = DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
+            .expect("current timestamp is representable");
+        let window = ChartTimeWindow {
+            start,
+            end: start + Duration::days(4),
+        };
+
+        assert_eq!(window.position(start), Some(0.0));
+        assert_eq!(window.position(start + Duration::days(1)), Some(0.25));
+        assert_eq!(window.position(window.end), Some(1.0));
+        assert_eq!(window.timestamp_at(0.75), Some(start + Duration::days(3)));
+        assert!(window.position(start - Duration::seconds(1)).is_none());
+        assert!(window.position(window.end + Duration::seconds(1)).is_none());
+    }
+
+    #[test]
     fn price_series_reconciles_period_endpoints_without_changing_volume_bars() {
         let mut bars: Vec<_> = (0..2).map(bar).collect();
         bars[0].volume = 10.0;
@@ -832,7 +1159,10 @@ mod tests {
         );
         assert_eq!(prices.first().unwrap().volume, 0.0);
         assert_eq!(prices.last().unwrap().volume, 0.0);
-        assert_eq!(volume_columns(&bars, 2), vec![10.0, 20.0]);
+        assert_eq!(
+            volume_columns(&bars, 2, covering_window(&bars)),
+            vec![10.0, 20.0]
+        );
         assert_eq!(
             bars.iter().map(|bar| bar.volume).collect::<Vec<_>>(),
             [10.0, 20.0]
@@ -971,6 +1301,99 @@ mod tests {
     }
 
     #[test]
+    fn hover_labels_use_the_selected_value_and_follow_the_cursor_side() {
+        let plot = Rect::new(4, 2, 32, 8);
+        let axis = Rect::new(plot.x, plot.bottom(), plot.width, 1);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 44, 14));
+        let mut selected = bar(0);
+        selected.close = 123.456;
+        let bounds = [100.0, 150.0];
+        let price_label = format_hover_price(selected.close);
+        let time_label = format_axis_time(selected.timestamp, DateRange::Day, axis.width);
+
+        for position in [0.2, 0.8] {
+            buffer.reset();
+            let cursor = terminal_cell_offset(position, plot.width);
+            render_hover_labels(
+                &mut buffer,
+                plot,
+                axis,
+                (position, 125.0),
+                &selected,
+                bounds,
+                DateRange::Day,
+            );
+            let price_x =
+                hover_label_x(plot, cursor, price_label.len(), position).expect("price label fits");
+            let time_x =
+                hover_label_x(axis, cursor, time_label.len(), position).expect("time label fits");
+            let marker_y = plot.y + braille_cell_offset((bounds[1] - 125.0) / 50.0, plot.height, 4);
+
+            let rendered_price: String = (price_x..price_x + price_label.len() as u16)
+                .map(|x| buffer[(x, marker_y)].symbol())
+                .collect();
+            let rendered_time: String = (time_x..time_x + time_label.len() as u16)
+                .map(|x| buffer[(x, axis.y)].symbol())
+                .collect();
+            assert_eq!(rendered_price, price_label);
+            assert_eq!(rendered_time, time_label);
+            assert_eq!(buffer[(price_x, marker_y)].fg, CANVAS);
+            assert_eq!(buffer[(price_x, marker_y)].bg, CYAN);
+            if position <= 0.5 {
+                assert!(price_x > plot.x + cursor);
+                assert!(time_x > axis.x + cursor);
+            } else {
+                assert!(price_x + price_label.len() as u16 <= plot.x + cursor);
+                assert!(time_x + time_label.len() as u16 <= axis.x + cursor);
+            }
+        }
+    }
+
+    #[test]
+    fn hover_labels_stay_inside_their_areas_and_yield_to_the_indicator() {
+        let plot = Rect::new(5, 2, 12, 6);
+        let axis = Rect::new(plot.x, plot.bottom(), plot.width, 1);
+        let mut buffer = Buffer::empty(Rect::new(0, 0, 24, 12));
+        let mut selected = bar(0);
+        selected.close = 0.123_456;
+        let marker = (0.0, 0.125);
+        let bounds = [0.0, 0.25];
+
+        render_hover_labels(
+            &mut buffer,
+            plot,
+            axis,
+            marker,
+            &selected,
+            bounds,
+            DateRange::Day,
+        );
+        render_hover_indicator(&mut buffer, plot, marker, bounds);
+
+        let cursor_x = plot.x + terminal_cell_offset(marker.0, plot.width);
+        for row in plot.top()..plot.bottom() {
+            assert_eq!(buffer[(cursor_x, row)].symbol(), CURSOR_DOT.to_string());
+        }
+        assert!(hover_label_x(plot, 5, usize::from(plot.width), 0.5).is_none());
+        for y in buffer.area.top()..buffer.area.bottom() {
+            for x in buffer.area.left()..buffer.area.right() {
+                if buffer[(x, y)].bg == CYAN {
+                    assert!(
+                        (x >= plot.left()
+                            && x < plot.right()
+                            && y >= plot.top()
+                            && y < plot.bottom())
+                            || (x >= axis.left()
+                                && x < axis.right()
+                                && y >= axis.top()
+                                && y < axis.bottom())
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn hover_indicator_replaces_every_row_with_one_centered_dot() {
         let area = Rect::new(3, 2, 8, 5);
         let mut buffer = Buffer::empty(Rect::new(0, 0, 16, 10));
@@ -1026,14 +1449,14 @@ mod tests {
     }
 
     #[test]
-    fn sparse_volume_bars_fill_every_terminal_column() {
+    fn sparse_volume_bars_leave_unobserved_columns_empty() {
         let mut bars: Vec<_> = (0..2).map(bar).collect();
         bars[0].volume = 10.0;
         bars[1].volume = 20.0;
 
         assert_eq!(
-            volume_columns(&bars, 6),
-            vec![10.0, 10.0, 10.0, 20.0, 20.0, 20.0]
+            volume_columns(&bars, 6, covering_window(&bars)),
+            vec![10.0, 0.0, 0.0, 0.0, 0.0, 20.0]
         );
     }
 
@@ -1044,7 +1467,10 @@ mod tests {
             bar.volume = (index + 1) as f64;
         }
 
-        assert_eq!(volume_columns(&bars, 2), vec![4.0, 8.0]);
+        assert_eq!(
+            volume_columns(&bars, 2, covering_window(&bars)),
+            vec![4.0, 8.0]
+        );
     }
 
     #[test]
@@ -1093,7 +1519,10 @@ mod tests {
         bars[0].volume = 0.0;
         bars[1].volume = f64::NAN;
 
-        assert_eq!(volume_columns(&bars, 4), vec![0.0; 4]);
+        assert_eq!(
+            volume_columns(&bars, 4, covering_window(&bars)),
+            vec![0.0; 4]
+        );
     }
 
     #[test]
@@ -1102,6 +1531,14 @@ mod tests {
         assert_eq!(format_axis_price(12_450.0), "$12.4K");
         assert_eq!(format_axis_price(1_250_000.0), "$1.25M");
         assert_eq!(format_axis_price(0.123_456), "$0.1235");
+        assert_eq!(format_hover_price(12_450.0), "$12450.00");
+        assert_eq!(format_hover_price(0.123_456), "$0.1235");
+    }
+
+    #[test]
+    fn padded_price_axis_never_extends_below_zero() {
+        assert_eq!(padded_price_bounds(0.005, 0.01), [0.0, 0.02]);
+        assert_eq!(padded_price_bounds(100.0, 110.0), [99.2, 110.8]);
     }
 
     #[test]

@@ -40,12 +40,12 @@ the relevant cached view. The renderer never performs HTTP requests.
 | `credentials` | Reads the legacy dotenv credential file as a lower-precedence compatibility fallback. |
 | `onboarding` | Offers open/copy/skip registration actions or demo mode, collects hidden input, validates credentials, and starts the selected mode. |
 | `logging` | Writes non-ANSI daily tracing logs below the platform cache directory. |
-| `domain` | Defines sectors, date ranges, sort modes, companies, bars, snapshots, news, tiles, and sync state. |
+| `domain` | Defines sectors, date ranges, sort modes, companies, bars, snapshots, stock splits, news, tiles, and sync state. |
 | `benchmarks` | Defines the labeled ETF proxies displayed beneath the sector overview. |
 | `universe` | Validates and resolves the remote, cached, or embedded versioned issuer catalog used to seed the nine sector memberships. |
-| `providers` | Defines independent asset, market-data, and news capabilities plus concrete provider adapters. |
+| `providers` | Defines independent asset, market-data, corporate-action, and news capabilities plus concrete provider adapters. |
 | `storage` | Owns SQLite migrations, transactions, search, favorites, period metrics, and detail queries. |
-| `sync` | Schedules snapshot refresh, incremental history, asset metadata, and lazy ticker/news requests. |
+| `sync` | Schedules snapshot and corporate-action refresh, incremental history, asset metadata, and lazy ticker/news requests. |
 | `demo` | Generates deterministic simulated data for all screens and date ranges. |
 | `app` | Converts keyboard, paste, and mouse events into UI transitions and runtime commands. |
 | `ui` | Calculates responsive layout, registers mouse hit targets, and renders heatmaps, overlays, and charts. |
@@ -109,12 +109,14 @@ The worker initially:
    and recomputes memberships. Active catalog candidates are retained or
    reactivated; missing candidates leave the current universe while their
    rows, cached data, and favorites remain stored.
-2. Fetches snapshots for retained candidates in batches.
-3. Estimates market cap as current price times the catalog's price-equivalent
-   common-share estimate where both exist, then writes a new top-100 membership
-   for each sector. Selection compares that estimate with numeric SEC public
-   float for proxy-only candidates; catalog rank and symbol provide stable
-   ties.
+2. Fetches snapshots for retained candidates in batches and, when supported,
+   the forward and reverse splits needed to reconcile dated catalog shares.
+3. Prefers a valid provider snapshot cap. Otherwise it applies intervening
+   split ratios to the catalog's price-equivalent common-share estimate before
+   multiplying by current price. A required split-coverage failure suppresses
+   the local estimate. It then writes a new top-100 membership for each sector.
+   Selection compares the resulting cap with numeric SEC public float for
+   proxy-only candidates; catalog rank and symbol provide stable ties.
 4. Starts adjusted two-year daily-bar and all-provider-available weekly-bar
    backfills for the selected 900 members and three benchmark ETF proxies in
    the background.
@@ -146,6 +148,11 @@ transitions used by keyboard input. Overview hit targets cover whole sector
 panels; sector and news-row hover moves the persistent selection used by the
 keyboard. Returning from ticker detail restores the originating sector or
 Favorites selection.
+
+Overview sector and benchmark focus are mutually exclusive. Moving or hovering
+onto a benchmark preserves the sector cursor for later navigation but
+suppresses every sector highlight; focusing any sector clears benchmark
+emphasis.
 
 `Backspace` and `Space` cycle backward and forward through sibling views with
 wraparound. A sector route follows the fixed `Sector::ALL` order and retains
@@ -187,18 +194,27 @@ ten columns from the available width. The three benchmark-proxy footer cells
 reuse the overview's centered three-column geometry and stop at the content
 pane rather than extending beneath the action rail.
 
-Charts sample cached bars to terminal resolution while preserving the first
-and last point. A Braille canvas renders the thin price trace over a per-cell
-RGB area fill, with price and range-aware date scales. The fill samples the same
-two horizontal Braille subcells as the trace and uses fractional edge coverage
-plus a short exterior fade to soften its cell-resolution boundary. Horizontal
-reference guides use the terminal font's middle-dot glyph instead of full-width
-Braille runs, preventing fallback-font advance errors from accumulating across
-browser-hosted terminal rows. The trace replaces guide dots at intersections.
-Price labels are painted over the plot after the chart, using an opaque panel
-background for legibility. Hover or keyboard selection then replaces one fixed
-terminal column with centered middle dots; its price intersection uses one
-inverse cyan cell with the same cursor glyph.
+Charts map cached price observations to their actual timestamps across the
+selected window rather than spreading observations evenly across the terminal.
+Long gaps remain blank and disconnected. A Braille canvas renders the thin
+price trace over a per-cell RGB area fill, with price and range-aware date
+scales. The fill samples the same two horizontal Braille subcells as the trace
+and uses fractional edge coverage plus a short exterior fade to soften its
+cell-resolution boundary. Horizontal reference guides use the terminal font's
+middle-dot glyph instead of full-width Braille runs, preventing fallback-font
+advance errors from accumulating across browser-hosted terminal rows. The
+trace replaces guide dots at intersections. Price labels are painted over the
+plot after the chart, using an opaque panel background for legibility. Hover or
+keyboard selection then replaces one fixed terminal column with centered
+middle dots; its price intersection uses one inverse cyan cell with the same
+cursor glyph. When space permits, an exact price is placed beside that
+intersection and its date or time beside the X axis, on the roomier side of the
+cursor.
+
+Ticker detail derives complete cached-history coverage from the earliest and
+latest price observations across timeframes. The header and Statistics expose
+that span. Fixed range controls that exceed it are muted without changing their
+hit targets or shortcuts; `ALL` remains the unbounded cached-history choice.
 
 A responsive 4-7-row volume histogram uses uniform-color lower-block caps for
 eighth-cell height precision. Fully occupied cells use background color instead
@@ -207,16 +223,19 @@ of a full-block glyph, avoiding line-height seams through the solid portions.
 ## Heatmap Semantics
 
 Storage selects the newest valid price endpoint by timestamp from the current
-snapshot and the latest cached bar. For `1D`, a selected snapshot endpoint uses
-its previous close when available; otherwise, and for longer ranges, the
-baseline is the nearest cached close at the exact period cutoff. The fallback
-timeframe order is range-specific, so the UI remains useful while finer history
-is still loading. Timeframe selection probes the indexed `(symbol, timeframe)`
-key instead of enumerating distinct timeframes across the full bars history on
-every range change. Detail price plots reconcile the cutoff baseline and
-selected current endpoint with the cached close series. The volume plot
-continues to use only provider OHLCV bars, so those price-only boundary points
-cannot fabricate volume.
+snapshot and the latest cached price-observation bar. A zero-volume bar with
+zero or absent trades and identical OHLC prices remains in raw storage but
+cannot select a timeframe, endpoint, freshness timestamp, coverage boundary, or
+chart point. For `1D`, a selected snapshot endpoint uses its previous close
+when available; otherwise, and for longer ranges, the baseline is the nearest
+observed close at the exact period cutoff. The fallback timeframe order is
+range-specific, so the UI remains useful while finer history is still loading.
+Timeframe selection probes the indexed `(symbol, timeframe)` key instead of
+enumerating distinct timeframes across the full bars history on every range
+change. Detail price plots reconcile the cutoff baseline and selected current
+endpoint with the traded close series. The volume plot continues to use only
+traded provider OHLCV bars, so those price-only boundary points cannot
+fabricate volume.
 
 Heatmap volume is deliberately independent of the price/freshness endpoint.
 `1D` uses latest-session cumulative snapshot volume when that snapshot is the
@@ -257,9 +276,10 @@ does not understand.
 
 `AssetProvider` supplies active/searchable instruments.
 `MarketDataProvider` supplies snapshots, bars, and provider-specific historical
-availability cutoffs. `NewsProvider` is optional and can be supplied by a
-different adapter. `ProviderSet` is the runtime facade over those capabilities,
-so `sync` contains no settings, credential, or Alpaca dependency.
+availability cutoffs. `CorporateActionsProvider` optionally supplies dated
+forward and reverse split ratios; `NewsProvider` is independently optional.
+`ProviderSet` is the runtime facade over those capabilities, so `sync` contains
+no settings, credential, or Alpaca dependency.
 
 `ProviderKind` selects a compiled adapter at the configuration/runtime edge.
 Alpaca authentication, pagination, feed selection, response shapes, retry
@@ -289,6 +309,9 @@ cache retention, attribution, and redistribution restrictions. See
 - Timeouts, `408`, `429`, and selected `5xx` responses use bounded exponential
   backoff; `Retry-After` is honored up to 30 seconds.
 - Provider errors update the status/sync overlay but do not delete cached data.
+- A failed corporate-action lookup leaves a share-derived market cap unavailable
+  unless the snapshot supplies a valid provider cap; it never combines a stale
+  catalog share count with a post-split price.
 - Catalog refresh errors preserve the last valid local catalog and do not block
   startup; an oversized, malformed, unsupported, or older catalog is ignored.
 - Each history batch is independently upserted, so a later run resumes from
