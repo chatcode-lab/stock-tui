@@ -54,7 +54,8 @@ statistics, related news, sector rank, and absolute and relative gain.
 - Colors tickers by period return in every ordering except Volume: losses run
   bright red, neutral returns gray, and gains bright green. Volume ordering
   instead distinguishes sectors by stable hues in color themes and uses
-  brightness for sector-relative volume. Monochrome mode uses brightness only.
+  brightness for sector-relative cumulative share volume over the selected
+  range. Monochrome mode uses brightness only.
 - Reorders tickers by estimated market cap with SEC public-float fallback,
   gain, volume, or symbol.
 - Provides responsive sector grids and a ticker detail screen with a
@@ -78,10 +79,13 @@ statistics, related news, sector rank, and absolute and relative gain.
 For every ordering except Volume, the return heat scale is symmetric around
 zero and capped using the visible market's 90th-percentile absolute move.
 Volume uses a separate log scale within each sector, bounded by its 10th and
-90th percentiles, so exceptional prints do not flatten brightness. Missing
-return or volume data appears neutral; when data is more than 72 hours old, only
-the ticker label is underlined as a freshness hint while retaining a
-contrast-aware foreground.
+90th percentiles, so exceptional prints do not flatten brightness. `1D` uses
+the selected snapshot's latest-session cumulative volume when available, with
+a cached bar-sum fallback; longer ranges sum cached OHLCV bar volume inside the
+selected cutoff. Range changes therefore update Volume ordering, tile values,
+and brightness. Missing return or range-volume data appears neutral. When the
+selected price endpoint is more than 72 hours old, only the ticker label is
+underlined as a freshness hint while retaining a contrast-aware foreground.
 
 ## Why Rust
 
@@ -435,7 +439,11 @@ It then resumes two years of daily bars plus all provider-available weekly
 history for the selected 900 companies and the three benchmark ETF proxies.
 Both history plans use a seven-day overlap after their initial backfill. It
 lazily requests range-appropriate bars and 20 newest headlines when a ticker is
-opened.
+opened. Beyond the special `1D` snapshot case, heatmap volume prefers daily
+bars through `2Y` and weekly bars for `5Y`, `10Y`, and `ALL`, with cached
+alternative timeframes used only when the preferred aggregate is unavailable.
+Ticker-detail statistics continue to show latest-session snapshot volume,
+while the chart keeps raw per-bar volume.
 In live mode, the broad-market snapshot refresh runs immediately on startup
 and every five minutes by default; `r` starts one immediately and restarts that
 timer. Opening a ticker or changing its range separately triggers a lazy detail

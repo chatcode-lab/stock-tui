@@ -245,8 +245,16 @@ its previous close when available and otherwise uses that cached cutoff
 baseline. Return is endpoint price divided by baseline minus one. Calendar-day
 cutoffs mean the number of trading sessions varies with weekends and holidays.
 `ALL` uses the earliest bar present in the provider-backed local cache.
-The heatmap's volume value comes from that same selected snapshot or bar
-observation rather than mixing an older volume with a newer price timestamp.
+Heatmap volume is calculated separately from that price endpoint. `1D` uses
+latest-session cumulative snapshot volume when the snapshot supplies the
+selected price, otherwise it sums cached bars inside the day cutoff. Longer
+ranges sum non-negative cached OHLCV volume from the inclusive cutoff through
+the newest cached bar no later than now. The aggregation prefers `1Day` bars
+through `2Y` and `1Week` bars for `5Y`, `10Y`, and `ALL`, then tries other
+cached granularities when the preferred timeframe has no observations. A daily
+snapshot is never added to a longer range, avoiding latest-session double
+counting; a multi-day total can lag that session until its bar is cached.
+Missing range history remains neutral and sorts after known volume.
 
 Ticker price charts add price-only boundary points for the cutoff baseline and
 selected endpoint when those values are not already represented by a cached
@@ -257,7 +265,8 @@ Sort modes operate within each sector:
 - Market cap: descending estimated market cap, or numeric SEC public-float
   proxy when the estimate is unavailable, then catalog rank and symbol.
 - Gainers: descending selected-period return.
-- Volume: descending latest snapshot or period-bar volume.
+- Volume: descending cumulative share volume over the selected range; `1D`
+  prefers latest-session cumulative snapshot volume.
 - A-Z: ascending ticker symbol.
 
 Rows missing both size values sort after rows with either value. Favorites can include

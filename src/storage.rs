@@ -36,7 +36,7 @@ const PERIOD_METRIC_SQL: &str = "WITH
         ORDER BY timestamp ASC LIMIT 1
     ),
     latest AS (
-        SELECT close, volume, timestamp FROM bars
+        SELECT close, timestamp FROM bars
         WHERE symbol = ?1 AND timeframe = ?2 AND timestamp <= ?4
         ORDER BY timestamp DESC LIMIT 1
     )
@@ -50,8 +50,12 @@ SELECT
         (SELECT timestamp FROM after_cutoff)
     ),
     (SELECT close FROM latest),
-    (SELECT volume FROM latest),
     (SELECT timestamp FROM latest)";
+const PERIOD_VOLUME_SQL: &str = "
+    SELECT SUM(volume) FROM bars
+    WHERE symbol = ?1 AND timeframe = ?2
+      AND timestamp >= ?3 AND timestamp <= ?4
+      AND volume >= 0";
 
 const COMPANY_COLUMNS: &str = "
     symbol, name, sector, raw_sector, exchange, industry, market_cap,
@@ -195,7 +199,6 @@ struct PeriodMetric {
     baseline: Option<f64>,
     baseline_at: Option<DateTime<Utc>>,
     close: Option<f64>,
-    volume: Option<f64>,
     updated_at: Option<DateTime<Utc>>,
 }
 
@@ -215,13 +218,7 @@ struct ResolvedPeriod {
     source: Option<EndpointSource>,
 }
 
-type PeriodMetricRow = (
-    Option<f64>,
-    Option<i64>,
-    Option<f64>,
-    Option<f64>,
-    Option<i64>,
-);
+type PeriodMetricRow = (Option<f64>, Option<i64>, Option<f64>, Option<i64>);
 
 impl Storage {
     /// Opens a path-backed cache and applies all known schema migrations.
@@ -924,6 +921,7 @@ impl Storage {
         let snapshots = load_snapshots(&connection)?;
         let mut timeframe_statement = connection.prepare_cached(TIMEFRAME_EXISTS_SQL)?;
         let mut metric_statement = connection.prepare_cached(PERIOD_METRIC_SQL)?;
+        let mut volume_statement = connection.prepare_cached(PERIOD_VOLUME_SQL)?;
         let cutoff = range.cutoff(now);
         let mut tiles = Vec::with_capacity(companies.len());
         for company in companies {
@@ -937,7 +935,15 @@ impl Storage {
             )?;
             let snapshot = snapshots.get(&company.symbol);
             let period = resolve_period(range, cutoff, snapshot, metric);
-            let volume = volume_for_source(period.source, snapshot, metric);
+            let volume = load_range_volume(
+                &mut volume_statement,
+                &company.symbol,
+                range,
+                period.source,
+                snapshot,
+                cutoff,
+                now,
+            )?;
             let updated_at = period.updated_at;
             let stale = updated_at.is_none_or(|updated| {
                 now.signed_duration_since(updated).num_hours() > STALE_AFTER_HOURS
@@ -998,6 +1004,27 @@ impl Storage {
         Ok((timeframe, metric))
     }
 
+    fn load_symbol_period_volume(
+        &self,
+        symbol: &str,
+        range: DateRange,
+        source: Option<EndpointSource>,
+        snapshot: Option<&Snapshot>,
+        now: DateTime<Utc>,
+    ) -> Result<Option<f64>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare_cached(PERIOD_VOLUME_SQL)?;
+        load_range_volume(
+            &mut statement,
+            symbol,
+            range,
+            source,
+            snapshot,
+            range.cutoff(now),
+            now,
+        )
+    }
+
     pub fn benchmark_tiles(&self, range: DateRange, now: DateTime<Utc>) -> Result<Vec<MarketTile>> {
         let mut tiles = Vec::with_capacity(MarketBenchmark::ALL.len());
         for benchmark in MarketBenchmark::ALL {
@@ -1008,11 +1035,18 @@ impl Storage {
             let snapshot = self.snapshot(benchmark.symbol)?;
             let period = resolve_period(range, range.cutoff(now), snapshot.as_ref(), metric);
             let updated_at = period.updated_at;
+            let volume = self.load_symbol_period_volume(
+                benchmark.symbol,
+                range,
+                period.source,
+                snapshot.as_ref(),
+                now,
+            )?;
             tiles.push(MarketTile {
                 price: period.price,
                 period_start_price: period.baseline,
                 period_return: period.period_return,
-                volume: volume_for_source(period.source, snapshot.as_ref(), metric),
+                volume,
                 starred: self.is_favorite(benchmark.symbol)?,
                 stale: updated_at.is_none_or(|updated| {
                     now.signed_duration_since(updated).num_hours() > STALE_AFTER_HOURS
@@ -1413,30 +1447,68 @@ fn load_period_metric(
     cutoff: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<PeriodMetric> {
-    let (baseline, baseline_at, close, volume, timestamp): PeriodMetricRow = statement.query_row(
+    let (baseline, baseline_at, close, timestamp): PeriodMetricRow = statement.query_row(
         params![
             symbol,
             timeframe,
             timestamp_millis(cutoff),
             timestamp_millis(now)
         ],
-        |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        },
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     )?;
     Ok(PeriodMetric {
         baseline,
         baseline_at: baseline_at.map(datetime_from_millis).transpose()?,
         close,
-        volume,
         updated_at: timestamp.map(datetime_from_millis).transpose()?,
     })
+}
+
+fn load_range_volume(
+    statement: &mut rusqlite::CachedStatement<'_>,
+    symbol: &str,
+    range: DateRange,
+    source: Option<EndpointSource>,
+    snapshot: Option<&Snapshot>,
+    cutoff: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<Option<f64>> {
+    if range == DateRange::Day
+        && source == Some(EndpointSource::Snapshot)
+        && let Some(volume) = snapshot
+            .and_then(|value| value.volume)
+            .filter(|volume| volume.is_finite() && *volume >= 0.0)
+    {
+        return Ok(Some(volume));
+    }
+
+    for timeframe in volume_timeframe_candidates(range) {
+        let volume = statement
+            .query_row(
+                params![
+                    symbol,
+                    timeframe,
+                    timestamp_millis(cutoff),
+                    timestamp_millis(now)
+                ],
+                |row| row.get::<_, Option<f64>>(0),
+            )?
+            .filter(|volume| volume.is_finite() && *volume >= 0.0);
+        if volume.is_some() {
+            return Ok(volume);
+        }
+    }
+    Ok(None)
+}
+
+fn volume_timeframe_candidates(range: DateRange) -> &'static [&'static str] {
+    match range {
+        DateRange::Day => &["1Day", "1Hour", "15Min", "5Min"],
+        DateRange::FiveYears | DateRange::TenYears | DateRange::All => {
+            &["1Week", "1Day", "1Hour", "15Min", "5Min"]
+        }
+        _ => &["1Day", "1Hour", "15Min", "5Min", "1Week"],
+    }
 }
 
 fn resolve_period(
@@ -1498,18 +1570,6 @@ fn resolve_period(
         period_return,
         updated_at,
         source,
-    }
-}
-
-fn volume_for_source(
-    source: Option<EndpointSource>,
-    snapshot: Option<&Snapshot>,
-    metric: PeriodMetric,
-) -> Option<f64> {
-    match source {
-        Some(EndpointSource::Snapshot) => snapshot.and_then(|value| value.volume),
-        Some(EndpointSource::Bar) => metric.volume,
-        None => None,
     }
 }
 
@@ -2293,6 +2353,123 @@ mod tests {
     }
 
     #[test]
+    fn heatmap_volume_tracks_the_selected_range_and_changes_order() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        storage.replace_universe(
+            now.date_naive(),
+            &[
+                company("AAA", "Alpha", Sector::Technology, 300.0, Some(1), now),
+                company("BBB", "Beta", Sector::Technology, 200.0, Some(2), now),
+            ],
+        )?;
+        let mut weekly_aaa = bar("AAA", now, 103.0, 5.0);
+        weekly_aaa.timeframe = "1Week".to_owned();
+        let mut weekly_bbb = bar("BBB", now, 103.0, 900.0);
+        weekly_bbb.timeframe = "1Week".to_owned();
+        storage.upsert_bars(&[
+            bar("AAA", instant(2), 100.0, 800.0),
+            bar("AAA", instant(8), 101.0, 10.0),
+            bar("AAA", instant(12), 102.0, 10.0),
+            bar("AAA", now, 103.0, 10.0),
+            bar("BBB", instant(2), 100.0, 10.0),
+            bar("BBB", instant(8), 101.0, 100.0),
+            bar("BBB", instant(12), 102.0, 100.0),
+            bar("BBB", now, 103.0, 100.0),
+            weekly_aaa,
+            weekly_bbb,
+        ])?;
+        storage.upsert_snapshots(&[
+            snapshot("AAA", 103.0, 102.0, 500.0, now),
+            snapshot("BBB", 103.0, 102.0, 50.0, now),
+        ])?;
+
+        let day = storage.heatmap_tiles(
+            DateRange::Day,
+            SortMode::Volume,
+            Some(Sector::Technology),
+            false,
+            now,
+        )?;
+        assert_eq!(day[0].company.symbol, "AAA");
+        assert_eq!(day[0].volume, Some(500.0));
+        assert_eq!(day[1].volume, Some(50.0));
+
+        let week = storage.heatmap_tiles(
+            DateRange::Week,
+            SortMode::Volume,
+            Some(Sector::Technology),
+            false,
+            now,
+        )?;
+        assert_eq!(week[0].company.symbol, "BBB");
+        assert_eq!(week[0].volume, Some(300.0));
+        assert_eq!(week[1].volume, Some(30.0));
+
+        let month = storage.heatmap_tiles(
+            DateRange::Month,
+            SortMode::Volume,
+            Some(Sector::Technology),
+            false,
+            now,
+        )?;
+        assert_eq!(month[0].company.symbol, "AAA");
+        assert_eq!(month[0].volume, Some(830.0));
+        assert_eq!(month[1].volume, Some(310.0));
+
+        let five_years = storage.heatmap_tiles(
+            DateRange::FiveYears,
+            SortMode::Volume,
+            Some(Sector::Technology),
+            false,
+            now,
+        )?;
+        assert_eq!(five_years[0].company.symbol, "BBB");
+        assert_eq!(five_years[0].volume, Some(900.0));
+        assert_eq!(five_years[1].volume, Some(5.0));
+        Ok(())
+    }
+
+    #[test]
+    fn day_volume_falls_back_to_inclusive_daily_bars_but_not_weekly_bars() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        storage.replace_universe(
+            now.date_naive(),
+            &[
+                company("AAA", "Alpha", Sector::Technology, 300.0, Some(1), now),
+                company("BBB", "Beta", Sector::Technology, 200.0, Some(2), now),
+            ],
+        )?;
+        let mut weekly_bbb = bar("BBB", now, 103.0, 900.0);
+        weekly_bbb.timeframe = "1Week".to_owned();
+        storage.upsert_bars(&[
+            bar("AAA", DateRange::Day.cutoff(now), 102.0, 20.0),
+            bar("AAA", now, 103.0, 30.0),
+            weekly_bbb,
+        ])?;
+        let mut snapshot_without_volume = snapshot("AAA", 103.0, 102.0, 500.0, now);
+        snapshot_without_volume.volume = None;
+        storage.upsert_snapshots(&[snapshot_without_volume])?;
+
+        let tiles = storage.heatmap_tiles(
+            DateRange::Day,
+            SortMode::Alphabetical,
+            Some(Sector::Technology),
+            false,
+            now,
+        )?;
+
+        assert_eq!(tiles[0].company.symbol, "AAA");
+        assert_eq!(tiles[0].volume, Some(50.0));
+        assert_eq!(tiles[1].company.symbol, "BBB");
+        assert_eq!(tiles[1].volume, None);
+        Ok(())
+    }
+
+    #[test]
     fn period_endpoint_uses_the_newer_price_source_and_its_timestamp() -> Result<()> {
         let directory = tempdir()?;
         let storage = Storage::open(directory.path().join("market.sqlite3"))?;
@@ -2382,7 +2559,7 @@ mod tests {
             )?
             .remove(0);
         assert_eq!(tile.price, Some(100.0));
-        assert_eq!(tile.volume, Some(10.0));
+        assert_eq!(tile.volume, None);
         assert_eq!(tile.updated_at, Some(instant(5)));
         assert!(tile.stale);
         Ok(())

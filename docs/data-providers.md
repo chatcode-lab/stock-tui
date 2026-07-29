@@ -486,8 +486,10 @@ RSUs, options, and unexercised convertibles are excluded.
 Market-cap ordering compares the estimated cap where present and the numeric
 public-float proxy otherwise, then uses catalog rank and symbol for stable
 ties. A proxy-only ticker still shows market cap as unavailable. Gain and
-volume ordering use the selected cached period/snapshot. Alphabetical ordering
-uses ticker symbol.
+volume ordering follow the selected range. Heatmap volume prefers the provider
+snapshot's latest-session cumulative volume for `1D` and uses a cached OHLCV
+sum for longer ranges; ticker-detail statistics retain that latest-session
+snapshot volume. Alphabetical ordering uses ticker symbol.
 
 This remains an approximation. Different traded classes can have different
 prices; treasury-share treatment, ADR ratios, amendments, filing lag, and

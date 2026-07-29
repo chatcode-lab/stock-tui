@@ -216,19 +216,29 @@ key instead of enumerating distinct timeframes across the full bars history on
 every range change. Detail price plots reconcile the cutoff baseline and
 selected current endpoint with the cached close series. The volume plot
 continues to use only provider OHLCV bars, so those price-only boundary points
-cannot fabricate volume. Heatmap volume values follow the same selected
-snapshot or bar observation as the displayed price and freshness timestamp.
+cannot fabricate volume.
+
+Heatmap volume is deliberately independent of the price/freshness endpoint.
+`1D` uses latest-session cumulative snapshot volume when that snapshot is the
+selected price endpoint, with the cached period sum as fallback. Longer ranges
+sum one cached OHLCV timeframe from the inclusive cutoff through the newest
+cached bar no later than now: daily bars are preferred through `2Y`, and weekly
+bars are preferred for `5Y`, `10Y`, and `ALL`. Other granularities are
+considered only when the preferred aggregate is unavailable. The client never
+adds a daily snapshot to a multi-day bar total, which would double-count the
+latest session; a total can therefore lag that session until a corresponding
+bar is cached. Missing range history remains neutral.
 
 Except when ordering by Volume, the color extent is the 90th percentile of
 absolute returns across loaded tiles, with a 0.5% floor for `1D` and a 1% floor
 for longer ranges. Values outside that extent saturate at the brightest
 red/green palette endpoint. Volume ordering builds an independent log scale
 for each sector from its 10th through 90th percentile. In color themes, hue
-distinguishes sectors and intensity identifies volume within that sector;
-monochrome intentionally retains only the intensity signal. Missing volume
-remains neutral. Sector headers always report return and weight each available
-return by estimated market cap, falling back to numeric SEC public float for
-proxy-only issuers and equal weight only when neither size is available.
+distinguishes sectors and intensity identifies selected-range cumulative volume
+within that sector; monochrome intentionally retains only the intensity signal.
+Sector headers always report return and weight each available return by
+estimated market cap, falling back to numeric SEC public float for proxy-only
+issuers and equal weight only when neither size is available.
 
 ## Storage Boundary
 

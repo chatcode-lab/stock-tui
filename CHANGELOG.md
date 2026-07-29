@@ -7,6 +7,13 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Made Volume ordering, tile values, and sector-relative brightness range-aware:
+  `1D` uses the selected snapshot's latest-session cumulative volume when
+  available, with a cached bar-sum fallback, while longer ranges sum cached
+  OHLCV volume inside the selected cutoff instead of reusing a daily snapshot.
+
 ### Documentation
 
 - Refreshed the README's deterministic demo captures for the v0.2.0 Overview,
