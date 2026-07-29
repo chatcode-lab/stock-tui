@@ -328,12 +328,13 @@ filing. These policies are calculation metadata, not extra sector tiles.
 `EntityPublicFloat` is a filer-reported issuer-level value and is **not market
 capitalization**. The build stores it as a numeric size proxy with provenance;
 it never writes it into `Company.market_cap`. When both a catalog share estimate
-and an Alpaca snapshot price exist, runtime estimates market cap as
-price-equivalent common shares times current price. Each successful candidate
-snapshot refresh then selects 100 companies per sector using estimated market
-cap when available or numeric public float otherwise. Those 900 companies and
-the three explicitly configured benchmark ETF proxies receive the bulk daily
-and all-provider-available weekly history backfills.
+and a current snapshot price from the selected market-data provider exist,
+runtime estimates market cap as price-equivalent common shares times current
+price. Each successful candidate snapshot refresh then selects 100 companies
+per sector using estimated market cap when available or numeric public float
+otherwise. Those 900 companies and the three explicitly configured benchmark
+ETF proxies receive the bulk daily and all-provider-available weekly history
+backfills.
 
 This means a company can move into the visible top 100 as prices change if it
 is already in the resolved candidate pool and has usable shares. A large
@@ -343,9 +344,9 @@ a successful catalog publication, but no longer requires a client release.
 Public-float and share facts can have different as-of dates, and a missing
 share fact leaves membership dependent on the proxy.
 
-Alpaca's active-asset response refreshes names and exchange identifiers for
-symbols it recognizes without overwriting SEC-derived SIC sector, numeric
-proxy, share estimate/provenance, or retention state. Alpaca-only active
+The selected asset provider's response refreshes names and exchange identifiers
+for symbols it recognizes without overwriting SEC-derived SIC sector, numeric
+proxy, share estimate/provenance, or retention state. Provider-only active
 symbols remain searchable and can load detail, but do not enter a sector
 without catalog metadata.
 
@@ -515,7 +516,8 @@ independently. It is assembled into `ProviderSet`, selected through
 the domain, storage, and rendering layers. A new provider also needs its own
 credential/onboarding branch where applicable.
 
-`StockApiProvider` is the reference for an adapter without credentials. It
+`StockApiProvider` is the reference for an adapter that does not reuse Alpaca
+credentials and can operate either anonymously or with its own bearer token. It
 validates a versioned normalized wire schema and omits `NewsProvider` entirely
 when news is disabled. It does not change the licensing review required for a
 concrete service deployment.

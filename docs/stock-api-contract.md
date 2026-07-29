@@ -200,9 +200,10 @@ of 1,000,000 accumulated bars per request.
 
 ## Optional News
 
-Enable or omit the news capability with `stock_api_news` configuration. When
-disabled, the client does not register a `NewsProvider` and never requests this
-route.
+Enable or omit the news capability with `--stock-api-news`,
+`STOCK_TUI_STOCK_API_NEWS`, or `[providers.stock_api].news` in `config.toml`.
+When disabled, the client does not register a `NewsProvider` and never requests
+this route.
 
 ```http
 GET /v1/news?symbols=AAPL,MSFT&limit=20

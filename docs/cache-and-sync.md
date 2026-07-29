@@ -25,8 +25,8 @@ resolved `db_path`, or override it with `--db` / `STOCK_TUI_DB_PATH`.
 Releases before 0.1.2 used `market.sqlite3` for both modes. On the first live
 startup after upgrading, a detected legacy demo checkpoint triggers an
 automatic cleanup of simulated bars, news, snapshots, and memberships before
-the Alpaca sync begins. Favorites and already-fetched Alpaca bars/news are
-preserved.
+the selected provider sync begins. Favorites and already-fetched live bars and
+news are preserved.
 
 The application also creates platform config and cache directories. The
 configuration file is `<config_dir>/config.toml`; the SQLite database belongs
@@ -124,12 +124,12 @@ A live database is prepared in stages:
 2. Select up to 100 retained initial members per sector by estimated market cap
    where available and numeric SEC public float otherwise. With no cached
    market caps this is equivalent to descending catalog proxy rank.
-3. Fetch Alpaca's active US-equity asset list before requesting snapshots.
-   Present catalog candidates are reactivated; missing candidates are removed
-   from current membership without deleting their company rows, favorites, or
-   cached data. Memberships are then recomputed and current names/exchanges
-   are merged without erasing catalog sector, proxy, share-estimate, or
-   market-cap metadata.
+3. Fetch the selected asset provider's active instrument list before requesting
+   snapshots. Present catalog candidates are reactivated; missing candidates
+   are removed from current membership without deleting their company rows,
+   favorites, or cached data. Memberships are then recomputed and current
+   names/exchanges are merged without erasing catalog sector, proxy,
+   share-estimate, or market-cap metadata.
 4. Request current snapshots for all retained sector candidates and the three
    benchmark ETF proxies in configurable batches (100 by default).
 5. Where a catalog share estimate is available, calculate estimated market cap
@@ -141,22 +141,23 @@ A live database is prepared in stages:
    benchmark ETF proxies in configurable 50-symbol batches: two years of
    `1Day` bars and all provider-available `1Week` bars.
 
-Other active Alpaca assets can remain searchable without joining a heatmap
+Other active provider assets can remain searchable without joining a heatmap
 sector. If the active-asset request fails, startup reports the provider error
 and continues from the last reconciled retention state in the cache.
 
 The UI remains interactive during history population. A tile can be neutral or
-marked stale until enough data for its selected range arrives. The Data Status
-overlay shows phase, completed/total counts, automatic-refresh cadence, the
-latest snapshot-cache checkpoint, status text, and the last provider error.
-Opening this overlay with `S` is read-only and does not start a request.
+marked stale until enough data for its selected range arrives. Normal chrome
+shows the active phase with completed/total counts and percentage. The Data
+Status overlay adds automatic-refresh cadence, the latest snapshot-cache
+checkpoint, status text, and the last provider error. Opening this overlay with
+`S` is read-only and does not start a request.
 
 ## Incremental History Sync
 
 The bulk cache has two plans: `1Day` bars beginning 731 days before now and
-`1Week` bars beginning at the unbounded `ALL` cutoff. For Alpaca, an unbounded
-request returns whatever history the account and feed make available rather
-than manufacturing data before the provider's coverage.
+`1Week` bars beginning at the unbounded `ALL` cutoff. An unbounded request
+returns whatever history the selected provider makes available rather than
+manufacturing data before its coverage.
 
 Each plan records completion per symbol. Before a batch:
 
@@ -270,14 +271,14 @@ symbol matches rank first, then name prefixes, current-universe status, market
 cap, and symbol. The UI requests at most 20 results.
 
 Company rows support `in_universe` and `retained` independently. SEC-derived
-sector candidates reported by Alpaca as active are retained so snapshot refresh
-can move them into or out of the top 100. A catalog candidate missing from the
-active-asset response is marked unretained and removed from current membership,
-but its company row, bars, news, and favorite remain intact. A later active
-response reactivates that candidate. A newly published remote catalog or a
-newer embedded release catalog is still required to consider an issuer absent
-from the current candidate set. The current release does not run automatic
-garbage collection for old company rows.
+sector candidates reported by the selected asset provider as active are retained
+so snapshot refresh can move them into or out of the top 100. A catalog
+candidate missing from the active-asset response is marked unretained and
+removed from current membership, but its company row, bars, news, and favorite
+remain intact. A later active response reactivates that candidate. A newly
+published remote catalog or a newer embedded release catalog is still required
+to consider an issuer absent from the current candidate set. The current
+release does not run automatic garbage collection for old company rows.
 
 ## Offline And Demo Behavior
 

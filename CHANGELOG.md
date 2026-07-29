@@ -7,6 +7,15 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Documentation
+
+- Refreshed the README's deterministic demo captures for the v0.2.0 Overview,
+  Sector, and Ticker Detail interfaces.
+- Clarified overlay-owned controls, synchronization progress, stale-label
+  styling, cached-company search, and the private development provider boundary.
+- Made generic cache and catalog lifecycle descriptions provider-neutral and
+  corrected the documented `stock-api` news configuration names.
+
 ## [0.2.0] - 2026-07-28
 
 ### Added

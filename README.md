@@ -20,19 +20,28 @@ The iterative Codex work performed through chatcode.dev is documented in the
 
 ## Screenshots
 
-These captures use the deterministic offline demo. Company identities are real
-SEC-catalog entries; all displayed prices, returns, volumes, rankings, and news
-are simulated.
+These v0.2.0 captures use the deterministic offline demo at a 140x42 terminal
+viewport. Company identities are real SEC-catalog entries; all displayed
+prices, returns, volumes, rankings, and news are simulated.
 
 ### Market Overview
+
+Nine sectors, each containing 100 equally sized ticker signals, plus selectable
+S&P 500, Dow, and Nasdaq-100 ETF proxies.
 
 [![Nine-sector stock market heatmap in stock-tui](docs/screenshots/market-overview.png)](docs/screenshots/market-overview.png)
 
 ### Sector View
 
+Technology ranked by estimated market cap, with one metric per tile and starred
+NVDA emphasized.
+
 [![Technology sector top-100 heatmap in stock-tui](docs/screenshots/technology-sector.png)](docs/screenshots/technology-sector.png)
 
 ### Ticker Detail
+
+The one-year NVDA view with a movable chart cursor, price and time axes, volume,
+statistics, related news, sector rank, and absolute and relative gain.
 
 [![NVDA detail view with price and volume charts in stock-tui](docs/screenshots/ticker-detail.png)](docs/screenshots/ticker-detail.png)
 
@@ -54,7 +63,8 @@ are simulated.
   context, and news.
 - Supports mouse hover, clicking, wheel input, keyboard navigation, and
   terminal resize events.
-- Searches the local issuer catalog by symbol or company name.
+- Searches cached companies by symbol or company name, including retained
+  provider assets outside the current top-100 universe.
 - Persists starred tickers and emphasizes them in every heatmap.
 - Opens immediately from a local SQLite cache while network synchronization
   proceeds in the background.
@@ -69,8 +79,9 @@ For every ordering except Volume, the return heat scale is symmetric around
 zero and capped using the visible market's 90th-percentile absolute move.
 Volume uses a separate log scale within each sector, bounded by its 10th and
 90th percentiles, so exceptional prints do not flatten brightness. Missing
-return or volume data appears neutral; data more than 72 hours old keeps a
-contrast-aware foreground and is underlined as a freshness hint.
+return or volume data appears neutral; when data is more than 72 hours old, only
+the ticker label is underlined as a freshness hint while retaining a
+contrast-aware foreground.
 
 ## Why Rust
 
@@ -105,9 +116,10 @@ URL as a highlighted OSC 8 terminal link and waits: press `Enter` to open it,
 `c` to copy it through the terminal clipboard, `d` to start demo mode, or `Esc`
 to continue directly to credential entry. It accepts the key ID and secret
 through hidden terminal input, validates the pair, and stores it under
-`[providers.alpaca]` in the platform `config.toml`. Existing environment or
-working-directory `.env` values skip onboarding. Alpaca credentials never
-select a provider or override `provider = "stock-api"`.
+`[providers.alpaca]` in the platform `config.toml`. A complete usable pair from
+the process environment or a working-directory `.env` skips credential entry.
+Alpaca credentials never select a provider or override
+`provider = "stock-api"`.
 
 Use the simulated market explicitly when testing without provider data:
 
@@ -303,14 +315,15 @@ stock-tui --demo
 ## Controls
 
 Every visible rail control, sector, ticker, range, sort option, detail tab, and
-news row can be clicked with the left mouse button.
+news row can be clicked with the left mouse button. The table describes normal
+navigation views; an open overlay owns its relevant keys as described below.
 
 | Input | Action |
 | --- | --- |
 | Mouse move | Select a sector, benchmark, ticker, or news row; move the chart cursor |
 | Left click | Activate the control, sector, ticker, tab, or news item |
-| Wheel on overview/sector | Move to the previous or next date range |
-| Wheel on ticker chart | Move the selected chart sample |
+| Wheel on Overview, Sector, or Starred | Move to the previous or next date range |
+| Wheel anywhere on ticker detail | Move the selected chart sample |
 | Arrow keys or `h` `j` `k` `l` | Move sector, ticker, sort, chart, or news selection |
 | `Enter` | Open the selected sector, ticker, news item, or overlay choice |
 | `Esc` | Close an overlay or go up one level |
@@ -334,7 +347,7 @@ news row can be clicked with the left mouse button.
 | `r` | Request an immediate broad-market snapshot refresh |
 | `S` | Open read-only data status |
 | `?` | Open keyboard help |
-| `q` or `Ctrl-C` | Quit and restore the terminal |
+| `q` or `Ctrl-C` | Quit and restore the terminal when no overlay is open |
 
 On ticker detail, Left/Right (or `h`/`l`) moves the chart cursor while
 Up/Down (or `k`/`j`) selects the related-news row; `Enter` opens it.
@@ -343,11 +356,11 @@ sector, starred list, or benchmark order while preserving the selected range
 and ordering.
 
 Sector and Starred cells show the ticker plus one selected value. Choosing an
-ordering also selects its natural default value: estimated market cap,
-relative gain, volume, or price for alphabetical order. `i` then cycles the
-six available values independently. `o` reverses ticker order in Overview,
-Sector, and Starred views. `v` applies Grid or Spiral placement to the nested
-Overview sector heatmaps and the expanded Sector/Starred heatmaps. In
+ordering resets its direction and selects its natural default value: estimated
+market cap, relative gain, volume, or price for alphabetical order. `i` then
+cycles the six available values independently. `o` reverses ticker order in
+Overview, Sector, and Starred views. `v` applies Grid or Spiral placement to the
+nested Overview sector heatmaps and the expanded Sector/Starred heatmaps. In
 ticker-selectable views, mouse targets and arrow-key navigation follow the
 visible layout; Overview input remains sector-level.
 
@@ -358,10 +371,17 @@ opening an overlay also cancel a pending prefix.
 
 In search, type or paste a query, use Up/Down to select a result, `Enter` to
 open it, `Ctrl-U` to clear the query, and `Esc` to close. Search is local and
-returns at most 20 catalog matches. Activating a headline asks the operating
-system to open its provider URL in the default browser. If no browser can be
-launched, the URL is copied through the terminal's OSC 52 clipboard protocol
-instead.
+returns at most 20 cached-company matches. Text keys, including `q`, digits, and
+range shortcuts, belong to the query while Search is open. In Help and Data
+Status, `q` closes the overlay; `Esc` closes every overlay. Activating a
+headline asks the operating system to open its provider URL in the default
+browser. If no browser can be launched, the URL is copied through the
+terminal's OSC 52 clipboard protocol instead.
+
+During cache preparation and provider synchronization, the secondary header or
+footer reports numeric `completed/total` progress and a percentage. `S` opens
+the detailed read-only status view, while the running application version stays
+visible at the lower right.
 
 On ANSI terminals, `stock-tui` explicitly requests all-motion tracking with
 SGR mouse encoding (`1003` + `1006`). Its click, hover, drag, and wheel reports
@@ -422,9 +442,11 @@ timer. Opening a ticker or changing its range separately triggers a lazy detail
 request. Demo and offline modes never schedule remote refreshes. `S` only opens
 the status panel; it does not start synchronization.
 
-The current adapter is limited to Alpaca US equities. Feed selection changes
-US venue coverage; it does not enable non-US markets. Additional countries,
-currencies, sessions, and licensed providers need explicit future adapters.
+The default Alpaca adapter is limited to US equities. Its feed selection changes
+US venue coverage; it does not enable non-US markets. The `stock-api` contract
+is provider-neutral, but the current sector catalog and UI remain designed
+around US-listed equities and USD. Additional countries, currencies, sessions,
+and licensed sources require compatible adapters and explicit product support.
 The public catalog endpoint contains only the compact SEC-derived issuer
 catalog; it is not a market-price or news proxy.
 
@@ -436,9 +458,10 @@ change; consult Alpaca's current documentation.
 
 The local cache is for the credential holder's use. **Alpaca states that its
 API data cannot be redistributed under ordinary access terms.** Do not publish
-or ship a populated Alpaca cache. The project intentionally uses a
-bring-your-own-key model and has no shared-key market-data proxy or public
-price/news backend.
+or ship a populated Alpaca cache. The default production model is
+bring-your-own-key and there is no public shared-key price/news service. The
+separately operated `stock-api` endpoint is restricted to explicitly authorized
+development tests and is not a licensed public market-data backend.
 See [Requesting Public-Display Permission](docs/data-providers.md#requesting-public-display-permission)
 before proposing any no-key service.
 

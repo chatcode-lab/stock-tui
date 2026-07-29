@@ -313,11 +313,12 @@ protect it like other personal application data.
 
 ## Hosted Data Boundary
 
-The current application deliberately uses a bring-your-own-key model. It has
-no shared-key market-data proxy or public price/news backend, and an ordinary
-personal Alpaca key must never be used to create one. A future licensed
-provider service would need
-a distinct client contract and explicit redistribution rights for every served
+The default production model is deliberately bring-your-own-key. The project
+has no public shared-key price/news backend, and an ordinary personal Alpaca key
+must never be used to create one. A separately operated `stock-api` endpoint is
+restricted to explicitly authorized development tests and is not a licensed
+public market-data service. A future public provider service would need a
+distinct client contract and explicit redistribution rights for every served
 market-data and news field, plus authentication, abuse controls, freshness
 metadata, and documented retention/deletion rules. See
 [Requesting Public-Display Permission](data-providers.md#requesting-public-display-permission).
