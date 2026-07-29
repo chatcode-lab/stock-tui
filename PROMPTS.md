@@ -1291,6 +1291,33 @@ unsupported split coverage fails closed instead of combining stale shares with
 a post-split price. The behavior is documented and covered by storage,
 provider, synchronization, chart, interaction, and responsive rendering tests.
 
+## 44. Drain Mouse Input Before Restoring the Shell
+
+> Address [GitHub issue #10][issue-10]: quitting while mouse-motion reports are
+> still in flight must not leave SGR escape sequences or coordinate fragments
+> for the next shell prompt to display or execute.
+
+**Committed changes**
+
+- [`98f408a` - Drain terminal input before shell restore][commit-98f408a]
+
+**Summary**
+
+Terminal shutdown now has two explicit phases. The app disables bracketed
+paste, focus events, and SGR mouse reporting and flushes that output while the
+terminal is still raw; it then drops the event reader, cancels and joins cache
+workers, drains Crossterm events through a 40 ms quiet period with a 200 ms
+hard cap, flushes the OS input queue, leaves the alternate screen, shows the
+cursor, and restores canonical input and echo last. Cleanup attempts every
+operation while preserving the first error, with an immediate best-effort path
+for setup failures, `Drop`, and panics.
+
+Demo generation and live history writes now observe cooperative cancellation,
+and partially written bar batches roll back transactionally. PTY-backed tests
+inject both immediate and delayed SGR motion reports, verify cleanup ordering
+and bounded exit latency, simulate the next shell reader, and cover normal,
+early-demo, and panic exits with canonical mode and echo restored.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1354,6 +1381,7 @@ implementation work.
 [commit-d8c596a]: https://github.com/chatcode-lab/stock-tui/commit/d8c596a3fa3ce6d6f0cb25c6ea506d3abb9cab56
 [commit-92340b8]: https://github.com/chatcode-lab/stock-tui/commit/92340b84be0f261cd3a8f5f71432320a679bf583
 [commit-f983874]: https://github.com/chatcode-lab/stock-tui/commit/f983874627056e8acf2f7d02d6d1581b3f9b80b6
+[commit-98f408a]: https://github.com/chatcode-lab/stock-tui/commit/98f408a72de6b8ed5fb53ac3e4da55fbf1aad3be
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1362,6 +1390,7 @@ implementation work.
 [private-commit-6bf23bb]: https://github.com/chatcode-lab/stock-api/commit/6bf23bb3c765ee871d5ef3e63ea5c8f91d3d6c40
 [private-commit-cc1f6ca]: https://github.com/chatcode-lab/stock-api/commit/cc1f6ca2a0aaadc5a76dbd99b942e49f6aa58b1d
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
+[issue-10]: https://github.com/chatcode-lab/stock-tui/issues/10
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
 [release-v0.2.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.0
