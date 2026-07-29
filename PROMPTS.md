@@ -13,7 +13,7 @@ omitted. Attached StockTouch and work-in-progress screenshots are described
 but not republished here. Every commit link is immutable; links into private
 infrastructure repositories require collaborator access.
 
-The chronology covers product-development prompts through the `v0.2.2`
+The chronology covers product-development prompts through the `v0.2.3`
 release, including the provider, onboarding, market-cap, SEC catalog, private
 development-provider, UI refinement, and signed distribution work. It excludes
 session-management instructions and this document's own editorial requests.
@@ -1341,6 +1341,158 @@ build-only, even when a tag is selected, while reserving publication for a
 preflight from `main` and post-publication archive, checksum, notarization, and
 release-note verification.
 
+## 46. Update and Verify Signed Release Binaries
+
+> Explain how to update `stock-tui` on this Linux machine and on macOS, and how
+> to verify that the downloaded macOS binary is signed and notarized correctly.
+
+**Relevant committed release**
+
+- [`ab6b3ec` - Prepare stock-tui 0.2.2][commit-ab6b3ec]
+- [`v0.2.2` release][release-v0.2.2]
+
+**Summary**
+
+The update procedure uses the release archive matching the operating system and
+CPU, verifies it against `SHA256SUMS`, and replaces the existing executable.
+On macOS, `codesign --verify --deep --strict --verbose=2`,
+`codesign -dv --verbose=4`, and `spctl --assess --type execute --verbose=4`
+verify the Developer ID signature and Gatekeeper notarization assessment. This
+was operational guidance for the already published artifacts and required no
+new source change.
+
+## 47. Compress Closed-Market Time Instead of Drawing Chart Gaps
+
+> The new no-trade gaps make charts harder to read. Model `1D` as the latest
+> observed exchange session from its regular open through close, leaving only
+> the not-yet-observed portion of an active session blank. For longer ranges,
+> omit nights, weekends, and holidays as StockTouch did, so one week presents
+> five observed trading sessions without empty calendar gaps.
+
+**Committed changes**
+
+- [`5f85037` - Harden market sessions and SEC share coverage][commit-5f85037]
+
+**Summary**
+
+Detail charts now construct range-specific timelines. `1D` selects the newest
+observed exchange-local session and maps its full regular trading window.
+`1W` concatenates the five newest observed sessions; longer intraday histories
+compress closed-market time, while daily and weekly histories use ordinal
+observation spacing. Real intraday gaps carry the last trade forward without
+fabricating volume, and axes, fills, cursor positions, and volume columns share
+the same timeline.
+
+## 48. Keep Provider Caches Bound to One Market Context
+
+> Since providers may eventually cover different exchanges, do not assume every
+> market uses New York hours. Keep data from incompatible providers, feeds,
+> exchanges, calendars, symbol namespaces, or currencies from mixing. Use one
+> coherent market context per launch, or clear unrelated cached observations
+> before rendering them.
+
+**Committed changes**
+
+- [`5f85037` - Harden market sessions and SEC share coverage][commit-5f85037]
+
+**Summary**
+
+Providers now expose an opaque dataset namespace plus a normalized market
+context containing its calendar, symbol namespace, currency, IANA timezone,
+and regular session bounds. SQLite schema 3 stamps that identity and clears
+incompatible market observations, memberships, news, and sync checkpoints
+transactionally while retaining favorites for rehydration. Alpaca feed and
+endpoint changes and `stock-api` endpoint or schema changes therefore cannot
+silently reuse unattributable rows.
+
+## 49. Preserve GOOG as Alphabet's Compact Canonical Ticker
+
+> GOOGL has appeared again even though the compact heatmap should prefer the
+> four-character GOOG ticker. Keep GOOG as Alphabet's canonical sector member.
+
+**Committed changes**
+
+- [`5f85037` - Harden market sessions and SEC share coverage][commit-5f85037]
+
+**Summary**
+
+Catalog reconciliation explicitly retires a former GOOGL sector membership
+when the current catalog selects GOOG. The two securities remain independent
+for prices, bars, search, and favorites; this is a membership migration, not an
+unsafe ticker alias.
+
+## 50. Fill Cursor Columns, Refine Range Hints, and Restore Dell Market Cap
+
+> Fix three observations:
+>
+> 1. Every interior chart column should produce a cursor value. When no distinct
+>    observation maps to a terminal cell, repeat the preceding value.
+> 2. Do not mute `10Y` merely because a ticker has less than ten complete years;
+>    keep it normal whenever it exposes history beyond `5Y`.
+> 3. Investigate and restore the missing DELL market-cap value.
+
+**Committed changes**
+
+- [`5f85037` - Harden market sessions and SEC share coverage][commit-5f85037]
+
+**Summary**
+
+Hover selection now repeats the preceding observation only across blank
+interior columns and leaves pre-history and future-session tails empty. Range
+styling compares the effective cached interval with the next-shorter preset, so
+partial ten-year history remains visibly useful. The catalog builder resolves
+DELL from the latest filing's reviewed equal-economic Class A, B, and C
+aggregate and retains its exact fact provenance.
+
+## 51. Resolve the Remaining Ambiguous Market-Cap Share Bases
+
+> Several notable companies still show no market cap, including STZ, HSY, TSN,
+> BF.A, COKE, CMCSA, FWONA, DKNG, WSO, SUN, BSM, KRP, WTTR, METC, SPG, BAM,
+> UPS, LEN, and HVII. Find any other affected top companies and implement a
+> general, reviewable solution that also fails safely when future filings
+> change.
+
+**Committed changes**
+
+- [`5f85037` - Harden market sessions and SEC share coverage][commit-5f85037]
+
+**Summary**
+
+The SEC builder now resolves each ambiguous issuer from its latest inline
+filing and exact XBRL class dimensions. A declarative policy registry records
+reviewed member multipliers, accession-scoped economic facts, price basis,
+confidence, rationale, and official filing URLs for multi-class, tracking
+stock, Up-C, partnership, separately traded class, and SPAC structures.
+Unknown or changed accessions, namespaces, units, periods, dimensions,
+members, or duplicate facts fail closed.
+
+The audited catalog resolves all 1,880 candidates and all 900 sector top-100
+positions, including the additional LBRDA gap found by the audit. Publication
+and release workflows reject any future unresolved top-100 row. Corrected
+filing-specific calculations for ERIE, PJT, MC, HLNE, and Visa are covered by
+fixtures and adversarial policy-drift tests.
+
+## 52. Publish a Fresh Catalog and Release 0.2.3
+
+> Push the completed work, build and publish a fresh catalog if the action is
+> required, and create a new release.
+
+**Committed changes**
+
+- [`5f85037` - Harden market sessions and SEC share coverage][commit-5f85037]
+- [`4fa796a` - Prepare stock-tui 0.2.3][commit-4fa796a]
+- [`v0.2.3` release][release-v0.2.3]
+
+**Summary**
+
+The catalog action must run before the release tag because release builds
+download and embed the stable hosted catalog rather than trusting the
+repository fallback. The release sequence therefore pushes `main`, publishes
+and verifies the fresh checksummed R2 catalog, runs the five-platform build-only
+preflight, and only then pushes `v0.2.3`. The tag-triggered workflow publishes
+the five platform archives and checksum manifest after verifying the signed and
+notarized Intel and Apple Silicon macOS executables.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1406,6 +1558,8 @@ implementation work.
 [commit-f983874]: https://github.com/chatcode-lab/stock-tui/commit/f983874627056e8acf2f7d02d6d1581b3f9b80b6
 [commit-98f408a]: https://github.com/chatcode-lab/stock-tui/commit/98f408a72de6b8ed5fb53ac3e4da55fbf1aad3be
 [commit-ab6b3ec]: https://github.com/chatcode-lab/stock-tui/commit/ab6b3ecd1204558a6f48c69a3a35dae99d1963ac
+[commit-5f85037]: https://github.com/chatcode-lab/stock-tui/commit/5f8503730a376f48f00c689e843334bee41988d7
+[commit-4fa796a]: https://github.com/chatcode-lab/stock-tui/commit/4fa796a1660c5d546e571baf2ebc538a9da83745
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1420,3 +1574,4 @@ implementation work.
 [release-v0.2.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.0
 [release-v0.2.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.1
 [release-v0.2.2]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.2
+[release-v0.2.3]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.3
