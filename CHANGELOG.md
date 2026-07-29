@@ -7,6 +7,8 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-29
+
 ### Changed
 
 - Made Volume ordering, tile values, and sector-relative brightness range-aware:
@@ -199,7 +201,8 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
