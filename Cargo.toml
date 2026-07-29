@@ -77,9 +77,18 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 unicode-width = "0.2.2"
 webbrowser = "1.2.0"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["stdio", "termios"] }
+
+[target.'cfg(windows)'.dependencies]
+crossterm_winapi = "0.9.1"
+
 [dev-dependencies]
 pretty_assertions = "1.4.1"
 tempfile = "3.27.0"
+
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { version = "1.1.4", features = ["fs", "pty", "stdio", "termios"] }
 
 [profile.release]
 lto = "thin"

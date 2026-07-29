@@ -83,9 +83,12 @@ short manual pass:
 6. Star a ticker, confirm its marker in common views, open Starred, then unstar
    it.
 7. Hover and keyboard-scrub the Braille chart; switch compact detail tabs.
-8. Open and close every overlay and quit with both `q` and `Ctrl-C`.
-9. Confirm the terminal cursor, mouse mode, raw mode, and alternate screen are
-   restored after normal exit and an induced recoverable error.
+8. Open and close every overlay and quit with both `q` and `Ctrl-C`. Repeat
+   while continuously moving the pointer and confirm the next shell prompt
+   receives no escape fragments or coordinate text.
+9. Confirm the terminal cursor, mouse mode, raw mode, canonical input, echo,
+   and alternate screen are restored after normal exit and an induced panic or
+   recoverable error.
 10. Check `NO_COLOR=1` and at least one terminal/font combination different
     from your primary environment when the palette or glyphs change.
 

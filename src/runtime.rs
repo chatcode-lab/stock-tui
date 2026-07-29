@@ -9,6 +9,7 @@ use chrono::Utc;
 use crossterm::event::EventStream;
 use futures_util::StreamExt;
 use tokio::{sync::mpsc, time::Instant};
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 use crate::{
     app::{AppCommand, handle_event},
@@ -22,6 +23,24 @@ use crate::{
     terminal::{TerminalSession, copy_to_terminal_clipboard},
     ui::{self, state::Route, state::UiState},
 };
+
+struct WorkerCancellation {
+    token: CancellationToken,
+    _guard: DropGuard,
+}
+
+impl WorkerCancellation {
+    fn new(token: CancellationToken) -> Self {
+        Self {
+            _guard: token.clone().drop_guard(),
+            token,
+        }
+    }
+
+    fn cancel(self) {
+        self.token.cancel();
+    }
+}
 
 pub async fn run(settings: Settings) -> Result<()> {
     let storage = Storage::open(&settings.db_path)?;
@@ -84,6 +103,13 @@ pub async fn run(settings: Settings) -> Result<()> {
     reload_tiles(&storage, &mut state)?;
     reload_snapshot_checkpoint(&storage, &mut state)?;
 
+    let mut providers = if settings.demo || settings.offline {
+        None
+    } else {
+        Some(configured_providers(&settings)?)
+    };
+    let mut terminal = TerminalSession::start().context("could not initialize terminal")?;
+
     let (catalog_tx, mut catalog_rx) = mpsc::unbounded_channel();
     let mut catalog_worker = (!settings.demo && !settings.offline).then(|| {
         let cache_dir = settings.cache_dir.clone();
@@ -112,37 +138,44 @@ pub async fn run(settings: Settings) -> Result<()> {
     let (idle_tx, mut event_rx) = mpsc::unbounded_channel();
     let mut event_guard = Some(idle_tx);
     let mut sync_worker = None;
+    let mut sync_cancellation = None;
+    let mut demo_worker = None;
+    let mut demo_cancellation = None;
     let sync_commands = if settings.demo {
         let sender = event_guard.as_ref().expect("event sender exists").clone();
         let seed_storage = storage.clone();
         let reset = settings.reset_demo;
-        let _seed_task = tokio::task::spawn_blocking(move || {
-            if let Err(error) = seed_demo(seed_storage, reset, sender.clone()) {
+        let cancellation = CancellationToken::new();
+        let worker_cancellation = cancellation.clone();
+        demo_worker = Some(tokio::task::spawn_blocking(move || {
+            if let Err(error) = seed_demo(seed_storage, reset, sender.clone(), &worker_cancellation)
+            {
                 let _ = sender.send(SyncEvent::Error(error.to_string()));
             }
-        });
+        }));
+        demo_cancellation = Some(WorkerCancellation::new(cancellation));
         None
     } else if settings.offline {
         state.sync.message = "Offline cache only".to_owned();
         None
     } else {
         event_guard.take();
-        let providers = configured_providers(&settings)?;
         let sync::SyncHandle {
             commands,
             events,
             worker,
+            cancellation,
         } = sync::spawn(
-            providers,
+            providers.take().expect("live mode configures providers"),
             storage.clone(),
             sync::SyncOptions::new(settings.history_batch_size),
         );
         event_rx = events;
         sync_worker = Some(worker);
+        sync_cancellation = Some(WorkerCancellation::new(cancellation));
         Some(commands)
     };
 
-    let mut terminal = TerminalSession::start().context("could not initialize terminal")?;
     let mut input = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -150,93 +183,123 @@ pub async fn run(settings: Settings) -> Result<()> {
     let mut quit = false;
     let mut last_auto_refresh = Instant::now();
 
-    while !quit {
-        if dirty {
-            terminal
-                .terminal_mut()
-                .draw(|frame| ui::render(frame, &mut state))?;
-            dirty = false;
-        }
-        tokio::select! {
-            input_event = input.next() => {
-                match input_event {
-                    Some(Ok(event)) => {
-                        let commands = handle_event(&mut state, event);
-                        for command in commands {
-                            let resets_auto_refresh =
-                                should_reset_auto_refresh(&command, sync_commands.is_some());
-                            if execute_command(
-                                command,
-                                &storage,
-                                &mut state,
-                                sync_commands.as_ref(),
-                            )? {
-                                quit = true;
+    let mut result: Result<()> = async {
+        while !quit {
+            if dirty {
+                terminal
+                    .terminal_mut()
+                    .draw(|frame| ui::render(frame, &mut state))?;
+                dirty = false;
+            }
+            tokio::select! {
+                input_event = input.next() => {
+                    match input_event {
+                        Some(Ok(event)) => {
+                            let commands = handle_event(&mut state, event);
+                            for command in commands {
+                                let resets_auto_refresh =
+                                    should_reset_auto_refresh(&command, sync_commands.is_some());
+                                if execute_command(
+                                    command,
+                                    &storage,
+                                    &mut state,
+                                    sync_commands.as_ref(),
+                                )? {
+                                    quit = true;
+                                }
+                                if resets_auto_refresh {
+                                    last_auto_refresh = Instant::now();
+                                }
                             }
-                            if resets_auto_refresh {
-                                last_auto_refresh = Instant::now();
-                            }
+                            dirty = true;
                         }
-                        dirty = true;
+                        Some(Err(error)) => {
+                            state.status = format!("Terminal input error: {error}");
+                            dirty = true;
+                        }
+                        None => quit = true,
                     }
-                    Some(Err(error)) => {
-                        state.status = format!("Terminal input error: {error}");
-                        dirty = true;
+                }
+                Some(event) = event_rx.recv() => {
+                    apply_sync_event(event, &storage, &mut state)?;
+                    dirty = true;
+                }
+                Some(catalog) = catalog_rx.recv() => {
+                    let version = catalog
+                        .version
+                        .as_deref()
+                        .unwrap_or("unversioned")
+                        .to_owned();
+                    bootstrap_companies(&storage, catalog.companies)?;
+                    reload_tiles(&storage, &mut state)?;
+                    state.status = format!("SEC catalog updated · {version}");
+                    if let Some(commands) = sync_commands.as_ref() {
+                        let _ = commands.send(SyncCommand::ReconcileUniverse);
                     }
-                    None => quit = true,
+                    dirty = true;
                 }
-            }
-            Some(event) = event_rx.recv() => {
-                apply_sync_event(event, &storage, &mut state)?;
-                dirty = true;
-            }
-            Some(catalog) = catalog_rx.recv() => {
-                let version = catalog
-                    .version
-                    .as_deref()
-                    .unwrap_or("unversioned")
-                    .to_owned();
-                bootstrap_companies(&storage, catalog.companies)?;
-                reload_tiles(&storage, &mut state)?;
-                state.status = format!("SEC catalog updated · {version}");
-                if let Some(commands) = sync_commands.as_ref() {
-                    let _ = commands.send(SyncCommand::ReconcileUniverse);
+                _ = tick.tick() => {
+                    if let Some(commands) = sync_commands.as_ref()
+                        && last_auto_refresh.elapsed() >= settings.refresh_interval
+                    {
+                        let _ = commands.send(SyncCommand::Refresh);
+                        last_auto_refresh = Instant::now();
+                    }
+                    dirty = state.overlay.is_some() || state.detail_hover.is_some();
                 }
-                dirty = true;
-            }
-            _ = tick.tick() => {
-                if let Some(commands) = sync_commands.as_ref()
-                    && last_auto_refresh.elapsed() >= settings.refresh_interval
-                {
-                    let _ = commands.send(SyncCommand::Refresh);
-                    last_auto_refresh = Instant::now();
-                }
-                dirty = state.overlay.is_some() || state.detail_hover.is_some();
             }
         }
+        Ok(())
+    }
+    .await;
+
+    retain_first_error(
+        &mut result,
+        terminal
+            .disable_input_modes()
+            .context("could not disable terminal input modes"),
+    );
+    drop(input);
+    if let Some(cancellation) = demo_cancellation.take() {
+        cancellation.cancel();
+    }
+    if let Some(cancellation) = sync_cancellation.take() {
+        cancellation.cancel();
     }
     if let Some(commands) = sync_commands {
         let _ = commands.send(SyncCommand::Shutdown);
     }
     drop(event_guard);
-    drop(terminal);
+    if let Some(worker) = catalog_worker.take() {
+        worker.abort();
+        let _ = worker.await;
+    }
+    if let Some(worker) = demo_worker {
+        let _ = worker.await;
+    }
     if let Some(mut worker) = sync_worker
-        && tokio::time::timeout(Duration::from_secs(5), &mut worker)
+        && tokio::time::timeout(Duration::from_millis(50), &mut worker)
             .await
             .is_err()
     {
         worker.abort();
         let _ = worker.await;
     }
-    if let Some(mut worker) = catalog_worker.take()
-        && tokio::time::timeout(Duration::from_secs(2), &mut worker)
-            .await
-            .is_err()
+    retain_first_error(
+        &mut result,
+        terminal
+            .restore()
+            .context("could not restore terminal state"),
+    );
+    result
+}
+
+fn retain_first_error(result: &mut Result<()>, cleanup: Result<()>) {
+    if result.is_ok()
+        && let Err(error) = cleanup
     {
-        worker.abort();
-        let _ = worker.await;
+        *result = Err(error);
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -461,7 +524,11 @@ fn seed_demo(
     storage: Storage,
     reset: bool,
     events: mpsc::UnboundedSender<SyncEvent>,
+    cancellation: &CancellationToken,
 ) -> Result<()> {
+    if cancellation.is_cancelled() {
+        return Ok(());
+    }
     let counts = storage.counts()?;
     let demo_checkpoints = storage.sync_checkpoint_scopes("demo")?;
     let cache_state = classify_demo_cache(&demo_checkpoints);
@@ -472,6 +539,9 @@ fn seed_demo(
     } else {
         Vec::new()
     };
+    if cancellation.is_cancelled() {
+        return Ok(());
+    }
     if reset {
         storage.reset_demo_data()?;
     } else if current_demo
@@ -497,11 +567,13 @@ fn seed_demo(
         updated_at: Utc::now(),
     }));
     let now = Utc::now();
-    let dataset = demo::generate(now);
+    let Some(dataset) = demo::generate_until_cancelled(now, || cancellation.is_cancelled()) else {
+        return Ok(());
+    };
+    if cancellation.is_cancelled() {
+        return Ok(());
+    }
     storage.replace_universe(now.date_naive(), &dataset.companies)?;
-    storage.upsert_snapshots(&dataset.snapshots)?;
-    storage.upsert_bars(&dataset.bars)?;
-    storage.upsert_news(&dataset.news)?;
     if migrate_legacy_cache {
         let current_symbols = dataset
             .companies
@@ -513,6 +585,26 @@ fn seed_demo(
                 storage.set_favorite(&symbol, true)?;
             }
         }
+    }
+    if cancellation.is_cancelled() {
+        return Ok(());
+    }
+    storage.upsert_snapshots(&dataset.snapshots)?;
+    if cancellation.is_cancelled() {
+        return Ok(());
+    }
+    if storage
+        .upsert_bars_until_cancelled(&dataset.bars, || cancellation.is_cancelled())?
+        .is_none()
+    {
+        return Ok(());
+    }
+    if cancellation.is_cancelled() {
+        return Ok(());
+    }
+    storage.upsert_news(&dataset.news)?;
+    if cancellation.is_cancelled() {
+        return Ok(());
     }
     storage.set_sync_checkpoint(demo::CHECKPOINT_SCOPE, now)?;
     let _ = events.send(SyncEvent::Progress(SyncProgress {

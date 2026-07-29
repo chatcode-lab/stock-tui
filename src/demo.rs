@@ -35,6 +35,16 @@ pub struct DemoDataset {
 /// be treated as investment information.
 #[must_use]
 pub fn generate(as_of: DateTime<Utc>) -> DemoDataset {
+    generate_until_cancelled(as_of, || false).expect("unconditional demo generation cannot cancel")
+}
+
+pub(crate) fn generate_until_cancelled(
+    as_of: DateTime<Utc>,
+    mut is_cancelled: impl FnMut() -> bool,
+) -> Option<DemoDataset> {
+    if is_cancelled() {
+        return None;
+    }
     let company_count = TOTAL_COMPANIES;
     let bars_per_company =
         FIVE_MINUTE_BARS + HOURLY_SESSIONS * HOURS_PER_SESSION + DAILY_BARS + WEEKLY_BARS;
@@ -47,6 +57,9 @@ pub fn generate(as_of: DateTime<Utc>) -> DemoDataset {
     };
 
     for identity in demo_identities(as_of) {
+        if is_cancelled() {
+            return None;
+        }
         let sector = identity
             .sector
             .expect("validated demo identity must have a sector");
@@ -66,6 +79,9 @@ pub fn generate(as_of: DateTime<Utc>) -> DemoDataset {
         dataset.companies.push(company);
     }
     for (index, benchmark) in MarketBenchmark::ALL.into_iter().enumerate() {
+        if is_cancelled() {
+            return None;
+        }
         let (company, model) = make_benchmark_company(benchmark, index, as_of);
         dataset.snapshots.push(make_snapshot(&model, as_of));
         append_bars(&mut dataset.bars, &model, anchor);
@@ -78,7 +94,7 @@ pub fn generate(as_of: DateTime<Utc>) -> DemoDataset {
         dataset.companies.push(company);
     }
 
-    dataset
+    Some(dataset)
 }
 
 fn demo_identities(as_of: DateTime<Utc>) -> Vec<Company> {
@@ -495,7 +511,10 @@ const fn sector_market_cap(sector: Sector) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::{
+        cell::Cell,
+        collections::{HashMap, HashSet},
+    };
 
     use chrono::TimeZone;
 
@@ -506,6 +525,18 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 7, 13, 22, 15, 0)
             .single()
             .expect("valid fixture timestamp")
+    }
+
+    #[test]
+    fn generation_stops_between_companies_when_cancelled() {
+        let checks = Cell::new(0_usize);
+        let dataset = generate_until_cancelled(fixed_now(), || {
+            checks.set(checks.get() + 1);
+            checks.get() >= 4
+        });
+
+        assert!(dataset.is_none());
+        assert_eq!(checks.get(), 4);
     }
 
     #[test]

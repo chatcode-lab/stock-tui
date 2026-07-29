@@ -30,6 +30,7 @@ pub struct SyncHandle {
     pub commands: mpsc::UnboundedSender<SyncCommand>,
     pub events: mpsc::UnboundedReceiver<SyncEvent>,
     pub worker: JoinHandle<()>,
+    pub cancellation: CancellationToken,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,13 +83,20 @@ const HISTORY_PLANS: [HistoryPlan; 2] = [
 pub fn spawn(providers: ProviderSet, storage: Storage, options: SyncOptions) -> SyncHandle {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let cancellation = CancellationToken::new();
     let worker = tokio::spawn(run_worker(
-        providers, storage, command_rx, event_tx, options,
+        providers,
+        storage,
+        command_rx,
+        event_tx,
+        options,
+        cancellation.clone(),
     ));
     SyncHandle {
         commands: command_tx,
         events: event_rx,
         worker,
+        cancellation,
     }
 }
 
@@ -98,12 +106,12 @@ async fn run_worker(
     mut commands: mpsc::UnboundedReceiver<SyncCommand>,
     events: mpsc::UnboundedSender<SyncEvent>,
     options: SyncOptions,
+    cancellation: CancellationToken,
 ) {
     tracing::debug!(
         provider = providers.id(),
         "starting market data synchronization"
     );
-    let cancellation = CancellationToken::new();
     if let Err(error) = refresh_assets(&storage, &providers, &events).await {
         tracing::warn!(error = %error, "initial active-asset refresh failed");
         let _ = events.send(SyncEvent::Error(error));
@@ -117,7 +125,7 @@ async fn run_worker(
         }
     };
     let mut history_task = snapshots_ready.then(|| {
-        tokio::spawn(backfill_history(
+        Box::pin(backfill_history(
             storage.clone(),
             providers.clone(),
             events.clone(),
@@ -126,14 +134,31 @@ async fn run_worker(
         ))
     });
 
-    while let Some(command) = commands.recv().await {
+    loop {
+        let command = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => break,
+            () = async {
+                if let Some(task) = history_task.as_mut() {
+                    task.await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                history_task = None;
+                continue;
+            }
+            command = commands.recv() => {
+                let Some(command) = command else {
+                    break;
+                };
+                command
+            }
+        };
         match command {
             SyncCommand::Refresh => match refresh_snapshots(&storage, &providers, &events).await {
-                Ok(()) if history_task.as_ref().is_none_or(JoinHandle::is_finished) => {
-                    if let Some(task) = history_task.take() {
-                        let _ = task.await;
-                    }
-                    history_task = Some(tokio::spawn(backfill_history(
+                Ok(()) if history_task.is_none() => {
+                    history_task = Some(Box::pin(backfill_history(
                         storage.clone(),
                         providers.clone(),
                         events.clone(),
@@ -168,9 +193,7 @@ async fn run_worker(
         }
     }
     cancellation.cancel();
-    if let Some(task) = history_task {
-        let _ = task.await;
-    }
+    drop(history_task);
 }
 
 async fn refresh_snapshots(
@@ -431,14 +454,22 @@ async fn backfill_history(
                 plan.message,
                 None,
             );
-            match providers
-                .fetch_bars(&symbols, plan.timeframe, start, now)
-                .await
-            {
+            let bars = tokio::select! {
+                biased;
+                () = cancellation.cancelled() => return,
+                bars = providers.fetch_bars(&symbols, plan.timeframe, start, now) => bars,
+            };
+            match bars {
                 Ok(bars) => {
-                    let result = storage
-                        .upsert_bars(&bars)
-                        .and_then(|_| storage.set_sync_checkpoints(&checkpoint_scopes, Utc::now()));
+                    let result = match storage
+                        .upsert_bars_until_cancelled(&bars, || cancellation.is_cancelled())
+                    {
+                        Ok(Some(_)) if !cancellation.is_cancelled() => {
+                            storage.set_sync_checkpoints(&checkpoint_scopes, Utc::now())
+                        }
+                        Ok(_) => return,
+                        Err(error) => Err(error),
+                    };
                     if let Err(error) = result {
                         failed_batches += 1;
                         let _ = events.send(SyncEvent::Error(error.to_string()));

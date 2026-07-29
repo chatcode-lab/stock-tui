@@ -404,7 +404,9 @@ visible at the lower right.
 On ANSI terminals, `stock-tui` explicitly requests all-motion tracking with
 SGR mouse encoding (`1003` + `1006`). Its click, hover, drag, and wheel reports
 therefore travel as text input and do not depend on legacy X10/onBinary mouse
-transport.
+transport. On exit, reporting is disabled before raw mode is restored; pending
+events are drained and unread input is flushed so delayed coordinates do not
+leak into the next shell prompt.
 
 ## Responsive Layout
 

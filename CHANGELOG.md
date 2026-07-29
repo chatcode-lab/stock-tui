@@ -32,6 +32,11 @@ pre-1.0 releases.
 
 ### Fixed
 
+- Stop terminal input reporting while still in raw mode, retire the input
+  reader and cache workers, drain pending events through a bounded quiet
+  period, and flush unread terminal events before restoring the shell. This
+  prevents delayed SGR mouse coordinates from appearing at or being executed
+  by the next prompt.
 - Retain flat zero-volume/no-trade provider bars in the raw cache while
   excluding them from price endpoints, freshness, history coverage, timeframe
   selection, and detail charts.

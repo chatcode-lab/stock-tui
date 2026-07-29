@@ -458,8 +458,17 @@ impl Storage {
     }
 
     pub fn upsert_bars(&self, bars: &[Bar]) -> Result<usize> {
+        self.upsert_bars_until_cancelled(bars, || false)
+            .map(|count| count.expect("unconditional bar updates cannot cancel"))
+    }
+
+    pub(crate) fn upsert_bars_until_cancelled(
+        &self,
+        bars: &[Bar],
+        mut is_cancelled: impl FnMut() -> bool,
+    ) -> Result<Option<usize>> {
         if bars.is_empty() {
-            return Ok(0);
+            return Ok(Some(0));
         }
         let mut connection = self.connection()?;
         let transaction = connection
@@ -482,6 +491,9 @@ impl Storage {
                     source = excluded.source",
             )?;
             for bar in bars {
+                if is_cancelled() {
+                    return Ok(None);
+                }
                 statement.execute(params![
                     normalize_symbol(&bar.symbol)?,
                     bar.timeframe,
@@ -500,7 +512,7 @@ impl Storage {
         transaction
             .commit()
             .context("could not commit bar update")?;
-        Ok(bars.len())
+        Ok(Some(bars.len()))
     }
 
     pub fn bars(
@@ -1900,7 +1912,7 @@ fn escape_like(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
+    use std::{cell::Cell, thread};
 
     use chrono::{TimeZone, Utc};
     use pretty_assertions::assert_eq;
@@ -2245,6 +2257,37 @@ mod tests {
         storage.upsert_snapshots(&[snapshot("AAPL", 105.0, 100.0, 20.0, now)])?;
         storage.upsert_snapshots(&[snapshot("AAPL", 1.0, 100.0, 1.0, instant(12))])?;
         assert_eq!(storage.snapshot("AAPL")?.unwrap().price, Some(105.0));
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_bar_batch_rolls_back_partial_inserts() -> Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let now = instant(13);
+        storage.upsert_companies(&[company(
+            "AAPL",
+            "Apple",
+            Sector::Technology,
+            3_000.0,
+            Some(1),
+            now,
+        )])?;
+        let checks = Cell::new(0_usize);
+
+        let inserted = storage.upsert_bars_until_cancelled(
+            &[
+                bar("AAPL", now, 100.0, 10.0),
+                bar("AAPL", instant(14), 101.0, 11.0),
+            ],
+            || {
+                checks.set(checks.get() + 1);
+                checks.get() > 1
+            },
+        )?;
+
+        assert_eq!(inserted, None);
+        assert!(storage.bars("AAPL", None, None, None, None)?.is_empty());
         Ok(())
     }
 

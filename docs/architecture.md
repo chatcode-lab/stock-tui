@@ -50,7 +50,7 @@ the relevant cached view. The renderer never performs HTTP requests.
 | `app` | Converts keyboard, paste, and mouse events into UI transitions and runtime commands. |
 | `ui` | Calculates responsive layout, registers mouse hit targets, and renders heatmaps, overlays, and charts. |
 | `runtime` | Wires terminal input, render ticks, storage, commands, refresh cadence, and worker events together. |
-| `terminal` | Formats OSC 8 links and OSC 52 clipboard writes, enters raw alternate-screen mode, requests text-based SGR mouse reports, and restores the terminal on exit or panic. |
+| `terminal` | Formats OSC 8 links and OSC 52 clipboard writes, enters raw alternate-screen mode, requests text-based SGR mouse reports, and performs ordered, input-draining restoration on exit or panic. |
 
 ## Startup Paths
 
@@ -303,7 +303,16 @@ cache retention, attribution, and redistribution restrictions. See
 
 ## Failure Model
 
-- The terminal is restored by normal drop and by a panic hook.
+- Normal terminal shutdown has two phases. Bracketed paste, focus, and SGR
+  mouse reporting are disabled and flushed while input is still raw; the
+  `EventStream` is then dropped and background tasks are canceled or joined.
+  Pending Crossterm events are discarded until input has been quiet for 40 ms,
+  capped at 200 ms. Unix builds flush unread terminal bytes and Windows builds
+  drain queued console input before leaving the alternate screen, showing the
+  cursor, and restoring raw mode last.
+- Setup failures, ordinary errors, and `Drop` attempt every cleanup operation
+  while retaining the first error. The panic hook uses the same safe ordering
+  with an immediate input flush instead of the quiet-period wait.
 - HTTP has a 20-second request timeout and at most three retries after the
   initial attempt.
 - Timeouts, `408`, `429`, and selected `5xx` responses use bounded exponential
@@ -317,8 +326,10 @@ cache retention, attribution, and redistribution restrictions. See
 - Each history batch is independently upserted, so a later run resumes from
   per-symbol checkpoints and cached watermarks rather than restarting each
   complete history window.
-- Normal shutdown gives the provider worker a bounded grace period to finish
-  current cache work before outstanding network tasks are aborted.
+- Normal shutdown cooperatively cancels demo generation and history
+  transactions, joins demo seeding, gives the provider worker a short bounded
+  grace period to finish, and then aborts and joins outstanding provider or
+  catalog work before the shell becomes interactive.
 - Offline mode never creates a provider worker.
 
 ## Security And Privacy
