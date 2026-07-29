@@ -13,7 +13,7 @@ omitted. Attached StockTouch and work-in-progress screenshots are described
 but not republished here. Every commit link is immutable; links into private
 infrastructure repositories require collaborator access.
 
-The chronology covers product-development prompts through the `v0.2.3`
+The chronology covers product-development prompts through the `v0.2.4`
 release, including the provider, onboarding, market-cap, SEC catalog, private
 development-provider, UI refinement, and signed distribution work. It excludes
 session-management instructions and this document's own editorial requests.
@@ -1493,6 +1493,62 @@ preflight, and only then pushes `v0.2.3`. The tag-triggered workflow publishes
 the five platform archives and checksum manifest after verifying the signed and
 notarized Intel and Apple Silicon macOS executables.
 
+## 53. Install 0.2.3 and Experiment with Volume Trails
+
+> Explain how to download and install the latest release on Linux and macOS.
+>
+> Also try a local chart experiment: when sparse volume observations leave
+> horizontal gaps, fill those gaps with dimmed bars that repeat the preceding
+> height. The result should read as a visual trail or shadow beside the real
+> volume bar.
+
+**Committed changes**
+
+- [`6764296` - Add dim volume chart trails][commit-6764296]
+
+**Summary**
+
+The installation guidance covered the matching release archive, checksum
+verification, extraction, and executable placement for Linux and macOS. The
+chart experiment keeps observed volume bars solid while filling unoccupied
+columns after the first positive observation with a subdued same-height trail.
+The trail is presentation-only: it does not create cached observations or
+change aggregation, statistics, or chart scaling.
+
+## 54. Extend the Volume Trail Through the Chart Tail
+
+> The experiment looks good. When there is room after the final observed
+> volume bar, continue the same dimmed trail through the end of the chart.
+
+**Committed changes**
+
+- [`6764296` - Add dim volume chart trails][commit-6764296]
+
+**Summary**
+
+The renderer now carries the last observed height through every remaining
+unoccupied chart column. Leading columns before the first positive bar remain
+empty, real observations retain their stronger color, and cursor emphasis does
+not make synthetic trail columns look like measured volume.
+
+## 55. Release 0.2.4
+
+> Build and ship a new release with the accepted volume-trail rendering.
+
+**Committed changes**
+
+- [`6764296` - Add dim volume chart trails][commit-6764296]
+- [`042d825` - Prepare stock-tui 0.2.4][commit-042d825]
+- [`v0.2.4` release][release-v0.2.4]
+
+**Summary**
+
+Version `0.2.4` packages the volume-trail refinement for all supported
+platforms. The release process validates the Rust workspace, runs the
+five-platform build-only preflight, verifies signing and notarization for both
+macOS architectures, and publishes platform archives with a shared checksum
+manifest from the annotated release tag.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1560,6 +1616,8 @@ implementation work.
 [commit-ab6b3ec]: https://github.com/chatcode-lab/stock-tui/commit/ab6b3ecd1204558a6f48c69a3a35dae99d1963ac
 [commit-5f85037]: https://github.com/chatcode-lab/stock-tui/commit/5f8503730a376f48f00c689e843334bee41988d7
 [commit-4fa796a]: https://github.com/chatcode-lab/stock-tui/commit/4fa796a1660c5d546e571baf2ebc538a9da83745
+[commit-6764296]: https://github.com/chatcode-lab/stock-tui/commit/67642963c1a03bb0cf41d549e9a63da04db2001d
+[commit-042d825]: https://github.com/chatcode-lab/stock-tui/commit/042d825bdd090298f262992335beedb196589c2c
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1575,3 +1633,4 @@ implementation work.
 [release-v0.2.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.1
 [release-v0.2.2]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.2
 [release-v0.2.3]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.3
+[release-v0.2.4]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.4
