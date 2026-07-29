@@ -13,7 +13,7 @@ omitted. Attached StockTouch and work-in-progress screenshots are described
 but not republished here. Every commit link is immutable; links into private
 infrastructure repositories require collaborator access.
 
-The chronology covers product-development prompts through the `v0.2.1`
+The chronology covers product-development prompts through the `v0.2.2`
 release, including the provider, onboarding, market-cap, SEC catalog, private
 development-provider, UI refinement, and signed distribution work. It excludes
 session-management instructions and this document's own editorial requests.
@@ -1318,6 +1318,29 @@ inject both immediate and delayed SGR motion reports, verify cleanup ordering
 and bounded exit latency, simulate the next shell reader, and cover normal,
 early-demo, and panic exits with canonical mode and echo restored.
 
+## 45. Release 0.2.2
+
+> Build and publish a new release containing the completed chart, market-cap,
+> history UX, and terminal-shutdown work.
+
+**Committed changes**
+
+- [`ab6b3ec` - Prepare stock-tui 0.2.2][commit-ab6b3ec]
+- [`v0.2.2` release][release-v0.2.2]
+
+**Summary**
+
+The `v0.2.2` patch release packages timestamp-aware sparse charts, cached
+history coverage and cursor labels, exclusive benchmark focus, split-adjusted
+market-cap estimates, and the two-phase terminal shutdown that prevents
+in-flight SGR mouse reports from reaching the next shell prompt.
+
+Release preparation also makes manual workflow dispatches unconditionally
+build-only, even when a tag is selected, while reserving publication for a
+`v*` tag push. The maintainer checklist now requires a complete build-only
+preflight from `main` and post-publication archive, checksum, notarization, and
+release-note verification.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1382,6 +1405,7 @@ implementation work.
 [commit-92340b8]: https://github.com/chatcode-lab/stock-tui/commit/92340b84be0f261cd3a8f5f71432320a679bf583
 [commit-f983874]: https://github.com/chatcode-lab/stock-tui/commit/f983874627056e8acf2f7d02d6d1581b3f9b80b6
 [commit-98f408a]: https://github.com/chatcode-lab/stock-tui/commit/98f408a72de6b8ed5fb53ac3e4da55fbf1aad3be
+[commit-ab6b3ec]: https://github.com/chatcode-lab/stock-tui/commit/ab6b3ecd1204558a6f48c69a3a35dae99d1963ac
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1395,3 +1419,4 @@ implementation work.
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
 [release-v0.2.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.0
 [release-v0.2.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.1
+[release-v0.2.2]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.2
