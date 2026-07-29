@@ -13,7 +13,7 @@ omitted. Attached StockTouch and work-in-progress screenshots are described
 but not republished here. Every commit link is immutable; links into private
 infrastructure repositories require collaborator access.
 
-The chronology covers product-development prompts through the `v0.2.0`
+The chronology covers product-development prompts through the `v0.2.1`
 release, including the provider, onboarding, market-cap, SEC catalog, private
 development-provider, UI refinement, and signed distribution work. It excludes
 session-management instructions and this document's own editorial requests.
@@ -1218,6 +1218,35 @@ selection, inclusive cutoff handling, snapshot fallback, and rejection of a
 weekly bar as a one-day substitute. The README, changelog, and data/cache
 architecture documents now describe the same semantics.
 
+## 42. Release 0.2.1 and Assess Package Managers
+
+> Create a new release. Also assess how easily `stock-tui` could be distributed
+> through popular package managers such as Homebrew and APT.
+
+**Committed changes**
+
+- [`92340b8` - Prepare stock-tui 0.2.1][commit-92340b8]
+- [`v0.2.1` release][release-v0.2.1]
+
+**Summary**
+
+The `v0.2.1` patch release rolls the range-aware cumulative Volume behavior
+and post-`v0.2.0` documentation refresh into five locked platform archives.
+The existing release pipeline signs and notarizes both macOS executables,
+publishes static Linux builds and the Windows archive, and attaches one
+checksum manifest after validating the exact artifact set.
+
+Package-manager review identified crates.io and a project-controlled Homebrew
+tap as the lowest-effort next channels. The crate already passes Cargo's
+publish dry run and fits comfortably under its package-size limit; a tap can
+consume immutable release sources and provide one-command installs without an
+external acceptance gate. Standalone `.deb` assets are similarly
+straightforward, while a signed APT repository or Ubuntu PPA adds repository,
+key, source-package, and ongoing update responsibilities. Homebrew Core and
+Debian's official archive are better revisited after broader adoption because
+their acceptance, policy, and sponsorship processes are intentionally more
+demanding.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1279,6 +1308,7 @@ implementation work.
 [commit-976c207]: https://github.com/chatcode-lab/stock-tui/commit/976c207d02ead76ccbfebc2e275ffac3dfdf4999
 [commit-b83cda0]: https://github.com/chatcode-lab/stock-tui/commit/b83cda0724af86ed7f504d2efdbba3958427a9cc
 [commit-d8c596a]: https://github.com/chatcode-lab/stock-tui/commit/d8c596a3fa3ce6d6f0cb25c6ea506d3abb9cab56
+[commit-92340b8]: https://github.com/chatcode-lab/stock-tui/commit/92340b84be0f261cd3a8f5f71432320a679bf583
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1290,3 +1320,4 @@ implementation work.
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
 [release-v0.2.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.0
+[release-v0.2.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.1
