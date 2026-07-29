@@ -7,6 +7,8 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-29
+
 ### Changed
 
 - Fill unoccupied ticker-detail volume columns after the first positive bar
@@ -301,7 +303,8 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.0...v0.2.1
