@@ -1190,6 +1190,34 @@ provider-neutral lifecycle terminology where appropriate and name the actual
 `stock-api` news settings. The Unreleased changelog records the post-v0.2.0
 documentation refresh.
 
+## 41. Make Volume Mode Range-Aware
+
+> The special Volume colorization currently appears to use the latest daily
+> volume for every date range, so switching ranges does not meaningfully change
+> it. Limit that behavior to `1D`, or preferably calculate the proper volume for
+> every selected range so Volume mode responds to range changes as well.
+
+**Committed changes**
+
+- [`d8c596a` - Make heatmap volume range-aware][commit-d8c596a]
+
+**Summary**
+
+Volume ordering, sector tile values, and sector-relative brightness now use
+cumulative share volume from the selected period. `1D` keeps the selected
+snapshot's latest-session cumulative volume, with an inclusive cached-bar
+fallback; longer ranges sum one canonical cached OHLCV timeframe without
+mixing granularities or adding the daily snapshot twice. Daily bars are
+preferred through `2Y`, weekly bars for `5Y` through `ALL`, and missing
+range history remains neutral and sorts after known totals.
+
+The aggregate uses the existing indexed `(symbol, timeframe, timestamp)` cache
+path and bypasses SQL entirely for the normal `1D` snapshot case. Regression
+coverage verifies range-dependent values and ordering, daily-versus-weekly
+selection, inclusive cutoff handling, snapshot fallback, and rejection of a
+weekly bar as a one-day substitute. The README, changelog, and data/cache
+architecture documents now describe the same semantics.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1250,6 +1278,7 @@ implementation work.
 [commit-d7e2290]: https://github.com/chatcode-lab/stock-tui/commit/d7e22905ccd0a2236c0779b73c0ecd3330764c81
 [commit-976c207]: https://github.com/chatcode-lab/stock-tui/commit/976c207d02ead76ccbfebc2e275ffac3dfdf4999
 [commit-b83cda0]: https://github.com/chatcode-lab/stock-tui/commit/b83cda0724af86ed7f504d2efdbba3958427a9cc
+[commit-d8c596a]: https://github.com/chatcode-lab/stock-tui/commit/d8c596a3fa3ce6d6f0cb25c6ea506d3abb9cab56
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
