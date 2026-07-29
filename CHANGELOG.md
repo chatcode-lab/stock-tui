@@ -7,6 +7,8 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-29
+
 ### Added
 
 - Added cached-history coverage to ticker headers and Statistics, with
@@ -32,6 +34,8 @@ pre-1.0 releases.
 
 ### Fixed
 
+- Keep manually dispatched release workflows build-only even when they are
+  launched from a tag; only a `v*` tag push may publish GitHub release assets.
 - Stop terminal input reporting while still in raw mode, retire the input
   reader and cache workers, drain pending events through a bounded quiet
   period, and flush unread terminal events before restoring the shell. This
@@ -238,7 +242,8 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.1.0...v0.1.1

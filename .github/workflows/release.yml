@@ -230,7 +230,7 @@ jobs:
 
   publish:
     needs: [build, build-macos]
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write

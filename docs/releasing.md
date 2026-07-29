@@ -108,11 +108,19 @@ gh secret set APPLE_NOTARY_ISSUER_ID \
 1. Update `Cargo.toml` and `CHANGELOG.md`, then run all checks in
    [CONTRIBUTING.md](../CONTRIBUTING.md).
 2. Push the reviewed release commit.
-3. Create and push the exact `v<VERSION>` tag.
-4. Watch the `Release` workflow. A missing or invalid Apple credential fails
-   both macOS release jobs before publication.
-5. Confirm that both macOS jobs report accepted notarization and successful
+3. Manually dispatch `Release` from `main` as a build-only preflight. Verify
+   all five platform archives, including both signed and notarized macOS
+   binaries. A manual run must skip the `publish` job and create no tag or
+   GitHub release.
+4. Create and push the exact `v<VERSION>` tag.
+5. Watch the tagged `Release` workflow. A missing or invalid Apple credential
+   fails both macOS release jobs before publication.
+6. Confirm that both macOS jobs report accepted notarization and successful
    online ticket verification before treating the GitHub release as complete.
+7. Download the published assets, verify all five archives against
+   `SHA256SUMS`, confirm each archive contains the expected executable and
+   documentation, and review the release title and notes against
+   `CHANGELOG.md`.
 
 The workflow imports the signing identity into an ephemeral keychain,
 temporarily registers it in the runner's user search list, signs the executable
