@@ -1247,6 +1247,50 @@ Debian's official archive are better revisited after broader adoption because
 their acceptance, policy, and sponsorship processes are intentionally more
 demanding.
 
+## 43. Diagnose INHD and Improve Sparse-History Detail UX
+
+> Check whether the INHD chart in the supplied macOS screenshot is rendered
+> correctly; its shape looks suspicious.
+>
+> The app was first launched with Alpaca credentials and then with `stock-api`,
+> but mixed providers probably are not the cause. Address the issue if it is
+> real, and also:
+>
+> 1. Keep every range selectable, but mute fixed ranges such as `5Y` and `10Y`
+>    when the ticker has less observed history. Show the complete available
+>    span and its first date.
+> 2. When an Overview benchmark has focus, remove the simultaneous sector
+>    highlight so there is only one visual selection.
+> 3. When space permits, show an exact price beside the chart-cursor
+>    intersection and a suitable date or month beside the X-axis intersection.
+>    Place both labels on the roomier side of the cursor.
+
+**Committed changes**
+
+- [`f983874` - Fix halted ticker charts and history UX][commit-f983874]
+
+**Summary**
+
+The investigation reproduced the INHD shape from real cached data. Its June
+price jump is a genuine observation, but post-halt flat, zero-volume,
+zero-trade provider rows had incorrectly extended it into a fresh plateau.
+Those rows remain available in raw SQLite while price endpoints, freshness,
+timeframe choice, cached-history coverage, and detail charts now use traded
+observations only. Price traces, fills, volume, axes, and cursor positions map
+to actual timestamps, leaving long gaps and a halted tail blank; keyboard
+navigation skips blank columns. The lower price bound is clamped to zero, and
+bounded cursor labels show the selected price and range-aware time.
+
+Ticker detail now reports its cached history span and boundary dates, while
+longer fixed ranges are muted without losing mouse targets or shortcuts.
+Overview benchmark and sector focus are visually exclusive. The same work also
+corrected INHD's inflated market cap: provider snapshot caps take precedence,
+and Alpaca-backed local estimates adjust dated SEC share counts through cached
+forward and reverse split history before multiplying by price. Failed or
+unsupported split coverage fails closed instead of combining stale shares with
+a post-split price. The behavior is documented and covered by storage,
+provider, synchronization, chart, interaction, and responsive rendering tests.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1309,6 +1353,7 @@ implementation work.
 [commit-b83cda0]: https://github.com/chatcode-lab/stock-tui/commit/b83cda0724af86ed7f504d2efdbba3958427a9cc
 [commit-d8c596a]: https://github.com/chatcode-lab/stock-tui/commit/d8c596a3fa3ce6d6f0cb25c6ea506d3abb9cab56
 [commit-92340b8]: https://github.com/chatcode-lab/stock-tui/commit/92340b84be0f261cd3a8f5f71432320a679bf583
+[commit-f983874]: https://github.com/chatcode-lab/stock-tui/commit/f983874627056e8acf2f7d02d6d1581b3f9b80b6
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
