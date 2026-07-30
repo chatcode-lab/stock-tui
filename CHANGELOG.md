@@ -7,6 +7,23 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Enrich company profiles with bounded Wikidata industry, product, and service
+  facts, and re-evaluate durable cached profiles when the matching algorithm
+  changes.
+- Apply downloaded catalog metadata and all sector memberships atomically, then
+  refresh an open ticker detail immediately before reconciling provider assets.
+
+### Fixed
+
+- Reject incorporation, jurisdiction, promotional, and other non-business
+  boilerplate when building company introductions, and require conservative
+  identity evidence before accepting a normalized-name Wikidata result.
+- Prevent in-flight universe and snapshot requests from overwriting newer
+  catalog descriptions, industries, membership state, or unrelated cached
+  market caps.
+
 ## [0.2.6] - 2026-07-30
 
 ### Added

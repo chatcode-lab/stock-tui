@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    io,
-    time::Duration,
-};
+use std::{collections::HashSet, io, time::Duration};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -16,13 +12,18 @@ use crate::{
     benchmarks,
     config::{ProviderKind, Settings},
     demo,
-    domain::{Company, Sector, SyncPhase, SyncProgress},
+    domain::{Company, SyncPhase, SyncProgress},
     providers::{AlpacaProvider, ProviderSet, StockApiProvider},
     storage::Storage,
     sync::{self, SyncCommand, SyncEvent},
     terminal::{TerminalSession, copy_to_terminal_clipboard},
     ui::{self, state::Route, state::UiState},
 };
+
+enum CatalogEvent {
+    Applied(String),
+    Failed(String),
+}
 
 struct WorkerCancellation {
     token: CancellationToken,
@@ -134,6 +135,7 @@ pub async fn run(settings: Settings) -> Result<()> {
         let cache_dir = settings.cache_dir.clone();
         let remote_url = settings.catalog_url.clone();
         let refresh_after = settings.catalog_refresh_interval;
+        let catalog_storage = storage.clone();
         tokio::spawn(async move {
             loop {
                 let result = crate::universe::load_companies(
@@ -145,9 +147,15 @@ pub async fn run(settings: Settings) -> Result<()> {
                 .await;
                 if let Ok(catalog) = result
                     && catalog.source == crate::universe::CatalogSource::Remote
-                    && catalog_tx.send(catalog).is_err()
                 {
-                    break;
+                    let event =
+                        match install_catalog_off_thread(catalog_storage.clone(), catalog).await {
+                            Ok(version) => CatalogEvent::Applied(version),
+                            Err(error) => CatalogEvent::Failed(error.to_string()),
+                        };
+                    if catalog_tx.send(event).is_err() {
+                        break;
+                    }
                 }
                 tokio::time::sleep(refresh_after).await;
             }
@@ -243,17 +251,17 @@ pub async fn run(settings: Settings) -> Result<()> {
                     apply_sync_event(event, &storage, &mut state)?;
                     dirty = true;
                 }
-                Some(catalog) = catalog_rx.recv() => {
-                    let version = catalog
-                        .version
-                        .as_deref()
-                        .unwrap_or("unversioned")
-                        .to_owned();
-                    bootstrap_companies(&storage, catalog.companies, true)?;
-                    reload_tiles(&storage, &mut state)?;
-                    state.status = format!("SEC catalog updated · {version}");
-                    if let Some(commands) = sync_commands.as_ref() {
-                        let _ = commands.send(SyncCommand::ReconcileUniverse);
+                Some(event) = catalog_rx.recv() => {
+                    match event {
+                        CatalogEvent::Applied(version) => finish_catalog_update(
+                            &storage,
+                            &mut state,
+                            &version,
+                            sync_commands.as_ref(),
+                        )?,
+                        CatalogEvent::Failed(error) => {
+                            state.status = format!("SEC catalog update failed: {error}");
+                        }
                     }
                     dirty = true;
                 }
@@ -336,57 +344,45 @@ fn bootstrap_companies(
     preserve_cached_state: bool,
 ) -> Result<()> {
     let now = Utc::now();
-    let existing: HashMap<String, Company> = storage
-        .companies(None, false)?
-        .into_iter()
-        .map(|company| (company.symbol.clone(), company))
-        .collect();
-    if preserve_cached_state {
-        for candidate in &mut candidates {
-            if let Some(cached) = existing.get(&candidate.symbol) {
-                if candidate.shares_outstanding.is_some() && same_share_estimate(candidate, cached)
-                {
-                    candidate.market_cap = cached.market_cap;
-                }
-                if candidate.sector == cached.sector {
-                    candidate.in_universe = cached.in_universe;
-                    candidate.retained = cached.retained;
+    storage.update_company_universe(now.date_naive(), move |existing, favorite_symbols| {
+        if preserve_cached_state {
+            for candidate in &mut candidates {
+                if let Some(cached) = existing.get(&candidate.symbol) {
+                    if candidate.shares_outstanding.is_some()
+                        && same_share_estimate(candidate, cached)
+                    {
+                        candidate.market_cap = cached.market_cap;
+                    }
+                    if candidate.sector == cached.sector {
+                        candidate.in_universe = cached.in_universe;
+                        candidate.retained = cached.retained;
+                    }
                 }
             }
         }
-    }
-    let candidate_symbols = candidates
-        .iter()
-        .map(|company| company.symbol.clone())
-        .collect::<HashSet<_>>();
-    let favorite_symbols = storage
-        .favorite_symbols()?
-        .into_iter()
-        .collect::<HashSet<_>>();
-    candidates.extend(existing.values().filter_map(|company| {
-        let replacement = crate::universe::catalog_symbol_replacement(&company.symbol)?;
-        if candidate_symbols.contains(&company.symbol) || !candidate_symbols.contains(replacement) {
-            return None;
-        }
-        let mut retired = company.clone();
-        retired.sector = None;
-        retired.raw_sector = None;
-        retired.rank = None;
-        retired.in_universe = false;
-        retired.retained = favorite_symbols.contains(&retired.symbol);
-        retired.updated_at = now;
-        Some(retired)
-    }));
-    candidates.extend(benchmarks::companies(now));
-    storage.upsert_companies(&candidates)?;
-    for sector in Sector::ALL {
-        let sector_candidates = candidates
+        let candidate_symbols = candidates
             .iter()
-            .filter(|company| company.sector == Some(sector) && company.retained)
-            .cloned()
-            .collect::<Vec<_>>();
-        storage.replace_memberships(now.date_naive(), sector, &sector_candidates)?;
-    }
+            .map(|company| company.symbol.clone())
+            .collect::<HashSet<_>>();
+        candidates.extend(existing.values().filter_map(|company| {
+            let replacement = crate::universe::catalog_symbol_replacement(&company.symbol)?;
+            if candidate_symbols.contains(&company.symbol)
+                || !candidate_symbols.contains(replacement)
+            {
+                return None;
+            }
+            let mut retired = company.clone();
+            retired.sector = None;
+            retired.raw_sector = None;
+            retired.rank = None;
+            retired.in_universe = false;
+            retired.retained = favorite_symbols.contains(&retired.symbol);
+            retired.updated_at = now;
+            Some(retired)
+        }));
+        candidates.extend(benchmarks::companies(now));
+        candidates
+    })?;
     Ok(())
 }
 
@@ -472,6 +468,42 @@ fn execute_command(
 
 fn should_reset_auto_refresh(command: &AppCommand, remote_sync_enabled: bool) -> bool {
     remote_sync_enabled && matches!(command, AppCommand::Refresh)
+}
+
+async fn install_catalog_off_thread(
+    storage: Storage,
+    catalog: crate::universe::LoadedCatalog,
+) -> Result<String> {
+    tokio::task::spawn_blocking(move || install_catalog(&storage, catalog))
+        .await
+        .context("SEC catalog installer task failed")?
+}
+
+fn install_catalog(storage: &Storage, catalog: crate::universe::LoadedCatalog) -> Result<String> {
+    let version = catalog
+        .version
+        .as_deref()
+        .unwrap_or("unversioned")
+        .to_owned();
+    bootstrap_companies(storage, catalog.companies, true)?;
+    Ok(version)
+}
+
+fn finish_catalog_update(
+    storage: &Storage,
+    state: &mut UiState,
+    version: &str,
+    sync_commands: Option<&mpsc::UnboundedSender<SyncCommand>>,
+) -> Result<()> {
+    reload_tiles(storage, state)?;
+    if let Route::Ticker(symbol) = state.route.clone() {
+        load_detail(storage, state, &symbol)?;
+    }
+    state.status = format!("SEC catalog updated · {version}");
+    if let Some(commands) = sync_commands {
+        let _ = commands.send(SyncCommand::ReconcileUniverse);
+    }
+    Ok(())
 }
 
 fn recover_news_url(
@@ -675,13 +707,21 @@ fn seed_demo(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, collections::HashSet, io};
+    use std::{
+        cell::RefCell,
+        collections::HashSet,
+        io,
+        sync::mpsc as std_mpsc,
+        thread,
+        time::{Duration as StdDuration, Instant as StdInstant},
+    };
 
     use chrono::Utc;
     use tempfile::tempdir;
 
     use super::{
         DemoCacheState, bootstrap_companies, bootstrap_universe, classify_demo_cache,
+        finish_catalog_update, install_catalog, install_catalog_off_thread, load_detail,
         recover_news_url, reload_tiles, should_reset_auto_refresh,
     };
     use crate::{
@@ -691,6 +731,7 @@ mod tests {
         domain::{Sector, Snapshot, SortMode},
         storage::Storage,
         ui::state::{Route, UiState},
+        universe::{CatalogSource, LoadedCatalog},
     };
 
     #[test]
@@ -930,6 +971,155 @@ mod tests {
         assert_eq!(stored.shares_outstanding, None);
         assert_eq!(stored.shares_source, None);
         assert_eq!(stored.shares_method, None);
+        Ok(())
+    }
+
+    #[test]
+    fn bootstrap_replaces_legacy_description_and_preserves_cached_state() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let mut catalog_company = crate::universe::embedded_companies(Utc::now())?
+            .into_iter()
+            .next()
+            .expect("catalog contains a company");
+        catalog_company.description = "Current issuer profile.".to_owned();
+        catalog_company.industry = "Current industry".to_owned();
+        let mut legacy = catalog_company.clone();
+        legacy.description =
+            "Legacy issuer is listed on TEST and classified by the SEC.".to_owned();
+        legacy.industry = "Legacy industry".to_owned();
+        legacy.market_cap = Some(42_000_000.0);
+        legacy.in_universe = true;
+        legacy.retained = true;
+        storage.upsert_companies(&[legacy])?;
+
+        bootstrap_companies(&storage, vec![catalog_company.clone()], true)?;
+
+        let stored = storage
+            .company(&catalog_company.symbol)?
+            .expect("catalog company remains stored");
+        assert_eq!(stored.description, "Current issuer profile.");
+        assert_eq!(stored.industry, "Current industry");
+        assert_eq!(stored.market_cap, Some(42_000_000.0));
+        assert!(stored.in_universe);
+        assert!(stored.retained);
+        Ok(())
+    }
+
+    #[test]
+    fn catalog_update_refreshes_an_open_ticker_before_provider_reconciliation() -> anyhow::Result<()>
+    {
+        let directory = tempdir()?;
+        let storage = Storage::open(directory.path().join("market.sqlite3"))?;
+        let mut catalog_company = crate::universe::embedded_companies(Utc::now())?
+            .into_iter()
+            .next()
+            .expect("catalog contains a company");
+        let symbol = catalog_company.symbol.clone();
+        let legacy_description =
+            "Legacy issuer is listed on TEST and classified by the SEC.".to_owned();
+        catalog_company.description = "Current issuer profile.".to_owned();
+        let mut legacy = catalog_company.clone();
+        legacy.description = legacy_description.clone();
+        legacy.in_universe = true;
+        legacy.retained = true;
+        storage.upsert_companies(&[legacy])?;
+        let mut state = UiState {
+            route: Route::Ticker(symbol.clone()),
+            ..UiState::default()
+        };
+        load_detail(&storage, &mut state, &symbol)?;
+        assert_eq!(
+            state
+                .detail
+                .as_ref()
+                .expect("legacy detail is loaded")
+                .company
+                .description,
+            legacy_description
+        );
+        let (commands, mut received) = tokio::sync::mpsc::unbounded_channel();
+
+        let version = install_catalog(
+            &storage,
+            LoadedCatalog {
+                companies: vec![catalog_company],
+                source: CatalogSource::Remote,
+                version: Some("profile-test".to_owned()),
+            },
+        )?;
+        finish_catalog_update(&storage, &mut state, &version, Some(&commands))?;
+
+        assert_eq!(
+            state
+                .detail
+                .as_ref()
+                .expect("open detail is refreshed")
+                .company
+                .description,
+            "Current issuer profile."
+        );
+        assert_eq!(state.status, "SEC catalog updated · profile-test");
+        assert!(matches!(
+            received.try_recv(),
+            Ok(crate::sync::SyncCommand::ReconcileUniverse)
+        ));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn catalog_install_does_not_block_the_ui_runtime_while_sqlite_is_busy()
+    -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let database_path = directory.path().join("market.sqlite3");
+        let storage = Storage::open(&database_path)?;
+        let (ready_tx, ready_rx) = std_mpsc::channel();
+        let (release_tx, release_rx) = std_mpsc::channel();
+        let lock_worker = thread::spawn(move || {
+            let connection =
+                rusqlite::Connection::open(database_path).expect("open lock connection");
+            connection
+                .execute_batch("BEGIN IMMEDIATE")
+                .expect("hold SQLite writer lock");
+            ready_tx.send(()).expect("signal held writer lock");
+            let _ = release_rx.recv_timeout(StdDuration::from_secs(2));
+            connection
+                .execute_batch("ROLLBACK")
+                .expect("release SQLite writer lock");
+        });
+        ready_rx.recv_timeout(StdDuration::from_secs(2))?;
+
+        let mut catalog_company = crate::universe::embedded_companies(Utc::now())?
+            .into_iter()
+            .next()
+            .expect("catalog contains a company");
+        catalog_company.description = "Background catalog profile.".to_owned();
+        let install = tokio::spawn(install_catalog_off_thread(
+            storage.clone(),
+            LoadedCatalog {
+                companies: vec![catalog_company],
+                source: CatalogSource::Remote,
+                version: Some("background-test".to_owned()),
+            },
+        ));
+        tokio::task::yield_now().await;
+
+        let started = StdInstant::now();
+        tokio::time::sleep(StdDuration::from_millis(20)).await;
+        let responsive_elapsed = started.elapsed();
+        assert!(
+            !install.is_finished(),
+            "catalog install should still be waiting for the held writer lock"
+        );
+        let _ = release_tx.send(());
+        let version = install.await??;
+        lock_worker.join().expect("lock worker exits");
+
+        assert!(
+            responsive_elapsed < StdDuration::from_millis(500),
+            "UI runtime was blocked for {responsive_elapsed:?}"
+        );
+        assert_eq!(version, "background-test");
         Ok(())
     }
 }

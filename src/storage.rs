@@ -439,6 +439,70 @@ impl Storage {
         Ok(companies.len())
     }
 
+    pub(crate) fn update_current_company(
+        &self,
+        symbol: &str,
+        update: impl FnOnce(Company) -> Company,
+    ) -> Result<bool> {
+        let symbol = normalize_symbol(symbol)?;
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("could not begin current company update")?;
+        let current = transaction
+            .query_row(
+                &format!("SELECT {COMPANY_COLUMNS} FROM companies WHERE symbol = ?1"),
+                [&symbol],
+                company_from_row,
+            )
+            .optional()?;
+        let updated = current.map(update);
+        if let Some(company) = &updated {
+            upsert_company(&transaction, company, None)?;
+        }
+        transaction
+            .commit()
+            .context("could not commit current company update")?;
+        Ok(updated.is_some())
+    }
+
+    pub(crate) fn update_company_universe(
+        &self,
+        as_of: NaiveDate,
+        update: impl FnOnce(&HashMap<String, Company>, &HashSet<String>) -> Vec<Company>,
+    ) -> Result<usize> {
+        let mut connection = self.connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("could not begin company universe update")?;
+        let existing = company_map(&transaction)?;
+        let favorites = favorite_symbol_set(&transaction)?;
+        let companies = update(&existing, &favorites);
+
+        for company in &companies {
+            upsert_company(&transaction, company, None)?;
+        }
+        for sector in Sector::ALL {
+            let candidates = companies
+                .iter()
+                .filter(|company| company.sector == Some(sector) && company.retained)
+                .collect::<Vec<_>>();
+            transaction.execute(
+                "UPDATE companies SET in_universe = 0 WHERE sector = ?1",
+                [sector_key(sector)],
+            )?;
+            let selected = selected_members_from_refs(&candidates, MAX_MEMBERS_PER_SECTOR);
+            for company in &selected {
+                upsert_company(&transaction, company, Some(true))?;
+            }
+            replace_sector_memberships(&transaction, as_of, sector, &selected)?;
+        }
+        transaction
+            .commit()
+            .context("could not commit company universe update")?;
+        Ok(companies.len())
+    }
+
     pub fn company(&self, symbol: &str) -> Result<Option<Company>> {
         let connection = self.connection()?;
         connection
@@ -1612,6 +1676,24 @@ fn upsert_company(
         ],
     )?;
     Ok(())
+}
+
+fn company_map(transaction: &Transaction<'_>) -> Result<HashMap<String, Company>> {
+    let mut statement = transaction.prepare(&format!("SELECT {COMPANY_COLUMNS} FROM companies"))?;
+    let rows = statement.query_map([], company_from_row)?;
+    rows.map(|row| {
+        let company = row?;
+        Ok((company.symbol.clone(), company))
+    })
+    .collect::<rusqlite::Result<_>>()
+    .context("could not load companies for reconciliation")
+}
+
+fn favorite_symbol_set(transaction: &Transaction<'_>) -> Result<HashSet<String>> {
+    let mut statement = transaction.prepare("SELECT symbol FROM favorites")?;
+    let rows = statement.query_map([], |row| row.get(0))?;
+    rows.collect::<rusqlite::Result<_>>()
+        .context("could not load favorites for reconciliation")
 }
 
 fn replace_sector_memberships(

@@ -5,7 +5,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    domain::{Company, DateRange, Sector, StockSplit, SyncPhase, SyncProgress},
+    domain::{Company, DateRange, StockSplit, SyncPhase, SyncProgress},
     providers::ProviderSet,
     storage::Storage,
 };
@@ -232,20 +232,7 @@ async fn refresh_snapshots(
     storage
         .upsert_snapshots(&snapshots)
         .map_err(|error| error.to_string())?;
-    let updated_companies = update_market_caps(companies, &snapshots, &split_coverage, now);
-    storage
-        .upsert_companies(&updated_companies)
-        .map_err(|error| error.to_string())?;
-    for sector in Sector::ALL {
-        let candidates = updated_companies
-            .iter()
-            .filter(|company| company.sector == Some(sector))
-            .cloned()
-            .collect::<Vec<_>>();
-        storage
-            .replace_memberships(now.date_naive(), sector, &candidates)
-            .map_err(|error| error.to_string())?;
-    }
+    store_snapshot_market_caps(storage, &snapshots, &split_coverage, now)?;
     storage
         .set_sync_checkpoint("snapshots", now)
         .map_err(|error| error.to_string())?;
@@ -261,11 +248,78 @@ async fn refresh_snapshots(
     Ok(())
 }
 
+fn store_snapshot_market_caps(
+    storage: &Storage,
+    snapshots: &[crate::domain::Snapshot],
+    split_coverage: &StockSplitCoverage,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), String> {
+    storage
+        .update_company_universe(now.date_naive(), |existing, _favorites| {
+            let companies = existing
+                .values()
+                .filter(|company| is_snapshot_candidate(company))
+                .cloned()
+                .collect();
+            update_market_caps(companies, snapshots, split_coverage, now)
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 #[derive(Debug)]
-enum StockSplitCoverage {
+enum StockSplitStatus {
     Unsupported,
     Available(Vec<StockSplit>),
     Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShareEstimateSignature {
+    shares_outstanding: Option<u64>,
+    shares_source: Option<String>,
+    shares_as_of: Option<chrono::NaiveDate>,
+    shares_method: Option<String>,
+    shares_confidence: Option<String>,
+}
+
+impl From<&Company> for ShareEstimateSignature {
+    fn from(company: &Company) -> Self {
+        Self {
+            shares_outstanding: company.shares_outstanding.map(f64::to_bits),
+            shares_source: company.shares_source.clone(),
+            shares_as_of: company.shares_as_of,
+            shares_method: company.shares_method.clone(),
+            shares_confidence: company.shares_confidence.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StockSplitCoverage {
+    status: StockSplitStatus,
+    share_estimates: HashMap<String, ShareEstimateSignature>,
+}
+
+impl StockSplitCoverage {
+    fn new(companies: &[Company], status: StockSplitStatus) -> Self {
+        Self {
+            status,
+            share_estimates: companies
+                .iter()
+                .map(|company| {
+                    (
+                        company.symbol.clone(),
+                        ShareEstimateSignature::from(company),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn matches_share_estimate(&self, company: &Company) -> bool {
+        self.share_estimates.get(&company.symbol) == Some(&ShareEstimateSignature::from(company))
+    }
 }
 
 async fn fetch_market_cap_splits(
@@ -274,7 +328,7 @@ async fn fetch_market_cap_splits(
     observation_end: chrono::DateTime<Utc>,
 ) -> StockSplitCoverage {
     if !providers.supports_corporate_actions() {
-        return StockSplitCoverage::Unsupported;
+        return StockSplitCoverage::new(companies, StockSplitStatus::Unsupported);
     }
     let Some(start) = companies
         .iter()
@@ -282,7 +336,7 @@ async fn fetch_market_cap_splits(
         .filter_map(|company| company.shares_as_of)
         .min()
     else {
-        return StockSplitCoverage::Available(Vec::new());
+        return StockSplitCoverage::new(companies, StockSplitStatus::Available(Vec::new()));
     };
     let symbols = companies
         .iter()
@@ -293,15 +347,15 @@ async fn fetch_market_cap_splits(
         .fetch_stock_splits(&symbols, start, observation_end.date_naive())
         .await
     {
-        Ok(Some(splits)) => StockSplitCoverage::Available(splits),
-        Ok(None) => StockSplitCoverage::Unsupported,
+        Ok(Some(splits)) => StockSplitCoverage::new(companies, StockSplitStatus::Available(splits)),
+        Ok(None) => StockSplitCoverage::new(companies, StockSplitStatus::Unsupported),
         Err(error) => {
             tracing::warn!(
                 provider = providers.id(),
                 error = %error,
                 "stock-split refresh failed; skipping local market-cap estimates"
             );
-            StockSplitCoverage::Unavailable
+            StockSplitCoverage::new(companies, StockSplitStatus::Unavailable)
         }
     }
 }
@@ -319,9 +373,11 @@ fn update_market_caps(
     companies
         .into_iter()
         .map(|mut company| {
-            let snapshot = by_symbol.get(company.symbol.as_str()).copied();
+            let Some(snapshot) = by_symbol.get(company.symbol.as_str()).copied() else {
+                return company;
+            };
             let provider_cap = snapshot
-                .and_then(|snapshot| snapshot.market_cap)
+                .market_cap
                 .filter(|value| value.is_finite() && *value > 0.0);
             if provider_cap.is_some() {
                 company.market_cap = provider_cap;
@@ -334,12 +390,14 @@ fn update_market_caps(
                     .filter(|value| value.is_finite() && *value > 0.0);
                 return company;
             }
+            if !split_coverage.matches_share_estimate(&company) {
+                return company;
+            }
 
             company.market_cap = None;
-            if let Some(snapshot) = snapshot
-                && let Some(price) = snapshot
-                    .price
-                    .filter(|price| price.is_finite() && *price > 0.0)
+            if let Some(price) = snapshot
+                .price
+                .filter(|price| price.is_finite() && *price > 0.0)
                 && let Some(shares) =
                     adjusted_shares(&company, snapshot.updated_at.date_naive(), split_coverage)
             {
@@ -359,16 +417,19 @@ fn adjusted_shares(
     observation_date: chrono::NaiveDate,
     split_coverage: &StockSplitCoverage,
 ) -> Option<f64> {
+    if !split_coverage.matches_share_estimate(company) {
+        return None;
+    }
     let shares = company
         .shares_outstanding
         .filter(|shares| shares.is_finite() && *shares > 0.0)?;
-    match split_coverage {
-        StockSplitCoverage::Unsupported => company
+    match &split_coverage.status {
+        StockSplitStatus::Unsupported => company
             .shares_as_of
             .filter(|date| *date == observation_date)
             .map(|_| shares),
-        StockSplitCoverage::Unavailable => None,
-        StockSplitCoverage::Available(splits) => {
+        StockSplitStatus::Unavailable => None,
+        StockSplitStatus::Available(splits) => {
             let shares_as_of = company
                 .shares_as_of
                 .filter(|date| *date <= observation_date)?;
@@ -537,7 +598,7 @@ async fn refresh_ticker(
 ) -> Result<(), String> {
     let now = Utc::now();
     let history_end = providers.latest_historical_end(now);
-    let company = storage.company(symbol).map_err(|error| error.to_string())?;
+    let split_company = storage.company(symbol).map_err(|error| error.to_string())?;
     let operation_count = 2 + usize::from(providers.supports_news());
     send_progress(
         events,
@@ -557,7 +618,7 @@ async fn refresh_ticker(
         ),
         providers.fetch_news(&symbols, 20),
         providers.fetch_snapshots(&symbols),
-        fetch_market_cap_splits(providers, company.as_slice(), now),
+        fetch_market_cap_splits(providers, split_company.as_slice(), now),
     );
     let mut errors = Vec::new();
     match bars {
@@ -582,17 +643,8 @@ async fn refresh_ticker(
             storage
                 .upsert_snapshots(&snapshots)
                 .map_err(|error| error.to_string())?;
-            if !snapshots.is_empty()
-                && let Some(company) = company
-            {
-                storage
-                    .upsert_companies(&update_market_caps(
-                        vec![company],
-                        &snapshots,
-                        &split_coverage,
-                        now,
-                    ))
-                    .map_err(|error| error.to_string())?;
+            if !snapshots.is_empty() {
+                store_ticker_market_cap(storage, symbol, &snapshots, &split_coverage, now)?;
             }
         }
         Err(error) => errors.push(format!("snapshot: {error}")),
@@ -615,6 +667,23 @@ async fn refresh_ticker(
     Ok(())
 }
 
+fn store_ticker_market_cap(
+    storage: &Storage,
+    symbol: &str,
+    snapshots: &[crate::domain::Snapshot],
+    split_coverage: &StockSplitCoverage,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), String> {
+    storage
+        .update_current_company(symbol, |company| {
+            update_market_caps(vec![company], snapshots, split_coverage, now)
+                .pop()
+                .expect("one company produces one market-cap update")
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 async fn refresh_assets(
     storage: &Storage,
     providers: &ProviderSet,
@@ -626,32 +695,8 @@ async fn refresh_assets(
         .fetch_assets()
         .await
         .map_err(|error| format!("{}: {error}", providers.display_name()))?;
-    let existing: HashMap<String, Company> = storage
-        .companies(None, false)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .map(|company| (company.symbol.clone(), company))
-        .collect();
-    let favorites = storage
-        .favorite_symbols()
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .collect::<HashSet<_>>();
-    let merged = reconcile_active_assets(assets, &existing, &favorites, Utc::now());
-    storage
-        .upsert_companies(&merged)
-        .map_err(|error| error.to_string())?;
-    let as_of = Utc::now().date_naive();
-    for sector in Sector::ALL {
-        let candidates = merged
-            .iter()
-            .filter(|company| company.sector == Some(sector) && company.retained)
-            .cloned()
-            .collect::<Vec<_>>();
-        storage
-            .replace_memberships(as_of, sector, &candidates)
-            .map_err(|error| error.to_string())?;
-    }
+    let now = Utc::now();
+    store_active_assets(storage, assets, now)?;
     send_progress(
         events,
         SyncPhase::Universe,
@@ -661,6 +706,19 @@ async fn refresh_assets(
         None,
     );
     let _ = events.send(SyncEvent::DataChanged);
+    Ok(())
+}
+
+fn store_active_assets(
+    storage: &Storage,
+    assets: Vec<Company>,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), String> {
+    storage
+        .update_company_universe(now.date_naive(), move |existing, favorites| {
+            reconcile_active_assets(assets, existing, favorites, now)
+        })
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -765,7 +823,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        domain::{Bar, Snapshot},
+        domain::{Bar, Sector, Snapshot},
         providers::{AssetProvider, CorporateActionsProvider, MarketDataProvider, ProviderError},
     };
 
@@ -922,6 +980,194 @@ mod tests {
     }
 
     #[test]
+    fn active_asset_storage_reconciliation_uses_latest_catalog_metadata() {
+        let temp = TempDir::new().expect("temp directory");
+        let storage = Storage::open(temp.path().join("market.sqlite3")).expect("open test storage");
+        let mut legacy = company("LIVE", Some(Sector::Technology), true, true);
+        legacy.description = "Legacy catalog fallback.".to_owned();
+        legacy.industry = "Legacy industry".to_owned();
+        storage
+            .upsert_companies(&[legacy])
+            .expect("seed legacy company");
+        let stale_existing = storage
+            .companies(None, false)
+            .expect("load the pre-update company snapshot")
+            .into_iter()
+            .map(|company| (company.symbol.clone(), company))
+            .collect::<HashMap<_, _>>();
+
+        let mut current = stale_existing["LIVE"].clone();
+        current.description = "Current issuer profile.".to_owned();
+        current.industry = "Current catalog industry".to_owned();
+        current.raw_sector = Some("SEC SIC 1234".to_owned());
+        current.updated_at = instant();
+        storage
+            .upsert_companies(&[current])
+            .expect("install current catalog metadata");
+
+        let mut provider_asset = company("LIVE", None, false, false);
+        provider_asset.name = "Provider issuer name".to_owned();
+        provider_asset.exchange = "PROVIDER".to_owned();
+        provider_asset.market_cap = Some(2_000_000.0);
+        provider_asset.description.clear();
+        provider_asset.industry.clear();
+        store_active_assets(&storage, vec![provider_asset], instant())
+            .expect("store active assets");
+
+        let stored = storage
+            .company("LIVE")
+            .expect("load reconciled company")
+            .expect("company remains stored");
+        assert_eq!(stored.name, "Provider issuer name");
+        assert_eq!(stored.exchange, "PROVIDER");
+        assert_eq!(stored.market_cap, Some(2_000_000.0));
+        assert_eq!(stored.sector, Some(Sector::Technology));
+        assert_eq!(stored.raw_sector.as_deref(), Some("SEC SIC 1234"));
+        assert_eq!(stored.industry, "Current catalog industry");
+        assert_eq!(stored.description, "Current issuer profile.");
+        assert_eq!(
+            storage
+                .memberships(Sector::Technology, Some(instant().date_naive()))
+                .expect("load reconciled memberships")[0]
+                .description,
+            "Current issuer profile."
+        );
+    }
+
+    #[test]
+    fn bulk_snapshot_update_rereads_catalog_metadata_after_provider_wait() {
+        let temp = TempDir::new().expect("temp directory");
+        let storage = Storage::open(temp.path().join("market.sqlite3")).expect("open test storage");
+        let mut legacy = company("LIVE", Some(Sector::Technology), true, true);
+        legacy.description = "Legacy catalog fallback.".to_owned();
+        legacy.industry = "Legacy industry".to_owned();
+        storage
+            .upsert_companies(&[legacy])
+            .expect("seed legacy company");
+        let captured_before_provider_wait = storage
+            .company("LIVE")
+            .expect("load legacy company")
+            .expect("legacy company exists");
+        let coverage = StockSplitCoverage::new(
+            std::slice::from_ref(&captured_before_provider_wait),
+            StockSplitStatus::Available(Vec::new()),
+        );
+
+        let mut current = captured_before_provider_wait;
+        current.description = "Current issuer profile.".to_owned();
+        current.industry = "Current catalog industry".to_owned();
+        current.raw_sector = Some("SEC SIC 1234".to_owned());
+        current.shares_outstanding = Some(20_000.0);
+        current.shares_method = Some("revised_catalog_estimate".to_owned());
+        current.updated_at = instant();
+        storage
+            .upsert_companies(&[current])
+            .expect("install catalog update during provider wait");
+        let provider_snapshot = snapshot("LIVE", 200.0, Some(8_000_000.0));
+
+        store_snapshot_market_caps(&storage, &[provider_snapshot], &coverage, instant())
+            .expect("store bulk snapshot market caps");
+
+        let stored = storage
+            .company("LIVE")
+            .expect("load updated company")
+            .expect("company remains stored");
+        assert_eq!(stored.market_cap, Some(8_000_000.0));
+        assert_eq!(stored.sector, Some(Sector::Technology));
+        assert_eq!(stored.raw_sector.as_deref(), Some("SEC SIC 1234"));
+        assert_eq!(stored.industry, "Current catalog industry");
+        assert_eq!(stored.description, "Current issuer profile.");
+        assert_eq!(
+            storage
+                .memberships(Sector::Technology, Some(instant().date_naive()))
+                .expect("load updated memberships")[0]
+                .description,
+            "Current issuer profile."
+        );
+    }
+
+    #[test]
+    fn ticker_snapshot_update_rereads_catalog_metadata_after_provider_wait() {
+        let temp = TempDir::new().expect("temp directory");
+        let storage = Storage::open(temp.path().join("market.sqlite3")).expect("open test storage");
+        let mut legacy = company("LIVE", Some(Sector::Technology), true, true);
+        legacy.description = "Legacy catalog fallback.".to_owned();
+        legacy.industry = "Legacy industry".to_owned();
+        storage
+            .upsert_companies(&[legacy])
+            .expect("seed legacy company");
+        let captured_before_provider_wait = storage
+            .company("LIVE")
+            .expect("load legacy company")
+            .expect("legacy company exists");
+        let coverage = StockSplitCoverage::new(
+            std::slice::from_ref(&captured_before_provider_wait),
+            StockSplitStatus::Available(Vec::new()),
+        );
+
+        let mut current = captured_before_provider_wait;
+        current.description = "Current issuer profile.".to_owned();
+        current.industry = "Current catalog industry".to_owned();
+        current.raw_sector = Some("SEC SIC 1234".to_owned());
+        current.shares_outstanding = Some(20_000.0);
+        current.shares_method = Some("revised_catalog_estimate".to_owned());
+        current.updated_at = instant();
+        storage
+            .upsert_companies(&[current])
+            .expect("install catalog update during provider wait");
+        let provider_snapshot = snapshot("LIVE", 200.0, Some(9_000_000.0));
+
+        store_ticker_market_cap(&storage, "LIVE", &[provider_snapshot], &coverage, instant())
+            .expect("store ticker snapshot market cap");
+
+        let stored = storage
+            .company("LIVE")
+            .expect("load updated company")
+            .expect("company remains stored");
+        assert_eq!(stored.market_cap, Some(9_000_000.0));
+        assert_eq!(stored.sector, Some(Sector::Technology));
+        assert_eq!(stored.raw_sector.as_deref(), Some("SEC SIC 1234"));
+        assert_eq!(stored.industry, "Current catalog industry");
+        assert_eq!(stored.description, "Current issuer profile.");
+    }
+
+    #[test]
+    fn revised_share_estimate_rejects_pre_catalog_split_coverage() {
+        let temp = TempDir::new().expect("temp directory");
+        let storage = Storage::open(temp.path().join("market.sqlite3")).expect("open test storage");
+        let captured = company("LIVE", Some(Sector::Technology), true, true);
+        let coverage = StockSplitCoverage::new(
+            std::slice::from_ref(&captured),
+            StockSplitStatus::Available(Vec::new()),
+        );
+        let mut revised = captured;
+        revised.market_cap = Some(7_000_000.0);
+        revised.shares_outstanding = Some(20_000.0);
+        revised.shares_method = Some("revised_catalog_estimate".to_owned());
+        storage
+            .upsert_companies(&[revised])
+            .expect("install revised catalog estimate");
+
+        store_ticker_market_cap(
+            &storage,
+            "LIVE",
+            &[snapshot("LIVE", 200.0, None)],
+            &coverage,
+            instant(),
+        )
+        .expect("store ticker snapshot");
+
+        assert_eq!(
+            storage
+                .company("LIVE")
+                .expect("load company")
+                .expect("company remains stored")
+                .market_cap,
+            Some(7_000_000.0)
+        );
+    }
+
+    #[test]
     fn active_asset_refresh_keeps_goog_canonical_over_googl() {
         let goog = company("GOOG", Some(Sector::Technology), true, true);
         let googl = company("GOOGL", Some(Sector::Technology), true, true);
@@ -984,13 +1230,9 @@ mod tests {
             snapshot("ENRICHED", 42.0, Some(4_000_000.0)),
             snapshot("CACHED", 80.0, None),
         ];
-
-        let updated = update_market_caps(
-            vec![with_shares, without_shares, cached],
-            &snapshots,
-            &StockSplitCoverage::Unavailable,
-            instant(),
-        );
+        let companies = vec![with_shares, without_shares, cached];
+        let coverage = StockSplitCoverage::new(&companies, StockSplitStatus::Unavailable);
+        let updated = update_market_caps(companies, &snapshots, &coverage, instant());
         let by_symbol = updated
             .iter()
             .map(|company| (company.symbol.as_str(), company))
@@ -999,6 +1241,17 @@ mod tests {
         assert_eq!(by_symbol["SHARES"].market_cap, Some(999_000_000.0));
         assert_eq!(by_symbol["ENRICHED"].market_cap, Some(4_000_000.0));
         assert_eq!(by_symbol["CACHED"].market_cap, Some(5_000_000.0));
+    }
+
+    #[test]
+    fn missing_snapshot_leaves_the_current_market_cap_unchanged() {
+        let mut company = company("MISSING", Some(Sector::Technology), true, true);
+        company.market_cap = Some(7_000_000.0);
+        let companies = vec![company];
+        let coverage = StockSplitCoverage::new(&companies, StockSplitStatus::Available(Vec::new()));
+        let updated = update_market_caps(companies, &[], &coverage, instant());
+
+        assert_eq!(updated[0].market_cap, Some(7_000_000.0));
     }
 
     #[test]
@@ -1012,12 +1265,15 @@ mod tests {
             .with_ymd_and_hms(2026, 6, 8, 20, 0, 0)
             .single()
             .expect("observation timestamp");
-        let coverage = StockSplitCoverage::Available(vec![StockSplit {
-            symbol: "INHD".to_owned(),
-            effective_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 4).expect("split date"),
-            old_rate: 20.0,
-            new_rate: 1.0,
-        }]);
+        let coverage = StockSplitCoverage::new(
+            std::slice::from_ref(&inhd),
+            StockSplitStatus::Available(vec![StockSplit {
+                symbol: "INHD".to_owned(),
+                effective_date: chrono::NaiveDate::from_ymd_opt(2026, 5, 4).expect("split date"),
+                old_rate: 20.0,
+                new_rate: 1.0,
+            }]),
+        );
 
         let updated = update_market_caps(vec![inhd], &[current], &coverage, instant());
 
@@ -1033,13 +1289,11 @@ mod tests {
             .expect("Dell catalog entry");
         let expected_market_cap = dell.shares_outstanding.expect("Dell catalog shares") * 369.655;
         let current = snapshot("DELL", 369.655, None);
-
-        let updated = update_market_caps(
-            vec![dell],
-            &[current],
-            &StockSplitCoverage::Available(Vec::new()),
-            instant(),
+        let coverage = StockSplitCoverage::new(
+            std::slice::from_ref(&dell),
+            StockSplitStatus::Available(Vec::new()),
         );
+        let updated = update_market_caps(vec![dell], &[current], &coverage, instant());
 
         assert!(
             updated[0]
@@ -1052,10 +1306,14 @@ mod tests {
     fn failed_supported_split_lookup_does_not_use_unadjusted_shares() {
         let mut company = company("RISK", Some(Sector::Industrial), true, true);
         company.market_cap = Some(900_000_000.0);
+        let coverage = StockSplitCoverage::new(
+            std::slice::from_ref(&company),
+            StockSplitStatus::Unavailable,
+        );
         let updated = update_market_caps(
             vec![company],
             &[snapshot("RISK", 50.0, None)],
-            &StockSplitCoverage::Unavailable,
+            &coverage,
             instant(),
         );
 
@@ -1072,13 +1330,9 @@ mod tests {
             snapshot("STALE", 50.0, None),
             snapshot("CURRENT", 50.0, None),
         ];
-
-        let updated = update_market_caps(
-            vec![stale, current],
-            &snapshots,
-            &StockSplitCoverage::Unsupported,
-            instant(),
-        );
+        let companies = vec![stale, current];
+        let coverage = StockSplitCoverage::new(&companies, StockSplitStatus::Unsupported);
+        let updated = update_market_caps(companies, &snapshots, &coverage, instant());
         let by_symbol = updated
             .iter()
             .map(|company| (company.symbol.as_str(), company))
@@ -1106,33 +1360,36 @@ mod tests {
             old_rate,
             new_rate,
         };
-        let coverage = StockSplitCoverage::Available(vec![
-            split(
-                chrono::NaiveDate::from_ymd_opt(2026, 1, 1).expect("start boundary"),
-                1.0,
-                10.0,
-            ),
-            split(
-                chrono::NaiveDate::from_ymd_opt(2026, 2, 1).expect("forward split"),
-                1.0,
-                2.0,
-            ),
-            split(
-                chrono::NaiveDate::from_ymd_opt(2026, 5, 1).expect("reverse split"),
-                4.0,
-                1.0,
-            ),
-            split(
-                chrono::NaiveDate::from_ymd_opt(2026, 6, 1).expect("end boundary"),
-                1.0,
-                3.0,
-            ),
-            split(
-                chrono::NaiveDate::from_ymd_opt(2026, 6, 2).expect("future split"),
-                1.0,
-                100.0,
-            ),
-        ]);
+        let coverage = StockSplitCoverage::new(
+            std::slice::from_ref(&company),
+            StockSplitStatus::Available(vec![
+                split(
+                    chrono::NaiveDate::from_ymd_opt(2026, 1, 1).expect("start boundary"),
+                    1.0,
+                    10.0,
+                ),
+                split(
+                    chrono::NaiveDate::from_ymd_opt(2026, 2, 1).expect("forward split"),
+                    1.0,
+                    2.0,
+                ),
+                split(
+                    chrono::NaiveDate::from_ymd_opt(2026, 5, 1).expect("reverse split"),
+                    4.0,
+                    1.0,
+                ),
+                split(
+                    chrono::NaiveDate::from_ymd_opt(2026, 6, 1).expect("end boundary"),
+                    1.0,
+                    3.0,
+                ),
+                split(
+                    chrono::NaiveDate::from_ymd_opt(2026, 6, 2).expect("future split"),
+                    1.0,
+                    100.0,
+                ),
+            ]),
+        );
 
         let updated = update_market_caps(vec![company], &[current], &coverage, observation);
 
