@@ -1653,6 +1653,24 @@ verified 1,877 catalog companies, 985 enriched descriptions, 597 enriched
 top-900 companies, and the durable positive/negative R2 profile snapshot. The
 published catalog payload also matched its manifest size and SHA-256 digest.
 
+## 61. Restore Market Cap for Share-Class Tickers
+
+> `BF.A` and `BRK.B` appear to be missing market-cap values.
+
+**Committed changes**
+
+- [`31b1b2c` - Normalize SEC share-class symbols][private-commit-31b1b2c]
+
+**Summary**
+
+The SEC catalog already contained reviewed share estimates for both issuers,
+but the private worker kept its hyphenated catalog symbols while provider
+snapshots used dotted symbols. Catalog ingestion now converts share-class and
+preferred-share suffixes to the API's runtime notation before validation,
+lookup, and D1 persistence. End-to-end tests cover `BF-A` to `BF.A`, `BRK-B` to
+`BRK.B`, preferred-series notation, market-cap enrichment, cache reuse, and
+post-normalization collision rejection.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1734,6 +1752,7 @@ implementation work.
 [private-commit-31901f8]: https://github.com/chatcode-lab/stock-api/commit/31901f89d924373f9fa76f09d581c18d8ba4149c
 [private-commit-6bf23bb]: https://github.com/chatcode-lab/stock-api/commit/6bf23bb3c765ee871d5ef3e63ea5c8f91d3d6c40
 [private-commit-cc1f6ca]: https://github.com/chatcode-lab/stock-api/commit/cc1f6ca2a0aaadc5a76dbd99b942e49f6aa58b1d
+[private-commit-31b1b2c]: https://github.com/chatcode-lab/stock-api/commit/31b1b2c1062cd8c27822dc23a76c8e3068592183
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
 [issue-10]: https://github.com/chatcode-lab/stock-tui/issues/10
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
