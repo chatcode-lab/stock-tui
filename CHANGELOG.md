@@ -7,6 +7,24 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-07-30
+
+### Added
+
+- Added concise company context to roomy ticker-detail layouts, backed by
+  official SEC SIC industry labels in freshly generated catalogs and a clean
+  exchange/SIC fallback for older schema-v2 catalogs.
+
+### Changed
+
+- Require every newly published and release-embedded catalog company to carry
+  a safe, nonempty SIC industry label.
+
+### Fixed
+
+- Stop dim synthetic volume trails at the final rendered price column so the
+  future portion of an ongoing session remains blank.
+
 ## [0.2.4] - 2026-07-29
 
 ### Changed
@@ -303,7 +321,8 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.1...v0.2.2
