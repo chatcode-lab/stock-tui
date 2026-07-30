@@ -51,7 +51,10 @@ removing or changing documented fields requires a new route version.
 All timestamps are RFC 3339 instants. JSON numbers must be finite. Symbols are
 ASCII, case-insensitive on input, at most 32 characters, and limited to
 letters, digits, `.` and `-`; the service should return canonical uppercase
-symbols.
+symbols. The v1 runtime namespace uses dotted share-class and preferred-series
+suffixes such as `BF.A`, `BRK.B`, and `TRTN.PRA`. A catalog-backed service must
+convert SEC hyphen notation such as `BF-A` and `TRTN-PA` before validation,
+lookup, and persistence, and reject symbols that collide after conversion.
 
 ## Market Context
 

@@ -7,25 +7,35 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-30
+
 ### Added
 
 - Enriched roomy ticker-detail company context with concise CC0 Wikidata
   descriptions and industry labels matched strictly by SEC CIK.
-- Retained per-company Wikidata source URLs and catalog-level CC0 provenance in
-  compact published catalogs.
+- Retained each profile's Wikidata source URL in compact catalogs and
+  CC0/source provenance in audit catalogs and the durable builder snapshot.
 
 ### Changed
 
 - Replaced the generic "listed and classified" sentence with a
   company-specific profile plus explicit listing/SIC context, or a readable
   classification fallback when no unambiguous profile is available.
-- Added catalog publication and release gates for safe, coupled company-profile
-  fields and minimum enrichment coverage.
 - Persisted positive and empty company-profile lookups per SEC CIK, limiting
   routine catalog builds to new or materially renamed issuers and reserving a
   full refresh for the monthly or explicitly requested catalog run. Stable and
   content-addressed R2 snapshots preserve this builder state independently of
   GitHub Actions cache retention.
+- Added catalog publication and release gates for safe, coupled company-profile
+  fields and minimum total and per-sector enrichment coverage.
+
+### Fixed
+
+- Restored `stock-api` market-cap estimates for dotted share-class symbols such
+  as `BF.A` and `BRK.B` by normalizing hyphenated SEC catalog identifiers before
+  lookup and persistence.
+- Preserved `stock-api` market-cap source, date, method, and confidence fields
+  when compact catalogs store fact provenance in nested records.
 
 ## [0.2.5] - 2026-07-30
 
@@ -341,7 +351,8 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.2...v0.2.3

@@ -289,9 +289,10 @@ newest valid local or embedded copy. The application never contacts SEC
 directly.
 
 The checked-in JSON preserves the SEC's hyphen notation for share classes.
-When loading the catalog, the client converts those symbols to Alpaca notation
-before validation or provider requests: `BRK-B` becomes `BRK.B`, while an SEC
-preferred-share suffix such as `TRTN-PA` becomes Alpaca's `TRTN.PRA`.
+When loading the catalog, stock-tui and compatible catalog-backed services
+convert those symbols to the canonical runtime notation before validation,
+provider requests, or persistence: `BRK-B` becomes `BRK.B`, while an SEC
+preferred-share suffix such as `TRTN-PA` becomes `TRTN.PRA`.
 
 The checked-in schema-v2 catalog contains 1,880 unique
 CIK/canonical-symbol candidates, with 102 to 250 candidates per sector. Those
