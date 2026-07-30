@@ -51,6 +51,61 @@ def ticker_identity(
     }
 
 
+class SicDescriptionTests(unittest.TestCase):
+    def test_parses_documentation_labels_through_xbrl_arcs(self) -> None:
+        payload = b"""<?xml version="1.0"?>
+<xs:schema
+  xmlns:xs="http://www.w3.org/2001/XMLSchema"
+  xmlns:link="http://www.xbrl.org/2003/linkbase"
+  xmlns:xlink="http://www.w3.org/1999/xlink">
+  <link:label xlink:type="resource" xlink:label="lab_Z3571"
+    xlink:role="http://www.xbrl.org/2003/role/documentation">
+    Electronic   Computers
+  </link:label>
+  <link:labelArc xlink:type="arc"
+    xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label"
+    xlink:from="loc_Z3571" xlink:to="lab_Z3571"/>
+  <link:loc xlink:type="locator"
+    xlink:href="sic-2026.xsd#sic_Z3571" xlink:label="loc_Z3571"/>
+  <link:label xlink:type="resource" xlink:label="lab_standard"
+    xlink:role="http://www.xbrl.org/2003/role/label">Ignored</link:label>
+</xs:schema>"""
+
+        self.assertEqual(
+            catalog.parse_sic_descriptions(payload, "fixture"),
+            {3571: "Electronic Computers"},
+        )
+
+    def test_rejects_conflicting_descriptions_for_one_sic(self) -> None:
+        payload = b"""<?xml version="1.0"?>
+<xs:schema
+  xmlns:xs="http://www.w3.org/2001/XMLSchema"
+  xmlns:link="http://www.xbrl.org/2003/linkbase"
+  xmlns:xlink="http://www.w3.org/1999/xlink">
+  <link:loc xlink:href="#sic_Z3571" xlink:label="loc_Z3571"/>
+  <link:label xlink:label="lab_one"
+    xlink:role="http://www.xbrl.org/2003/role/documentation">Computers</link:label>
+  <link:label xlink:label="lab_two"
+    xlink:role="http://www.xbrl.org/2003/role/documentation">Other Computers</link:label>
+  <link:labelArc
+    xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label"
+    xlink:from="loc_Z3571" xlink:to="lab_one"/>
+  <link:labelArc
+    xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label"
+    xlink:from="loc_Z3571" xlink:to="lab_two"/>
+</xs:schema>"""
+
+        with self.assertRaisesRegex(RuntimeError, "conflicting descriptions"):
+            catalog.parse_sic_descriptions(payload, "fixture")
+
+    def test_rejects_taxonomy_without_linked_descriptions(self) -> None:
+        payload = b"""<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>"""
+
+        with self.assertRaisesRegex(RuntimeError, "contains no descriptions"):
+            catalog.parse_sic_descriptions(payload, "fixture")
+
+
 class CanonicalTickerTests(unittest.TestCase):
     def test_alphabet_prefers_four_character_common_ticker(self) -> None:
         selected = catalog.canonical_identity(
@@ -1701,6 +1756,7 @@ class FilingCoverShareTests(unittest.TestCase):
                 "sector": sector,
                 "rank": rank,
                 "shares_outstanding": 1,
+                "sic_description": "Test Industry",
             }
             for index, (sector, rank) in enumerate(
                 (sector, rank)
@@ -1719,6 +1775,30 @@ class FilingCoverShareTests(unittest.TestCase):
                 companies,
                 {1: "policy_signature_changed"},
             )
+
+    def test_catalog_validation_rejects_a_missing_sic_description(self) -> None:
+        companies = [
+            {
+                "cik": str(index + 1),
+                "symbol": f"T{index:04d}",
+                "sector": sector,
+                "rank": rank,
+                "shares_outstanding": 1,
+                "sic_description": "Test Industry",
+            }
+            for index, (sector, rank) in enumerate(
+                (sector, rank)
+                for sector in catalog.SECTORS
+                for rank in range(1, catalog.MIN_COMPANIES_PER_SECTOR + 1)
+            )
+        ]
+        companies[-1]["sic_description"] = None
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            f"catalog SIC description coverage regression: {companies[-1]['symbol']}",
+        ):
+            catalog.validate_catalog(companies)
 
 
 if __name__ == "__main__":

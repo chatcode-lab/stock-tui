@@ -951,10 +951,20 @@ fn format_history_span(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
 }
 
 fn render_description(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, tint: Color) {
-    let description = if detail.company.description.is_empty() {
-        format!("{} · {}", detail.company.name, detail.company.industry)
+    let description = if detail.company.description.trim().is_empty() {
+        let name = detail.company.name.trim();
+        let exchange = detail.company.exchange.trim();
+        let industry = detail.company.industry.trim();
+        match (exchange.is_empty(), industry.is_empty()) {
+            (false, false) => {
+                format!("{name} is listed on {exchange} and classified as {industry}.")
+            }
+            (false, true) => format!("{name} is listed on {exchange}."),
+            (true, false) => format!("{name} is classified as {industry}."),
+            (true, true) => name.to_owned(),
+        }
     } else {
-        detail.company.description.clone()
+        detail.company.description.trim().to_owned()
     };
     frame.render_widget(
         Paragraph::new(description)

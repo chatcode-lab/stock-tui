@@ -432,6 +432,11 @@ pub(crate) fn render_price_volume(
         usable_width.saturating_mul(TRACE_SAMPLES_PER_COLUMN),
     );
     let point_segments = timestamped_price_segments(&trace_sampled, &timeline);
+    let price_trace_end = point_segments
+        .iter()
+        .flat_map(|segment| segment.iter().map(|(position, _)| *position))
+        .filter(|position| position.is_finite())
+        .max_by(f64::total_cmp);
     let canvas_segments = point_segments.clone();
     let crosshair = hover_index
         .zip(hover_bar)
@@ -490,6 +495,7 @@ pub(crate) fn render_price_volume(
         accent,
         crosshair,
         &timeline,
+        price_trace_end,
     );
 }
 
@@ -1082,6 +1088,7 @@ fn render_volume(
     accent: Color,
     crosshair: Option<f64>,
     timeline: &ChartTimeline,
+    price_trace_end: Option<f64>,
 ) {
     let max_volume = bars
         .iter()
@@ -1112,7 +1119,9 @@ fn render_volume(
         return;
     }
     let plot = Rect::new(left, inner.y, right - left, inner.height);
-    let columns = volume_trail_columns(&volume_columns(bars, usize::from(plot.width), timeline));
+    let width = usize::from(plot.width);
+    let trail_end_column = price_trace_end.map(|position| normalized_cell_index(position, width));
+    let columns = volume_trail_columns(&volume_columns(bars, width, timeline), trail_end_column);
     let selected_column = crosshair.map(|position| {
         (position.clamp(0.0, 1.0) * f64::from(plot.width.saturating_sub(1))).round() as usize
     });
@@ -1139,20 +1148,23 @@ struct VolumeColumn {
     is_trail: bool,
 }
 
-fn volume_trail_columns(columns: &[f64]) -> Vec<VolumeColumn> {
+fn volume_trail_columns(columns: &[f64], trail_end_column: Option<usize>) -> Vec<VolumeColumn> {
     let mut previous = None;
 
     columns
         .iter()
         .copied()
-        .map(|volume| {
+        .enumerate()
+        .map(|(index, volume)| {
             if volume.is_finite() && volume > 0.0 {
                 previous = Some(volume);
                 VolumeColumn {
                     volume,
                     is_trail: false,
                 }
-            } else if let Some(volume) = previous {
+            } else if let Some(volume) =
+                previous.filter(|_| trail_end_column.is_some_and(|end| index <= end))
+            {
                 VolumeColumn {
                     volume,
                     is_trail: true,
@@ -1956,7 +1968,7 @@ mod tests {
     #[test]
     fn volume_trails_repeat_heights_through_the_end_but_leave_leading_gaps_empty() {
         assert_eq!(
-            volume_trail_columns(&[0.0, 10.0, 0.0, 0.0, 20.0, 0.0]),
+            volume_trail_columns(&[0.0, 10.0, 0.0, 0.0, 20.0, 0.0], Some(5)),
             vec![
                 VolumeColumn {
                     volume: 0.0,
@@ -1985,9 +1997,55 @@ mod tests {
             ]
         );
         assert!(
-            volume_trail_columns(&[0.0, f64::NAN, 0.0])
+            volume_trail_columns(&[0.0, f64::NAN, 0.0], Some(2))
                 .iter()
                 .all(|column| column.volume == 0.0 && !column.is_trail)
+        );
+    }
+
+    #[test]
+    fn volume_trails_stop_at_the_rendered_price_endpoint() {
+        assert_eq!(
+            volume_trail_columns(&[10.0, 0.0, 20.0, 0.0, 0.0, 0.0], Some(4)),
+            vec![
+                VolumeColumn {
+                    volume: 10.0,
+                    is_trail: false,
+                },
+                VolumeColumn {
+                    volume: 10.0,
+                    is_trail: true,
+                },
+                VolumeColumn {
+                    volume: 20.0,
+                    is_trail: false,
+                },
+                VolumeColumn {
+                    volume: 20.0,
+                    is_trail: true,
+                },
+                VolumeColumn {
+                    volume: 20.0,
+                    is_trail: true,
+                },
+                VolumeColumn {
+                    volume: 0.0,
+                    is_trail: false,
+                },
+            ]
+        );
+        assert_eq!(
+            volume_trail_columns(&[10.0, 0.0], None),
+            vec![
+                VolumeColumn {
+                    volume: 10.0,
+                    is_trail: false,
+                },
+                VolumeColumn {
+                    volume: 0.0,
+                    is_trail: false,
+                },
+            ]
         );
     }
 

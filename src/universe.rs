@@ -25,6 +25,7 @@ const MAX_COMPANIES_PER_SECTOR: usize = 250;
 const MAX_SYMBOL_LEN: usize = 16;
 const MAX_NAME_LEN: usize = 160;
 const MAX_METADATA_LEN: usize = 128;
+const MAX_SIC_DESCRIPTION_LEN: usize = 160;
 
 #[derive(Debug, Deserialize)]
 struct Catalog {
@@ -46,6 +47,8 @@ struct CatalogCompany {
     name: String,
     exchange: String,
     sic: u16,
+    #[serde(default)]
+    sic_description: Option<String>,
     sector: Sector,
     public_float: f64,
     shares_outstanding: Option<f64>,
@@ -283,6 +286,14 @@ fn parse_catalog_json(catalog_json: &str, now: DateTime<Utc>) -> Result<ParsedCa
             company.symbol
         );
         ensure!(
+            company
+                .sic_description
+                .as_deref()
+                .is_none_or(|value| safe_text(value, MAX_SIC_DESCRIPTION_LEN)),
+            "catalog SIC description is invalid for {}",
+            company.symbol
+        );
+        ensure!(
             company.public_float.is_finite() && company.public_float > 0.0,
             "catalog public float is invalid for {}",
             company.symbol
@@ -408,13 +419,31 @@ fn parse_catalog_json(catalog_json: &str, now: DateTime<Utc>) -> Result<ParsedCa
                         .context("validated catalog shares date became invalid")
                 })
                 .transpose()?;
+            let (industry, description) = entry.sic_description.map_or_else(
+                || {
+                    (
+                        format!("SEC SIC {}", entry.sic),
+                        format!(
+                            "{} is listed on {}; its SEC classification is SIC {} in the {} sector.",
+                            entry.name, entry.exchange, entry.sic, entry.sector
+                        ),
+                    )
+                },
+                |sic_description| {
+                    let description = format!(
+                        "{} is listed on {} and classified by the SEC as {sic_description} (SIC {}).",
+                        entry.name, entry.exchange, entry.sic
+                    );
+                    (sic_description, description)
+                },
+            );
             Ok(Company {
                 symbol: entry.symbol,
                 name: entry.name,
                 sector: Some(entry.sector),
                 raw_sector: Some(format!("SEC SIC {}", entry.sic)),
                 exchange: entry.exchange,
-                industry: format!("SEC SIC {}", entry.sic),
+                industry,
                 market_cap: None,
                 size_proxy: Some(entry.public_float),
                 size_proxy_source: entry
@@ -455,10 +484,7 @@ fn parse_catalog_json(catalog_json: &str, now: DateTime<Utc>) -> Result<ParsedCa
                     })
                     .or_else(|| entry.shares_outstanding.map(|_| "high".to_owned())),
                 rank: Some(entry.rank),
-                description: format!(
-                    "SEC issuer CIK {}; catalog public float is a ranking proxy",
-                    entry.cik
-                ),
+                description,
                 in_universe: false,
                 retained: true,
                 updated_at: now,
@@ -744,6 +770,81 @@ mod tests {
         assert!(catalog_schema_supported(2));
         assert!(!catalog_schema_supported(0));
         assert!(!catalog_schema_supported(3));
+    }
+
+    #[test]
+    fn optional_sic_description_becomes_readable_company_metadata() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(CATALOG_JSON).expect("committed catalog");
+        let company = value["companies"]
+            .as_array_mut()
+            .and_then(|companies| companies.first_mut())
+            .expect("catalog company");
+        let symbol = company["symbol"]
+            .as_str()
+            .expect("catalog symbol")
+            .to_owned();
+        let sic = company["sic"].as_u64().expect("catalog SIC");
+        let exchange = company["exchange"]
+            .as_str()
+            .expect("catalog exchange")
+            .to_owned();
+        company["sic_description"] = serde_json::json!("Electronic Computers");
+
+        let companies = companies_from_catalog_json(&value.to_string(), Utc::now())
+            .expect("catalog with SIC description");
+        let company = companies
+            .iter()
+            .find(|company| company.symbol == symbol)
+            .expect("modified company remains present");
+
+        assert_eq!(company.industry, "Electronic Computers");
+        assert_eq!(
+            company.description,
+            format!(
+                "{} is listed on {exchange} and classified by the SEC as Electronic Computers (SIC {sic}).",
+                company.name
+            )
+        );
+    }
+
+    #[test]
+    fn missing_sic_description_uses_backward_compatible_classification() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(CATALOG_JSON).expect("committed catalog");
+        let company = value["companies"]
+            .as_array_mut()
+            .and_then(|companies| companies.first_mut())
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("catalog company");
+        company.remove("sic_description");
+        let symbol = company["symbol"]
+            .as_str()
+            .expect("catalog symbol")
+            .to_owned();
+        let sic = company["sic"].as_u64().expect("catalog SIC");
+
+        let companies = companies_from_catalog_json(&value.to_string(), Utc::now())
+            .expect("legacy catalog without SIC description");
+        let company = companies
+            .iter()
+            .find(|company| company.symbol == symbol)
+            .expect("modified company remains present");
+
+        assert_eq!(company.industry, format!("SEC SIC {sic}"));
+        assert!(company.description.contains(&format!("SIC {sic}")));
+        assert!(company.description.contains("sector"));
+    }
+
+    #[test]
+    fn unsafe_sic_description_is_rejected() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(CATALOG_JSON).expect("committed catalog");
+        value["companies"][0]["sic_description"] = serde_json::json!("unsafe\u{1b}[2Jindustry");
+
+        let error = companies_from_catalog_json(&value.to_string(), Utc::now())
+            .expect_err("unsafe SIC description");
+        assert!(error.to_string().contains("SIC description is invalid"));
     }
 
     #[test]

@@ -31,6 +31,9 @@ from typing import Any, Iterable
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
+SIC_TAXONOMY_DOC_URL = (
+    "https://xbrl.sec.gov/sic/{year}/sic-{year}_doc.xsd"
+)
 FILING_ARCHIVE_URL = (
     "https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{filename}"
 )
@@ -70,6 +73,11 @@ MAX_POINT_FACT_OVERRIDE_DAYS = 45
 MAX_WEIGHTED_FALLBACK_OVERRIDE_DAYS = 185
 MAX_SHARE_FACT_AGE_DAYS = 550
 MAX_UNREVIEWED_IMPLIED_SHARE_PRICE = 2_000
+MAX_SIC_DESCRIPTION_LENGTH = 160
+LINK_NAMESPACE = "http://www.xbrl.org/2003/linkbase"
+XLINK_NAMESPACE = "http://www.w3.org/1999/xlink"
+XBRL_DOCUMENTATION_ROLE = "http://www.xbrl.org/2003/role/documentation"
+XBRL_CONCEPT_LABEL_ARCROLE = "http://www.xbrl.org/2003/arcrole/concept-label"
 # Gross-error guards set 100x above the SEC filer-status float boundaries. The
 # margin accommodates transition timing without rejecting legitimate issuers.
 MAX_ACCELERATED_FILER_FLOAT = 70_000_000_000
@@ -380,6 +388,7 @@ class SecClient:
         if parsed.scheme != "https" or parsed.hostname not in {
             "www.sec.gov",
             "data.sec.gov",
+            "xbrl.sec.gov",
         }:
             raise ValueError(f"refusing non-SEC source: {url}")
 
@@ -400,7 +409,10 @@ class SecClient:
                 url,
                 headers={
                     "User-Agent": self.user_agent,
-                    "Accept": "application/json, application/zip, text/plain;q=0.9, */*;q=0.1",
+                    "Accept": (
+                        "application/json, application/zip, application/xml, "
+                        "text/xml, text/plain;q=0.9, */*;q=0.1"
+                    ),
                 },
             )
             try:
@@ -460,6 +472,80 @@ def json_payload(payload: bytes | None, url: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RuntimeError(f"SEC returned unexpected JSON shape: {url}")
     return value
+
+
+def load_sic_descriptions(
+    client: SecClient, year: int
+) -> tuple[dict[int, str], dict[str, str]]:
+    url = SIC_TAXONOMY_DOC_URL.format(year=year)
+    payload = client.get(url)
+    if payload is None:
+        raise RuntimeError(f"missing SEC SIC taxonomy: {url}")
+    descriptions = parse_sic_descriptions(payload, url)
+    source_id = f"sec_sic_taxonomy_{year}_documentation"
+    return descriptions, source_record(source_id, url, client)
+
+
+def parse_sic_descriptions(payload: bytes, source: str) -> dict[int, str]:
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError as error:
+        raise RuntimeError(f"SEC SIC taxonomy is invalid XML: {source}") from error
+
+    xlink = f"{{{XLINK_NAMESPACE}}}"
+    link = f"{{{LINK_NAMESPACE}}}"
+    locators: dict[str, int] = {}
+    resources: dict[str, str] = {}
+
+    for locator in root.iter(f"{link}loc"):
+        label = locator.get(f"{xlink}label", "")
+        fragment = locator.get(f"{xlink}href", "").rpartition("#")[2]
+        code_text = fragment.removeprefix("sic_Z")
+        if (
+            not label
+            or len(code_text) != 4
+            or not code_text.isdigit()
+            or int(code_text) <= 0
+        ):
+            continue
+        code = int(code_text)
+        if label in locators and locators[label] != code:
+            raise RuntimeError(f"SEC SIC taxonomy has a conflicting locator: {source}")
+        locators[label] = code
+
+    for resource in root.iter(f"{link}label"):
+        if resource.get(f"{xlink}role") != XBRL_DOCUMENTATION_ROLE:
+            continue
+        label = resource.get(f"{xlink}label", "")
+        description = " ".join("".join(resource.itertext()).split())
+        if not label or not description:
+            continue
+        if (
+            len(description) > MAX_SIC_DESCRIPTION_LENGTH
+            or any(not character.isprintable() for character in description)
+        ):
+            raise RuntimeError(f"SEC SIC taxonomy has an unsafe description: {source}")
+        if label in resources and resources[label] != description:
+            raise RuntimeError(f"SEC SIC taxonomy has a conflicting label: {source}")
+        resources[label] = description
+
+    descriptions: dict[int, str] = {}
+    for arc in root.iter(f"{link}labelArc"):
+        if arc.get(f"{xlink}arcrole") != XBRL_CONCEPT_LABEL_ARCROLE:
+            continue
+        code = locators.get(arc.get(f"{xlink}from", ""))
+        description = resources.get(arc.get(f"{xlink}to", ""))
+        if code is None or description is None:
+            continue
+        if code in descriptions and descriptions[code] != description:
+            raise RuntimeError(
+                f"SEC SIC taxonomy has conflicting descriptions for {code:04d}: {source}"
+            )
+        descriptions[code] = description
+
+    if not descriptions:
+        raise RuntimeError(f"SEC SIC taxonomy contains no descriptions: {source}")
+    return descriptions
 
 
 def load_reviewed_share_policies(
@@ -2620,7 +2706,9 @@ def build_companies(
     sic_facts: dict[int, SicFact],
     float_facts: dict[int, FrameFact],
     shares_facts: dict[int, SharesFact],
+    sic_descriptions: dict[int, str] | None = None,
 ) -> list[dict[str, Any]]:
+    sic_descriptions = sic_descriptions or {}
     by_sector: dict[str, list[dict[str, Any]]] = {sector: [] for sector in SECTORS}
     for cik, identity in identities.items():
         sic_fact = sic_facts.get(cik)
@@ -2656,6 +2744,7 @@ def build_companies(
                 "name": identity["name"],
                 "exchange": identity["exchange"],
                 "sic": sic_fact.sic,
+                "sic_description": sic_descriptions.get(sic_fact.sic),
                 "sector": sector,
                 "public_float": float_fact.value,
                 "proxy_source": float_fact.source,
@@ -2809,6 +2898,16 @@ def validate_catalog(
         raise RuntimeError("catalog contains duplicate issuer CIKs")
     if len({company["symbol"] for company in companies}) != len(companies):
         raise RuntimeError("catalog contains duplicate canonical symbols")
+    missing_sic_descriptions = [
+        company["symbol"]
+        for company in companies
+        if not company.get("sic_description")
+    ]
+    if missing_sic_descriptions:
+        raise RuntimeError(
+            "catalog SIC description coverage regression: "
+            + ", ".join(missing_sic_descriptions)
+        )
     for sector in SECTORS:
         sector_rows = [company for company in companies if company["sector"] == sector]
         ranks = [company["rank"] for company in sector_rows]
@@ -2886,6 +2985,18 @@ def runtime_company(value: Any, index: int) -> dict[str, Any]:
             "quality",
         )
     }
+    sic_description = value.get("sic_description")
+    if sic_description is not None:
+        if not isinstance(sic_description, str):
+            raise RuntimeError(f"{location} SIC description must be text")
+        sic_description = " ".join(sic_description.split())
+        if (
+            not sic_description
+            or len(sic_description) > MAX_SIC_DESCRIPTION_LENGTH
+            or any(not character.isprintable() for character in sic_description)
+        ):
+            raise RuntimeError(f"{location} SIC description is invalid")
+        company["sic_description"] = sic_description
     provenance = required_field(value, "provenance", location)
     if not isinstance(provenance, dict):
         raise RuntimeError(f"{location} provenance must be an object")
@@ -3156,6 +3267,9 @@ def main() -> int:
 
     latest = find_latest_fsds(client, args.through)
     identities, identity_source = load_tickers(client)
+    sic_descriptions, sic_description_source = load_sic_descriptions(
+        client, latest.year
+    )
     sic_facts, sic_sources = load_sic_facts(
         client, quarter_sequence(latest, args.sic_quarters)
     )
@@ -3199,6 +3313,7 @@ def main() -> int:
         sic_facts,
         float_facts,
         initial_shares_facts,
+        sic_descriptions,
     )
     cover_targets = {
         int(company["cik"])
@@ -3250,7 +3365,13 @@ def main() -> int:
         reviewed_policies,
         generated_on,
     )
-    companies = build_companies(identities, sic_facts, float_facts, shares_facts)
+    companies = build_companies(
+        identities,
+        sic_facts,
+        float_facts,
+        shares_facts,
+        sic_descriptions,
+    )
     unresolved_reasons = unresolved_share_reasons(
         companies,
         reviewed_policies,
@@ -3260,6 +3381,7 @@ def main() -> int:
     validate_catalog(companies, unresolved_reasons)
 
     sources = [source_record(identity_source, TICKERS_URL, client)]
+    sources.append(sic_description_source)
     sources.extend(sic_sources)
     sources.extend(float_sources)
     sources.extend(frame_shares_sources)
@@ -3293,6 +3415,10 @@ def main() -> int:
                 "contemporaneous market price."
             ),
             "sector_mapping": "SEC SIC mapped to StockTouch's nine legacy sectors",
+            "sic_descriptions": (
+                "Official SEC SIC taxonomy documentation labels for the latest "
+                "available Financial Statement Data Set year"
+            ),
             "quality_values": {
                 "public_float_and_shares": (
                     "public float and an SEC shares estimate were available"

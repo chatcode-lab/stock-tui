@@ -338,6 +338,7 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
         "STATISTICS",
         "EST. CAP",
         "NEWS",
+        "Acme Systems builds market analysis software",
         "Acme expands terminal analytics coverage",
     ] {
         assert!(
@@ -438,6 +439,37 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
         vec![AppCommand::OpenUrl(
             "https://example.invalid/acme/results".to_owned()
         )]
+    );
+}
+
+#[test]
+fn detail_description_uses_roomy_layout_and_clean_metadata_fallback() {
+    let mut full = detail_state();
+    let full_screen = screen_text(&render_at(&mut full, 120, 36));
+    assert!(full_screen.contains("COMPANY"));
+    assert!(full_screen.contains("Acme Systems builds market analysis software"));
+
+    for (width, height) in [(119, 36), (120, 35), (80, 24)] {
+        let mut compact = detail_state();
+        let compact_screen = screen_text(&render_at(&mut compact, width, height));
+        assert!(
+            !compact_screen.contains("Acme Systems builds market analysis software"),
+            "description consumed compact chart space at {width}x{height}"
+        );
+    }
+
+    let mut fallback = detail_state();
+    fallback
+        .detail
+        .as_mut()
+        .expect("fixture detail")
+        .company
+        .description
+        .clear();
+    let fallback_screen = screen_text(&render_at(&mut fallback, 120, 36));
+    assert!(
+        fallback_screen
+            .contains("Acme Systems is listed on NASDAQ and classified as Terminal Software.")
     );
 }
 

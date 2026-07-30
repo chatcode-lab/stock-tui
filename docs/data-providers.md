@@ -11,7 +11,7 @@ and terms change; verify them for your account and use case.
 
 | Data | Current source | Stored locally | Notes |
 | --- | --- | --- | --- |
-| Nine-sector candidates, size proxy, and common-share estimates | Versioned catalog generated from SEC identity, SIC, and XBRL facts, published as compact JSON through Cloudflare R2 | Yes | Keeps 100-250 candidates per sector, with a validated embedded release fallback, and displays the selected top 100. |
+| Nine-sector candidates, SIC industry labels, size proxy, and common-share estimates | Versioned catalog generated from SEC identity, SIC taxonomy, and XBRL facts, published as compact JSON through Cloudflare R2 | Yes | Keeps 100-250 candidates per sector, with a validated embedded release fallback, and displays the selected top 100. |
 | Issuer name, ticker, exchange associations | US SEC EDGAR catalog, supplemented by Alpaca active assets | Yes | Associations are identifiers, not a complete security master. |
 | Overview benchmarks | Alpaca stock data for `SPY`, `DIA`, and `QQQ` ETF proxies | Yes | Labeled as proxies; values are not literal S&P 500, Dow, or Nasdaq index levels. |
 | Current price, previous close, OHLC, volume | Alpaca stock snapshots | Yes | Coverage depends on the selected feed and subscription. |
@@ -20,6 +20,11 @@ and terms change; verify them for your account and use case.
 | News headline, date, source, summary, URL, symbols | Alpaca Historical News API (currently Benzinga content) | Yes | Loaded lazily for an opened ticker. |
 | Demo issuer identities | Embedded SEC-derived catalog | Yes | Real ticker/name associations; not a claim that the security remains active. |
 | Demo prices, rankings, volume, descriptions, news | Built-in deterministic generator | Yes | Entirely simulated and visibly labeled; no provider market data is used. |
+
+Live company context is deliberately concise: it combines the SEC issuer name,
+listing exchange, SIC code, and, when present in the selected catalog, the SIC
+taxonomy's official industry label. It is a classification summary, not a
+provider-supplied business profile.
 
 The source matrix describes the default Alpaca configuration. The separately
 selectable `stock-api` adapter consumes normalized observations from an
@@ -238,6 +243,9 @@ the compact remote catalog are generated entirely from official SEC sources:
   [Financial Statement Data Sets](https://www.sec.gov/data-research/sec-markets-data/financial-statement-data-sets)
   supply the most recently filed Standard Industrial Classification (SIC) and
   standard-taxonomy common-share facts for an issuer.
+- The SEC's annual
+  [SIC taxonomy](https://www.sec.gov/search-filings/standard-industrial-classification-sic-code-list)
+  supplies the official short industry label for each SIC code.
 - The SEC XBRL
   [Frames API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)
   supplies `dei:EntityPublicFloat` in USD and, when reported,
@@ -295,7 +303,7 @@ The catalog builder:
    retires the previous symbol from sector membership without aliasing the two
    securities' prices, bars, or favorites.
 3. Takes the newest SIC observation from the requested recent Financial
-   Statement Data Set quarters.
+   Statement Data Set quarters and joins its official SEC taxonomy label.
 4. Searches recent quarterly XBRL frames, independently of the newest available
    bulk-file quarter, for positive public float, unsegmented DEI share totals,
    and issuer-scoped reviewed US-GAAP common-share totals. It rejects malformed
@@ -459,12 +467,12 @@ cargo test universe
 
 The tool accepts `SEC_USER_AGENT` instead of `--user-agent`, caches source
 downloads under `~/.cache/stock-tui/sec-catalog` by default, restricts requests
-to `www.sec.gov` and `data.sec.gov`, and defaults to eight requests per second.
-It refuses a setting above the SEC's current aggregate maximum of ten requests
-per second, retries transient failures, writes source receipts, validates
-unique CIKs/symbols, consecutive per-sector ranks, exact reviewed filing
-signatures, absolute share-fact freshness, and complete top-100 share coverage,
-then atomically replaces the output.
+to `www.sec.gov`, `data.sec.gov`, and `xbrl.sec.gov`, and defaults to eight
+requests per second. It refuses a setting above the SEC's current aggregate
+maximum of ten requests per second, retries transient failures, writes source
+receipts, validates unique CIKs/symbols, consecutive per-sector ranks, safe SIC
+labels, exact reviewed filing signatures, absolute share-fact freshness, and
+complete top-100 share coverage, then atomically replaces the output.
 
 `.github/workflows/catalog-publish.yml` runs daily at 06:17 UTC and can be
 dispatched manually. It restores the large SEC source cache, invalidates

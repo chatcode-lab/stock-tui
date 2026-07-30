@@ -454,10 +454,11 @@ can cover several listing exchanges that share one calendar, so the current US
 heatmap keeps NASDAQ, NYSE, and ARCA instruments together. Only one market
 context is active during a launch.
 
-The catalog includes SEC public float as a ranking proxy plus dated,
-provenance-tagged share bases. Unambiguous filing cover facts resolve
-automatically; reviewed multi-class, tracking-stock, Up-C, partnership, and
-SPAC structures use exact class signatures, explicit multipliers, and
+Freshly generated catalogs include SEC public float as a ranking proxy, dated,
+provenance-tagged share bases, and official SIC industry labels used for brief
+company context in roomy ticker-detail views. Unambiguous filing cover facts
+resolve automatically; reviewed multi-class, tracking-stock, Up-C, partnership,
+and SPAC structures use exact class signatures, explicit multipliers, and
 accession-scoped issuer-reported economic facts from
 [`data/sec_share_policies.json`](data/sec_share_policies.json). The builder
 rejects stale or structurally changed facts and fails publication if a current
@@ -480,10 +481,11 @@ alternative timeframes used only when the preferred aggregate is unavailable.
 Ticker-detail statistics continue to show latest-session snapshot volume,
 while solid chart bars use traded provider volume without manufacturing data
 for price-only endpoints. After the first positive volume bar, unoccupied
-columns repeat the preceding height in a dim visual trail, including the
-remaining chart tail; this does not change cached volume, statistics,
-aggregation, or scale. `1D` draws the latest observed regular session across
-its full exchange-local trading window, leaving the future price trace blank.
+columns repeat the preceding height in a dim visual trail through the last
+rendered price column; the future part of an ongoing session remains blank.
+This does not change cached volume, statistics, aggregation, or scale. `1D`
+draws the latest observed regular session across its full exchange-local
+trading window, leaving the future price trace blank.
 `1W` concatenates the five latest observed sessions, and the other intraday
 view omits closed periods; daily and weekly histories use ordinal observations.
 Long gaps during an open session carry the last traded price to the next

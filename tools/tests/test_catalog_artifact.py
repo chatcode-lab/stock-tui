@@ -32,6 +32,7 @@ def sample_catalog() -> dict[str, object]:
                 "name": "One Corp.",
                 "exchange": "Nasdaq",
                 "sic": 3571,
+                "sic_description": "Electronic Computers",
                 "sector": "technology",
                 "public_float": 1_000_000_000,
                 "proxy_source": "sec_public_float",
@@ -121,6 +122,7 @@ class CatalogArtifactTests(unittest.TestCase):
                 "name",
                 "exchange",
                 "sic",
+                "sic_description",
                 "sector",
                 "public_float",
                 "shares_outstanding",
@@ -148,6 +150,7 @@ class CatalogArtifactTests(unittest.TestCase):
         self.assertIsNone(
             runtime["companies"][1]["provenance"]["shares_outstanding"]
         )
+        self.assertNotIn("sic_description", runtime["companies"][1])
 
     def test_gzip_and_manifest_are_byte_for_byte_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -278,6 +281,13 @@ class CatalogArtifactTests(unittest.TestCase):
             RuntimeError,
             "shares value and provenance must both be present or absent",
         ):
+            catalog.runtime_catalog(source)
+
+    def test_runtime_projection_rejects_unsafe_sic_description(self) -> None:
+        source = sample_catalog()
+        source["companies"][0]["sic_description"] = "unsafe\u0007description"
+
+        with self.assertRaisesRegex(RuntimeError, "SIC description is invalid"):
             catalog.runtime_catalog(source)
 
 

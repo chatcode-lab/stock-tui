@@ -42,11 +42,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p data
+          cache_buster="release=${GITHUB_SHA}"
           curl --compressed --fail --location --retry 3 \
-            "$CATALOG_URL" \
+            "${CATALOG_URL}?${cache_buster}" \
             --output data/sec_universe.json
           curl --fail --location --retry 3 \
-            "$CATALOG_MANIFEST_URL" \
+            "${CATALOG_MANIFEST_URL}?${cache_buster}" \
             --output data/sec_universe.manifest.json
       - name: Validate catalog envelope
         run: |
@@ -63,6 +64,14 @@ jobs:
           assert len(catalog["companies"]) >= 900
           assert len({row["cik"] for row in catalog["companies"]}) == len(catalog["companies"])
           assert len({row["sector"] for row in catalog["companies"]}) == 9
+          assert not [
+              row
+              for row in catalog["companies"]
+              if not isinstance(row.get("sic_description"), str)
+              or not row["sic_description"].strip()
+              or len(row["sic_description"]) > 160
+              or not row["sic_description"].isprintable()
+          ]
           assert not [
               row
               for row in catalog["companies"]

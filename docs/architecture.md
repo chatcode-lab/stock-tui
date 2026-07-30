@@ -96,15 +96,18 @@ valid result. Network, format, size, and freshness failures preserve the newest
 valid cached or embedded copy.
 
 The selected local catalog is upserted and supplies 100 dated members per
-sector. Catalog share bases come from recent unambiguous filing facts or
-exact-signature reviewed policies for economically ambiguous issuer
-structures. Catalog publication fails if any candidate currently ranked in a
-sector top 100 lacks a share basis. A cached market cap is carried forward only
-when its share estimate and provenance still match the catalog. Candidates
-without a calculated market cap compete using their numeric SEC public-float
-proxy. A valid background update is applied to SQLite and queues a provider
-universe reconciliation. The runtime loads cached tiles and starts the selected
-provider worker unless `--offline` is set.
+sector. Newly generated catalogs also carry the SEC SIC taxonomy's short
+industry label, which the roomy ticker-detail layout turns into concise issuer
+context without another client-side profile service; older schema-v2 catalogs
+remain valid and use a numeric SIC fallback. Catalog share bases come from
+recent unambiguous filing facts or exact-signature reviewed policies for
+economically ambiguous issuer structures. Catalog publication fails if any
+candidate currently ranked in a sector top 100 lacks a share basis. A cached
+market cap is carried forward only when its share estimate and provenance still
+match the catalog. Candidates without a calculated market cap compete using
+their numeric SEC public-float proxy. A valid background update is applied to
+SQLite and queues a provider universe reconciliation. The runtime loads cached
+tiles and starts the selected provider worker unless `--offline` is set.
 
 The worker initially:
 
@@ -205,9 +208,10 @@ closed periods zero horizontal width; `1W` keeps the latest five. Daily and
 weekly histories use ordinal observation spacing. Normal adjacent observations
 retain a direct line, while a long in-session gap carries the prior traded
 price to the next observation. Volume shares the same mapping. Its presentation
-layer repeats the preceding positive bar height through unoccupied columns and
-the remaining chart tail using a dim color, while observed volume, aggregation,
-statistics, and scaling remain unchanged.
+layer repeats the preceding positive bar height through unoccupied columns only
+as far as the rendered price trace using a dim color, so an ongoing session's
+future tail stays blank. Observed volume, aggregation, statistics, and scaling
+remain unchanged.
 
 A Braille canvas renders the thin price trace over a per-cell RGB area fill,
 with price and range-aware date scales. The fill samples the same two
