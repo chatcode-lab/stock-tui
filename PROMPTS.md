@@ -1549,6 +1549,48 @@ five-platform build-only preflight, verifies signing and notarization for both
 macOS architectures, and publishes platform archives with a shared checksum
 manifest from the annotated release tag.
 
+## 56. Bound Ongoing Volume Trails and Add Company Context
+
+> For an ongoing chart, stop the dim volume trail at the end of the upper price
+> trace instead of filling the future session tail.
+>
+> Also show a brief company description in detailed ticker views when the
+> terminal has enough room.
+
+**Committed changes**
+
+- [`c1d5ede` - Refine ongoing charts and company context][commit-c1d5ede]
+
+**Summary**
+
+Synthetic volume columns now stop at the last rendered price column, while
+completed ranges still reach their natural endpoint. The roomy detail layout
+uses its existing company panel for concise issuer context without reducing
+compact-chart space. Fresh catalogs join issuer SIC codes to official SEC
+taxonomy labels through one versioned taxonomy document; older schema-v2
+catalogs remain valid and use a clean exchange, SIC, and sector fallback.
+Catalog and release workflows reject unsafe or missing labels in newly
+published artifacts.
+
+## 57. Publish the Catalog and Release 0.2.5
+
+> Push the completed changes, publish the enriched catalog, and ship a new
+> release.
+
+**Committed changes**
+
+- [`c1d5ede` - Refine ongoing charts and company context][commit-c1d5ede]
+- [`07cdf18` - Prepare stock-tui 0.2.5][commit-07cdf18]
+- [`v0.2.5` release][release-v0.2.5]
+
+**Summary**
+
+The release sequence pushes the reviewed implementation and version metadata,
+publishes and verifies the enriched SEC catalog, and then runs the five-platform
+build-only preflight. The annotated `v0.2.5` tag publishes Linux, Windows, and
+signed/notarized Intel and Apple Silicon macOS archives plus a shared checksum
+manifest only after every release job succeeds.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1618,6 +1660,8 @@ implementation work.
 [commit-4fa796a]: https://github.com/chatcode-lab/stock-tui/commit/4fa796a1660c5d546e571baf2ebc538a9da83745
 [commit-6764296]: https://github.com/chatcode-lab/stock-tui/commit/67642963c1a03bb0cf41d549e9a63da04db2001d
 [commit-042d825]: https://github.com/chatcode-lab/stock-tui/commit/042d825bdd090298f262992335beedb196589c2c
+[commit-c1d5ede]: https://github.com/chatcode-lab/stock-tui/commit/c1d5ede766aea9542fc383a6528b73d470eab60b
+[commit-07cdf18]: https://github.com/chatcode-lab/stock-tui/commit/07cdf189d07974baf5ed1fe8b3e13729dce5b036
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1634,3 +1678,4 @@ implementation work.
 [release-v0.2.2]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.2
 [release-v0.2.3]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.3
 [release-v0.2.4]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.4
+[release-v0.2.5]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.5
