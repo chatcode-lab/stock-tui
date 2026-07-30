@@ -1635,6 +1635,24 @@ preserve the builder snapshot independently of GitHub Actions cache retention,
 while runtime clients continue to receive descriptions only through the compact
 catalog.
 
+## 60. Publish the Enriched Catalog
+
+> Push the completed company-profile changes and run the catalog publication.
+
+**Committed changes**
+
+- [`d7d0dea` - Enrich durable company profiles][commit-d7d0dea]
+- [`9d04968` - Document company profile prompts][commit-9d04968]
+- [Successful catalog publication][catalog-run-30578835793]
+
+**Summary**
+
+The reviewed implementation and prompt history were pushed to `main`, then the
+catalog workflow ran with a full profile refresh. It published and independently
+verified 1,877 catalog companies, 985 enriched descriptions, 597 enriched
+top-900 companies, and the durable positive/negative R2 profile snapshot. The
+published catalog payload also matched its manifest size and SHA-256 digest.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1707,6 +1725,8 @@ implementation work.
 [commit-c1d5ede]: https://github.com/chatcode-lab/stock-tui/commit/c1d5ede766aea9542fc383a6528b73d470eab60b
 [commit-07cdf18]: https://github.com/chatcode-lab/stock-tui/commit/07cdf189d07974baf5ed1fe8b3e13729dce5b036
 [commit-d7d0dea]: https://github.com/chatcode-lab/stock-tui/commit/d7d0dea6378cb96aad93ff0538c869ee8f7c44b5
+[commit-9d04968]: https://github.com/chatcode-lab/stock-tui/commit/9d049685326e523f80aebed496b26f7d4b5e293e
+[catalog-run-30578835793]: https://github.com/chatcode-lab/stock-tui/actions/runs/30578835793
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
