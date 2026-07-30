@@ -13,7 +13,7 @@ omitted. Attached StockTouch and work-in-progress screenshots are described
 but not republished here. Every commit link is immutable; links into private
 infrastructure repositories require collaborator access.
 
-The chronology covers product-development prompts through the `v0.2.4`
+The chronology covers product-development prompts through the `v0.2.5`
 release, including the provider, onboarding, market-cap, SEC catalog, private
 development-provider, UI refinement, and signed distribution work. It excludes
 session-management instructions and this document's own editorial requests.
@@ -1591,6 +1591,50 @@ build-only preflight. The annotated `v0.2.5` tag publishes Linux, Windows, and
 signed/notarized Intel and Apple Silicon macOS archives plus a shared checksum
 manifest only after every release job succeeds.
 
+## 58. Replace Classification Copy with Useful Company Context
+
+> Is "listed on this exchange and classified by the SEC in this industry" the
+> most complete company description available? If it is, make the wording more
+> human-friendly and precise. If the SEC does not provide a real introduction,
+> investigate a better source.
+
+**Committed changes**
+
+- [`d7d0dea` - Enrich durable company profiles][commit-d7d0dea]
+
+**Summary**
+
+The catalog now enriches issuers with concise CC0 Wikidata descriptions and
+industry facts matched strictly by SEC CIK. The client prefers that context,
+then presents the exchange, symbol, and SIC industry as separate facts; missing
+or ambiguous mappings use a readable classification fallback. Input
+validation, source provenance, coverage gates, responsive detail layout, and
+documentation keep the enrichment safe and explicit. The longer-term
+issuer-authored source remains the business section of the latest annual SEC
+filing.
+
+## 59. Cache Slow-Changing Company Introductions
+
+> Store introductions for every ticker until the next intentional update.
+> Company descriptions should rarely change substantially, so full enrichment
+> can be a heavier task that runs much less often than the normal catalog
+> update.
+
+**Committed changes**
+
+- [`d7d0dea` - Enrich durable company profiles][commit-d7d0dea]
+
+**Summary**
+
+Catalog generation now keeps a bounded, versioned per-CIK snapshot of both
+successful and empty profile lookups. Daily publications query only new,
+materially renamed, or algorithm-stale issuers; the monthly or manually
+requested full pass bypasses query caches while retaining last-known-good
+profiles during transient omissions. Stable and content-addressed R2 objects
+preserve the builder snapshot independently of GitHub Actions cache retention,
+while runtime clients continue to receive descriptions only through the compact
+catalog.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1662,6 +1706,7 @@ implementation work.
 [commit-042d825]: https://github.com/chatcode-lab/stock-tui/commit/042d825bdd090298f262992335beedb196589c2c
 [commit-c1d5ede]: https://github.com/chatcode-lab/stock-tui/commit/c1d5ede766aea9542fc383a6528b73d470eab60b
 [commit-07cdf18]: https://github.com/chatcode-lab/stock-tui/commit/07cdf189d07974baf5ed1fe8b3e13729dce5b036
+[commit-d7d0dea]: https://github.com/chatcode-lab/stock-tui/commit/d7d0dea6378cb96aad93ff0538c869ee8f7c44b5
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
