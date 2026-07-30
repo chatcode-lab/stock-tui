@@ -18,6 +18,7 @@ import math
 import os
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,6 +31,10 @@ from typing import Any, Iterable
 
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
+WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
+WIKIDATA_LICENSE_URL = (
+    "https://creativecommons.org/publicdomain/zero/1.0/"
+)
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 SIC_TAXONOMY_DOC_URL = (
     "https://xbrl.sec.gov/sic/{year}/sic-{year}_doc.xsd"
@@ -74,6 +79,41 @@ MAX_WEIGHTED_FALLBACK_OVERRIDE_DAYS = 185
 MAX_SHARE_FACT_AGE_DAYS = 550
 MAX_UNREVIEWED_IMPLIED_SHARE_PRICE = 2_000
 MAX_SIC_DESCRIPTION_LENGTH = 160
+MAX_COMPANY_DESCRIPTION_LENGTH = 480
+MAX_WIKIDATA_ITEM_LABEL_LENGTH = 200
+MAX_WIKIDATA_INDUSTRY_LABEL_LENGTH = 120
+MAX_WIKIDATA_INDUSTRIES = 4
+WIKIDATA_QUERY_BATCH_SIZE = 100
+WIKIDATA_REQUESTS_PER_SECOND = 1.0
+WIKIDATA_PROFILE_STORE_SCHEMA_VERSION = 1
+WIKIDATA_PROFILE_ALGORITHM_VERSION = 1
+WIKIDATA_PROFILE_STORE_FILENAME = "wikidata-company-profiles-v1.json"
+MAX_WIKIDATA_PROFILE_STORE_ENTRIES = 25_000
+MAX_WIKIDATA_PROFILE_STORE_BYTES = 64 * 1024 * 1024
+GENERIC_WIKIDATA_DESCRIPTIONS = frozenset(
+    {
+        "american company",
+        "american corporation",
+        "business",
+        "company",
+        "corporation",
+        "enterprise",
+        "organization",
+        "private company",
+        "public company",
+    }
+)
+PROMOTIONAL_WIKIDATA_PHRASES = (
+    "best in class",
+    "cutting edge",
+    "global leader",
+    "innovative",
+    "leading",
+    "premier",
+    "transformative",
+    "world class",
+    "world leading",
+)
 LINK_NAMESPACE = "http://www.xbrl.org/2003/linkbase"
 XLINK_NAMESPACE = "http://www.w3.org/1999/xlink"
 XBRL_DOCUMENTATION_ROLE = "http://www.xbrl.org/2003/role/documentation"
@@ -364,6 +404,26 @@ class SharesFact:
     component_multipliers: tuple[float, ...] = ()
 
 
+@dataclass(frozen=True)
+class CompanyProfile:
+    description: str
+    source_url: str
+    item_id: str
+    item_label: str
+    industries: tuple[str, ...]
+    retrieved_at: str | None = None
+
+
+@dataclass(frozen=True)
+class CompanyProfileStoreEntry:
+    issuer_name: str
+    issuer_key: str
+    retrieved_at: str
+    last_checked_at: str
+    algorithm_version: int
+    profile: CompanyProfile | None
+
+
 class SecClient:
     """Small SEC-only client with a persistent cache and global rate limit."""
 
@@ -453,6 +513,131 @@ class SecClient:
         raise AssertionError("unreachable")
 
 
+class WikidataClient:
+    """Wikidata SPARQL client with persistent query caching and retries."""
+
+    def __init__(self, user_agent: str, cache_dir: Path) -> None:
+        if not user_agent.strip():
+            raise ValueError("a descriptive Wikidata User-Agent is required")
+        self.user_agent = user_agent.strip()
+        self.cache_dir = cache_dir.expanduser()
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.minimum_interval = 1.0 / WIKIDATA_REQUESTS_PER_SECOND
+        self.last_request = 0.0
+        self.receipts: dict[str, str] = {}
+
+    def query(self, query: str, *, bypass_cache: bool = False) -> bytes:
+        cache_key = hashlib.sha256(
+            f"{WIKIDATA_SPARQL_URL}\0{query}".encode("utf-8")
+        ).hexdigest()
+        cache_path = self.cache_dir / f"{cache_key}.wikidata.json"
+        metadata_path = self.cache_dir / f"{cache_key}.meta.json"
+        if (
+            not bypass_cache
+            and cache_path.is_file()
+            and metadata_path.is_file()
+        ):
+            try:
+                payload = cache_path.read_bytes()
+                wikidata_result_bindings(payload)
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                retrieved_at = str(metadata["retrieved_at"])
+            except (OSError, KeyError, json.JSONDecodeError, RuntimeError):
+                cache_path.unlink(missing_ok=True)
+                metadata_path.unlink(missing_ok=True)
+            else:
+                self.receipts[cache_key] = retrieved_at
+                return payload
+
+        request_body = urllib.parse.urlencode({"query": query}).encode("utf-8")
+        for attempt in range(4):
+            elapsed = time.monotonic() - self.last_request
+            if elapsed < self.minimum_interval:
+                time.sleep(self.minimum_interval - elapsed)
+            request = urllib.request.Request(
+                WIKIDATA_SPARQL_URL,
+                data=request_body,
+                headers={
+                    "User-Agent": self.user_agent,
+                    "Accept": "application/sparql-results+json",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+                },
+                method="POST",
+            )
+            try:
+                self.last_request = time.monotonic()
+                with urllib.request.urlopen(request, timeout=90) as response:
+                    payload = response.read()
+                try:
+                    wikidata_result_bindings(payload)
+                except RuntimeError as error:
+                    if attempt == 3:
+                        raise RuntimeError(
+                            "Wikidata returned an invalid SPARQL response"
+                        ) from error
+                    time.sleep(2**attempt)
+                    continue
+                retrieved_at = utc_now()
+                temporary = cache_path.with_suffix(cache_path.suffix + ".tmp")
+                temporary.write_bytes(payload)
+                temporary.replace(cache_path)
+                metadata_path.write_text(
+                    json.dumps(
+                        {
+                            "url": WIKIDATA_SPARQL_URL,
+                            "retrieved_at": retrieved_at,
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                self.receipts[cache_key] = retrieved_at
+                return payload
+            except urllib.error.HTTPError as error:
+                if error.code not in {429, 500, 502, 503, 504} or attempt == 3:
+                    raise RuntimeError(
+                        f"Wikidata request failed ({error.code})"
+                    ) from error
+                retry_after = error.headers.get("Retry-After")
+                delay = (
+                    float(retry_after)
+                    if retry_after and retry_after.isdigit()
+                    else 2**attempt
+                )
+                time.sleep(min(delay, 30.0))
+            except urllib.error.URLError as error:
+                if attempt == 3:
+                    raise RuntimeError(
+                        "could not reach the Wikidata SPARQL endpoint"
+                    ) from error
+                time.sleep(2**attempt)
+        raise AssertionError("unreachable")
+
+    def receipt_for_query(self, query: str) -> str:
+        cache_key = hashlib.sha256(
+            f"{WIKIDATA_SPARQL_URL}\0{query}".encode("utf-8")
+        ).hexdigest()
+        try:
+            return self.receipts[cache_key]
+        except KeyError as error:
+            raise RuntimeError("Wikidata query has no retrieval receipt") from error
+
+    def source_record(
+        self, stored_receipts: Iterable[str] = ()
+    ) -> dict[str, str]:
+        receipts = [*self.receipts.values(), *stored_receipts]
+        if not receipts:
+            raise RuntimeError("Wikidata source has no successful query receipts")
+        return {
+            "id": "wikidata_company_profiles",
+            "url": WIKIDATA_SPARQL_URL,
+            "retrieved_at": max(receipts),
+            "license": "CC0-1.0",
+            "license_url": WIKIDATA_LICENSE_URL,
+        }
+
+
 def utc_now() -> str:
     return (
         datetime.now(timezone.utc)
@@ -472,6 +657,846 @@ def json_payload(payload: bytes | None, url: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RuntimeError(f"SEC returned unexpected JSON shape: {url}")
     return value
+
+
+def wikidata_result_bindings(payload: bytes) -> list[Any]:
+    try:
+        document = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("Wikidata returned invalid JSON") from error
+    if not isinstance(document, dict):
+        raise RuntimeError("Wikidata returned an unexpected JSON shape")
+    results = document.get("results")
+    bindings = results.get("bindings") if isinstance(results, dict) else None
+    if not isinstance(bindings, list):
+        raise RuntimeError("Wikidata returned an unexpected result shape")
+    return bindings
+
+
+def normalize_sec_cik(value: Any) -> str | None:
+    text = str(value).strip()
+    if not text or len(text) > 10 or not text.isascii() or not text.isdigit():
+        return None
+    cik = int(text)
+    if cik <= 0:
+        return None
+    return f"{cik:010d}"
+
+
+def normalize_text_label(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return " ".join(
+        "".join(
+            character if character.isalnum() else " "
+            for character in normalized
+        ).split()
+    )
+
+
+def normalize_issuer_label(value: str) -> str:
+    tokens = normalize_text_label(value).split()
+    legal_suffixes = {
+        ("ag",),
+        ("co",),
+        ("corp",),
+        ("corporation",),
+        ("inc",),
+        ("incorporated",),
+        ("limited",),
+        ("llc",),
+        ("llp",),
+        ("lp",),
+        ("ltd",),
+        ("nv",),
+        ("plc",),
+        ("sa",),
+        ("se",),
+        ("l", "l", "c"),
+        ("l", "l", "p"),
+        ("l", "p"),
+        ("n", "v"),
+        ("p", "l", "c"),
+        ("s", "a"),
+    }
+    while tokens:
+        matched = next(
+            (
+                suffix
+                for suffix in legal_suffixes
+                if len(tokens) >= len(suffix)
+                and tuple(tokens[-len(suffix) :]) == suffix
+            ),
+            None,
+        )
+        if matched is None:
+            break
+        del tokens[-len(matched) :]
+    return " ".join(tokens)
+
+
+def validated_wikidata_text(
+    value: Any,
+    location: str,
+    maximum_length: int,
+) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError(f"{location} must be text")
+    normalized = " ".join(value.split())
+    if (
+        not normalized
+        or len(normalized) > maximum_length
+        or any(
+            unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co", "Cn"}
+            for character in normalized
+        )
+    ):
+        raise RuntimeError(f"{location} is unsafe or too long")
+    return normalized
+
+
+def wikidata_item_id(value: Any) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError("Wikidata item URI must be text")
+    parsed = urllib.parse.urlparse(value)
+    path_prefix = "/entity/"
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname != "www.wikidata.org"
+        or not parsed.path.startswith(path_prefix)
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("Wikidata returned an invalid item URI")
+    item_id = parsed.path.removeprefix(path_prefix)
+    if (
+        len(item_id) < 2
+        or item_id[0] != "Q"
+        or not item_id[1:].isascii()
+        or not item_id[1:].isdigit()
+        or int(item_id[1:]) <= 0
+    ):
+        raise RuntimeError("Wikidata returned an invalid item identifier")
+    return item_id
+
+
+def wikidata_company_query(ciks: Iterable[str]) -> str:
+    raw_values: set[str] = set()
+    for value in ciks:
+        cik = normalize_sec_cik(value)
+        if cik is None:
+            raise ValueError(f"invalid SEC CIK for Wikidata query: {value}")
+        raw_values.add(cik)
+        raw_values.add(str(int(cik)))
+    if not raw_values:
+        raise ValueError("Wikidata query requires at least one SEC CIK")
+    values = " ".join(
+        f'"{value}"' for value in sorted(raw_values, key=lambda item: (int(item), item))
+    )
+    return f"""PREFIX schema: <http://schema.org/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+SELECT ?cik ?item ?itemLabel ?itemDescription ?industry ?industryLabel WHERE {{
+  VALUES ?cik {{ {values} }}
+  ?item wdt:P5531 ?cik;
+        rdfs:label ?itemLabel.
+  FILTER(LANG(?itemLabel) = "en")
+  OPTIONAL {{
+    ?item schema:description ?itemDescription.
+    FILTER(LANG(?itemDescription) = "en")
+  }}
+  OPTIONAL {{
+    ?item wdt:P452 ?industry.
+    ?industry rdfs:label ?industryLabel.
+    FILTER(LANG(?industryLabel) = "en")
+  }}
+}}
+ORDER BY ?cik ?item ?industry
+"""
+
+
+def sparql_binding_value(
+    binding: dict[str, Any], field: str, *, optional: bool = False
+) -> str | None:
+    value = binding.get(field)
+    if value is None and optional:
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get("value"), str):
+        raise RuntimeError(f"Wikidata result is missing a valid {field} binding")
+    return str(value["value"])
+
+
+def synthesize_company_description(
+    description: str | None,
+    industries: Iterable[str],
+) -> str | None:
+    base = description or ""
+    if base:
+        capitalized = base[0].upper() + base[1:]
+        if len(capitalized) <= MAX_COMPANY_DESCRIPTION_LENGTH:
+            base = capitalized
+        if (
+            base[-1] not in ".!?"
+            and len(base) < MAX_COMPANY_DESCRIPTION_LENGTH
+        ):
+            base += "."
+        normalized_base = normalize_text_label(base)
+        padded_base = f" {normalized_base} "
+        if normalized_base in GENERIC_WIKIDATA_DESCRIPTIONS or any(
+            f" {phrase} " in padded_base
+            for phrase in PROMOTIONAL_WIKIDATA_PHRASES
+        ):
+            base = ""
+
+    ordered = refined_industry_labels(base, industries)
+
+    if not base and not ordered:
+        return None
+    if not ordered:
+        return base
+
+    included: list[str] = []
+    for industry in ordered:
+        candidate_industries = [*included, industry]
+        suffix = "Focus: " + natural_language_list(candidate_industries) + "."
+        candidate = f"{base} {suffix}".strip()
+        if len(candidate) > MAX_COMPANY_DESCRIPTION_LENGTH:
+            break
+        included = candidate_industries
+    if not included:
+        return base or None
+    suffix = "Focus: " + natural_language_list(included) + "."
+    return f"{base} {suffix}".strip()
+
+
+def industry_meaning_tokens(value: str) -> frozenset[str]:
+    replacements = {
+        "batteries": "battery",
+        "banking": "bank",
+        "communications": "communication",
+        "electronics": "electronic",
+        "phones": "phone",
+        "pharmaceuticals": "pharmaceutical",
+        "semiconductors": "semiconductor",
+        "services": "service",
+        "technologies": "technology",
+    }
+    ignored = {"and", "for", "in", "of", "the", "to"}
+    return frozenset(
+        replacements.get(token, token)
+        for token in normalize_text_label(value).split()
+        if token not in ignored
+    )
+
+
+def display_industry_label(value: str) -> str | None:
+    words = value.split()
+    while words and normalize_text_label(words[-1]) in {
+        "industries",
+        "industry",
+        "sector",
+        "sectors",
+    }:
+        words.pop()
+    if (
+        len(words) >= 2
+        and normalize_text_label(words[0]) == "economics"
+        and normalize_text_label(words[1]) == "of"
+    ):
+        words = words[2:]
+    display = " ".join(words)
+    normalized = normalize_text_label(display)
+    if (
+        not normalized
+        or any(
+            token in {"classification", "ontology", "taxonomy"}
+            for token in normalized.split()
+        )
+    ):
+        return None
+    return {
+        "battery": "batteries",
+        "mobile phone": "mobile phones",
+        "pharmaceutical": "pharmaceuticals",
+        "semiconductor": "semiconductors",
+    }.get(normalized, display)
+
+
+def refined_industry_labels(
+    description: str | None,
+    industries: Iterable[str],
+) -> tuple[str, ...]:
+    description_tokens = industry_meaning_tokens(description or "")
+    candidates: dict[frozenset[str], str] = {}
+    for industry in industries:
+        display = display_industry_label(industry)
+        if display is None:
+            continue
+        tokens = industry_meaning_tokens(display)
+        if not tokens or tokens <= description_tokens:
+            continue
+        existing = candidates.get(tokens)
+        if existing is None or (
+            len(display),
+            normalize_text_label(display),
+            display,
+        ) < (
+            len(existing),
+            normalize_text_label(existing),
+            existing,
+        ):
+            candidates[tokens] = display
+
+    selected: list[tuple[frozenset[str], str]] = []
+    for tokens, display in sorted(
+        candidates.items(),
+        key=lambda item: (
+            -len(item[0]),
+            normalize_text_label(item[1]),
+            item[1],
+        ),
+    ):
+        if any(tokens <= selected_tokens for selected_tokens, _ in selected):
+            continue
+        selected.append((tokens, display))
+        if len(selected) == MAX_WIKIDATA_INDUSTRIES:
+            break
+    return tuple(
+        sorted(
+            (display for _, display in selected),
+            key=lambda value: (normalize_text_label(value), value),
+        )
+    )
+
+
+def natural_language_list(values: list[str]) -> str:
+    if not values:
+        raise ValueError("natural-language list cannot be empty")
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]} and {values[1]}"
+    return f"{', '.join(values[:-1])}, and {values[-1]}"
+
+
+def validated_retrieval_timestamp(value: Any, location: str) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError(f"{location} must be a UTC timestamp")
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as error:
+        raise RuntimeError(f"{location} must be a UTC timestamp") from error
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+        raise RuntimeError(f"{location} must be a UTC timestamp")
+    return value
+
+
+def validated_profile_algorithm_version(value: Any, location: str) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 1 <= value <= WIKIDATA_PROFILE_ALGORITHM_VERSION
+    ):
+        raise RuntimeError(f"{location} is unsupported")
+    return value
+
+
+def validated_stored_company_profile(
+    value: Any,
+    location: str,
+    retrieved_at: str,
+) -> CompanyProfile | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "description",
+        "source_url",
+        "item_id",
+        "item_label",
+        "industries",
+    }:
+        raise RuntimeError(f"{location} has an unexpected shape")
+    description = validated_wikidata_text(
+        value["description"],
+        f"{location} description",
+        MAX_COMPANY_DESCRIPTION_LENGTH,
+    )
+    item_id = validated_wikidata_text(
+        value["item_id"],
+        f"{location} item identifier",
+        32,
+    )
+    if (
+        len(item_id) < 2
+        or item_id[0] != "Q"
+        or not item_id[1:].isascii()
+        or not item_id[1:].isdigit()
+        or int(item_id[1:]) <= 0
+    ):
+        raise RuntimeError(f"{location} has an invalid item identifier")
+    source_url = validated_wikidata_text(
+        value["source_url"],
+        f"{location} source URL",
+        128,
+    )
+    if source_url != f"https://www.wikidata.org/wiki/{item_id}":
+        raise RuntimeError(f"{location} has a non-canonical source URL")
+    item_label = validated_wikidata_text(
+        value["item_label"],
+        f"{location} item label",
+        MAX_WIKIDATA_ITEM_LABEL_LENGTH,
+    )
+    raw_industries = value["industries"]
+    if (
+        not isinstance(raw_industries, list)
+        or len(raw_industries) > MAX_WIKIDATA_INDUSTRIES
+    ):
+        raise RuntimeError(f"{location} industries must be a bounded list")
+    industries = tuple(
+        validated_wikidata_text(
+            industry,
+            f"{location} industry {index}",
+            MAX_WIKIDATA_INDUSTRY_LABEL_LENGTH,
+        )
+        for index, industry in enumerate(raw_industries)
+    )
+    if tuple(
+        sorted(
+            set(industries),
+            key=lambda industry: (normalize_text_label(industry), industry),
+        )
+    ) != industries:
+        raise RuntimeError(f"{location} industries must be sorted and unique")
+    return CompanyProfile(
+        description=description,
+        source_url=source_url,
+        item_id=item_id,
+        item_label=item_label,
+        industries=industries,
+        retrieved_at=retrieved_at,
+    )
+
+
+def parse_company_profile_store(
+    payload: bytes,
+    location: str,
+) -> dict[str, CompanyProfileStoreEntry]:
+    if len(payload) > MAX_WIKIDATA_PROFILE_STORE_BYTES:
+        raise RuntimeError(f"{location} exceeds the profile-store size limit")
+    try:
+        document = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"{location} is invalid JSON") from error
+    if not isinstance(document, dict) or set(document) != {
+        "schema_version",
+        "algorithm_version",
+        "entries",
+    }:
+        raise RuntimeError(f"{location} has an unexpected shape")
+    if document["schema_version"] != WIKIDATA_PROFILE_STORE_SCHEMA_VERSION:
+        raise RuntimeError(f"{location} uses an unsupported schema version")
+    validated_profile_algorithm_version(
+        document["algorithm_version"],
+        f"{location} algorithm version",
+    )
+    raw_entries = document["entries"]
+    if (
+        not isinstance(raw_entries, dict)
+        or len(raw_entries) > MAX_WIKIDATA_PROFILE_STORE_ENTRIES
+    ):
+        raise RuntimeError(f"{location} entries must be a bounded object")
+
+    entries: dict[str, CompanyProfileStoreEntry] = {}
+    for raw_cik, value in raw_entries.items():
+        cik = normalize_sec_cik(raw_cik)
+        entry_location = f"{location} entry {raw_cik}"
+        if cik is None or cik != raw_cik:
+            raise RuntimeError(f"{entry_location} has a non-canonical SEC CIK")
+        if not isinstance(value, dict) or set(value) != {
+            "issuer_name",
+            "issuer_key",
+            "retrieved_at",
+            "last_checked_at",
+            "algorithm_version",
+            "profile",
+        }:
+            raise RuntimeError(f"{entry_location} has an unexpected shape")
+        issuer_name = validated_wikidata_text(
+            value["issuer_name"],
+            f"{entry_location} issuer name",
+            MAX_WIKIDATA_ITEM_LABEL_LENGTH,
+        )
+        issuer_key = validated_wikidata_text(
+            value["issuer_key"],
+            f"{entry_location} issuer key",
+            MAX_WIKIDATA_ITEM_LABEL_LENGTH,
+        )
+        if issuer_key != normalize_issuer_label(issuer_name):
+            raise RuntimeError(f"{entry_location} has an invalid issuer key")
+        retrieved_at = validated_retrieval_timestamp(
+            value["retrieved_at"],
+            f"{entry_location} retrieval time",
+        )
+        last_checked_at = validated_retrieval_timestamp(
+            value["last_checked_at"],
+            f"{entry_location} last-check time",
+        )
+        if last_checked_at < retrieved_at:
+            raise RuntimeError(
+                f"{entry_location} was checked before its stored result"
+            )
+        algorithm_version = validated_profile_algorithm_version(
+            value["algorithm_version"],
+            f"{entry_location} algorithm version",
+        )
+        entries[cik] = CompanyProfileStoreEntry(
+            issuer_name=issuer_name,
+            issuer_key=issuer_key,
+            retrieved_at=retrieved_at,
+            last_checked_at=last_checked_at,
+            algorithm_version=algorithm_version,
+            profile=validated_stored_company_profile(
+                value["profile"],
+                f"{entry_location} profile",
+                retrieved_at,
+            ),
+        )
+    return entries
+
+
+def load_company_profile_store(
+    path: Path,
+) -> dict[str, CompanyProfileStoreEntry]:
+    if not path.exists():
+        return {}
+    try:
+        if path.stat().st_size > MAX_WIKIDATA_PROFILE_STORE_BYTES:
+            raise RuntimeError(f"{path} exceeds the profile-store size limit")
+        payload = path.read_bytes()
+    except OSError as error:
+        raise RuntimeError(f"could not read company-profile store {path}") from error
+    return parse_company_profile_store(payload, str(path))
+
+
+def bounded_company_profile_store(
+    entries: dict[str, CompanyProfileStoreEntry],
+    current_ciks: Iterable[str],
+) -> dict[str, CompanyProfileStoreEntry]:
+    if len(entries) <= MAX_WIKIDATA_PROFILE_STORE_ENTRIES:
+        return dict(entries)
+    required = {str(cik) for cik in current_ciks}
+    if len(required) > MAX_WIKIDATA_PROFILE_STORE_ENTRIES:
+        raise RuntimeError("current issuer universe exceeds the profile-store limit")
+    retained = {cik: entries[cik] for cik in sorted(required) if cik in entries}
+    historical = sorted(
+        (
+            (cik, entry)
+            for cik, entry in entries.items()
+            if cik not in required
+        ),
+        key=lambda item: (item[1].last_checked_at, item[0]),
+        reverse=True,
+    )
+    remaining = MAX_WIKIDATA_PROFILE_STORE_ENTRIES - len(retained)
+    retained.update(historical[:remaining])
+    return retained
+
+
+def serialize_company_profile_store(
+    entries: dict[str, CompanyProfileStoreEntry],
+) -> bytes:
+    serialized_entries: dict[str, Any] = {}
+    for cik in sorted(entries, key=int):
+        entry = entries[cik]
+        profile = entry.profile
+        serialized_entries[cik] = {
+            "issuer_name": entry.issuer_name,
+            "issuer_key": entry.issuer_key,
+            "retrieved_at": entry.retrieved_at,
+            "last_checked_at": entry.last_checked_at,
+            "algorithm_version": entry.algorithm_version,
+            "profile": (
+                None
+                if profile is None
+                else {
+                    "description": profile.description,
+                    "source_url": profile.source_url,
+                    "item_id": profile.item_id,
+                    "item_label": profile.item_label,
+                    "industries": list(profile.industries),
+                }
+            ),
+        }
+    document = {
+        "schema_version": WIKIDATA_PROFILE_STORE_SCHEMA_VERSION,
+        "algorithm_version": WIKIDATA_PROFILE_ALGORITHM_VERSION,
+        "entries": serialized_entries,
+    }
+    payload = (
+        json.dumps(document, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    ).encode("utf-8")
+    parse_company_profile_store(payload, "generated company-profile store")
+    return payload
+
+
+def write_company_profile_store(
+    path: Path,
+    entries: dict[str, CompanyProfileStoreEntry],
+    current_ciks: Iterable[str],
+) -> dict[str, CompanyProfileStoreEntry]:
+    bounded = bounded_company_profile_store(entries, current_ciks)
+    payload = serialize_company_profile_store(bounded)
+    atomic_write_bytes(path, payload)
+    return bounded
+
+
+def profile_with_retrieval_time(
+    profile: CompanyProfile,
+    retrieved_at: str,
+) -> CompanyProfile:
+    return CompanyProfile(
+        description=profile.description,
+        source_url=profile.source_url,
+        item_id=profile.item_id,
+        item_label=profile.item_label,
+        industries=profile.industries,
+        retrieved_at=retrieved_at,
+    )
+
+
+def parse_wikidata_company_profiles(
+    payload: bytes,
+    expected_issuers: dict[str, str],
+) -> dict[str, CompanyProfile]:
+    expected: dict[str, str] = {}
+    for raw_cik, name in expected_issuers.items():
+        cik = normalize_sec_cik(raw_cik)
+        if cik is None:
+            raise ValueError(f"invalid expected SEC CIK: {raw_cik}")
+        expected[cik] = validated_wikidata_text(
+            name, f"SEC issuer {cik} name", MAX_WIKIDATA_ITEM_LABEL_LENGTH
+        )
+
+    bindings = wikidata_result_bindings(payload)
+
+    items: dict[str, dict[str, dict[str, Any]]] = {}
+    for row_index, value in enumerate(bindings):
+        if not isinstance(value, dict):
+            raise RuntimeError(f"Wikidata result row {row_index} is not an object")
+        raw_cik = sparql_binding_value(value, "cik")
+        cik = normalize_sec_cik(raw_cik)
+        if cik is None or cik not in expected:
+            raise RuntimeError(
+                f"Wikidata returned an unexpected SEC CIK in row {row_index}"
+            )
+        item_uri = sparql_binding_value(value, "item")
+        item_id = wikidata_item_id(item_uri)
+        item_label = validated_wikidata_text(
+            sparql_binding_value(value, "itemLabel"),
+            f"Wikidata {item_id} label",
+            MAX_WIKIDATA_ITEM_LABEL_LENGTH,
+        )
+        raw_description = sparql_binding_value(
+            value, "itemDescription", optional=True
+        )
+        description = (
+            None
+            if raw_description is None
+            else validated_wikidata_text(
+                raw_description,
+                f"Wikidata {item_id} description",
+                MAX_COMPANY_DESCRIPTION_LENGTH,
+            )
+        )
+        raw_industry = sparql_binding_value(value, "industryLabel", optional=True)
+        industry = (
+            None
+            if raw_industry is None
+            else validated_wikidata_text(
+                raw_industry,
+                f"Wikidata {item_id} industry",
+                MAX_WIKIDATA_INDUSTRY_LABEL_LENGTH,
+            )
+        )
+
+        record = items.setdefault(cik, {}).setdefault(
+            item_id,
+            {
+                "label": item_label,
+                "descriptions": set(),
+                "industries": set(),
+            },
+        )
+        if record["label"] != item_label:
+            raise RuntimeError(f"Wikidata {item_id} has conflicting English labels")
+        if description is not None:
+            record["descriptions"].add(description)
+        if industry is not None:
+            record["industries"].add(industry)
+
+    profiles: dict[str, CompanyProfile] = {}
+    for cik in sorted(items):
+        candidates = items[cik]
+        item_ids = sorted(candidates, key=lambda item: int(item[1:]))
+        if len(item_ids) == 1:
+            selected_id = item_ids[0]
+        else:
+            issuer_key = normalize_issuer_label(expected[cik])
+            exact_matches = [
+                item_id
+                for item_id in item_ids
+                if normalize_issuer_label(candidates[item_id]["label"])
+                == issuer_key
+            ]
+            if len(exact_matches) != 1:
+                continue
+            selected_id = exact_matches[0]
+
+        selected = candidates[selected_id]
+        descriptions = sorted(selected["descriptions"])
+        if len(descriptions) > 1:
+            raise RuntimeError(
+                f"Wikidata {selected_id} has conflicting English descriptions"
+            )
+        raw_industries = tuple(
+            sorted(
+                selected["industries"],
+                key=lambda value: (normalize_text_label(value), value),
+            )
+        )
+        industries = refined_industry_labels(
+            descriptions[0] if descriptions else None,
+            raw_industries,
+        )
+        description = synthesize_company_description(
+            descriptions[0] if descriptions else None,
+            industries,
+        )
+        if description is None:
+            continue
+        profiles[cik] = CompanyProfile(
+            description=description,
+            source_url=f"https://www.wikidata.org/wiki/{selected_id}",
+            item_id=selected_id,
+            item_label=selected["label"],
+            industries=industries,
+        )
+    return profiles
+
+
+def load_wikidata_company_profiles(
+    client: WikidataClient,
+    companies: list[dict[str, Any]],
+    *,
+    refresh: bool = False,
+) -> tuple[dict[str, CompanyProfile], dict[str, str]]:
+    expected: dict[str, str] = {}
+    for company in companies:
+        cik = normalize_sec_cik(company["cik"])
+        if cik is None:
+            raise RuntimeError("catalog company has an invalid SEC CIK")
+        expected[cik] = validated_wikidata_text(
+            company["name"],
+            f"SEC issuer {cik} name",
+            MAX_WIKIDATA_ITEM_LABEL_LENGTH,
+        )
+    ordered_ciks = sorted(expected, key=int)
+    store_path = client.cache_dir / WIKIDATA_PROFILE_STORE_FILENAME
+    entries = load_company_profile_store(store_path)
+    query_ciks = [
+        cik
+        for cik in ordered_ciks
+        if refresh
+        or (entry := entries.get(cik)) is None
+        or entry.issuer_key != normalize_issuer_label(expected[cik])
+        or entry.algorithm_version != WIKIDATA_PROFILE_ALGORITHM_VERSION
+    ]
+
+    for start in range(0, len(query_ciks), WIKIDATA_QUERY_BATCH_SIZE):
+        batch = query_ciks[start : start + WIKIDATA_QUERY_BATCH_SIZE]
+        query = wikidata_company_query(batch)
+        parsed = parse_wikidata_company_profiles(
+            client.query(query, bypass_cache=refresh),
+            {cik: expected[cik] for cik in batch},
+        )
+        checked_at = client.receipt_for_query(query)
+        for cik in batch:
+            previous = entries.get(cik)
+            profile = parsed.get(cik)
+            if profile is not None:
+                retrieved_at = checked_at
+                stored_profile = profile_with_retrieval_time(
+                    profile,
+                    retrieved_at,
+                )
+            elif (
+                previous is not None
+                and previous.profile is not None
+                and previous.algorithm_version
+                == WIKIDATA_PROFILE_ALGORITHM_VERSION
+            ):
+                retrieved_at = previous.retrieved_at
+                stored_profile = previous.profile
+            else:
+                retrieved_at = checked_at
+                stored_profile = None
+            entries[cik] = CompanyProfileStoreEntry(
+                issuer_name=expected[cik],
+                issuer_key=normalize_issuer_label(expected[cik]),
+                retrieved_at=retrieved_at,
+                last_checked_at=checked_at,
+                algorithm_version=WIKIDATA_PROFILE_ALGORITHM_VERSION,
+                profile=stored_profile,
+            )
+
+    if query_ciks:
+        entries = write_company_profile_store(
+            store_path,
+            entries,
+            ordered_ciks,
+        )
+
+    current_entries = {
+        cik: entries[cik]
+        for cik in ordered_ciks
+        if cik in entries
+        and entries[cik].issuer_key == normalize_issuer_label(expected[cik])
+        and entries[cik].algorithm_version
+        == WIKIDATA_PROFILE_ALGORITHM_VERSION
+    }
+    profiles = {
+        cik: entry.profile
+        for cik, entry in current_entries.items()
+        if entry.profile is not None
+    }
+    return profiles, client.source_record(
+        entry.last_checked_at for entry in current_entries.values()
+    )
+
+
+def enrich_companies_with_profiles(
+    companies: list[dict[str, Any]],
+    profiles: dict[str, CompanyProfile],
+) -> None:
+    for company in companies:
+        profile = profiles.get(str(company["cik"]))
+        if profile is None:
+            continue
+        company["company_description"] = profile.description
+        company["description_source"] = "wikidata"
+        company["description_source_url"] = profile.source_url
+        company["provenance"]["company_description"] = {
+            "source": "wikidata",
+            "url": profile.source_url,
+            "item": profile.item_id,
+            "item_label": profile.item_label,
+            "industries": list(profile.industries),
+            "license": "CC0-1.0",
+        }
+        if profile.retrieved_at is not None:
+            company["provenance"]["company_description"]["retrieved_at"] = (
+                profile.retrieved_at
+            )
 
 
 def load_sic_descriptions(
@@ -2908,6 +3933,8 @@ def validate_catalog(
             "catalog SIC description coverage regression: "
             + ", ".join(missing_sic_descriptions)
         )
+    for index, company in enumerate(companies):
+        runtime_company_profile_fields(company, f"catalog company {index}")
     for sector in SECTORS:
         sector_rows = [company for company in companies if company["sector"] == sector]
         ranks = [company["rank"] for company in sector_rows]
@@ -2997,6 +4024,7 @@ def runtime_company(value: Any, index: int) -> dict[str, Any]:
         ):
             raise RuntimeError(f"{location} SIC description is invalid")
         company["sic_description"] = sic_description
+    company.update(runtime_company_profile_fields(value, location))
     provenance = required_field(value, "provenance", location)
     if not isinstance(provenance, dict):
         raise RuntimeError(f"{location} provenance must be an object")
@@ -3023,6 +4051,59 @@ def runtime_company(value: Any, index: int) -> dict[str, Any]:
         ),
     }
     return company
+
+
+def runtime_company_profile_fields(
+    value: dict[str, Any], location: str
+) -> dict[str, str]:
+    fields = (
+        "company_description",
+        "description_source",
+        "description_source_url",
+    )
+    present = [field for field in fields if field in value and value[field] is not None]
+    if not present:
+        return {}
+    if len(present) != len(fields):
+        raise RuntimeError(
+            f"{location} company description and source fields must all be present"
+        )
+
+    description = validated_wikidata_text(
+        value["company_description"],
+        f"{location} company description",
+        MAX_COMPANY_DESCRIPTION_LENGTH,
+    )
+    source = value["description_source"]
+    if source != "wikidata":
+        raise RuntimeError(f"{location} company description source is invalid")
+    source_url = value["description_source_url"]
+    if not isinstance(source_url, str):
+        raise RuntimeError(f"{location} company description source URL is invalid")
+    parsed = urllib.parse.urlparse(source_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "www.wikidata.org"
+        or not parsed.path.startswith("/wiki/Q")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError(f"{location} company description source URL is invalid")
+    item_id = parsed.path.removeprefix("/wiki/")
+    if (
+        len(item_id) < 2
+        or not item_id[1:].isascii()
+        or not item_id[1:].isdigit()
+        or int(item_id[1:]) <= 0
+        or parsed.path != f"/wiki/{item_id}"
+    ):
+        raise RuntimeError(f"{location} company description source URL is invalid")
+    return {
+        "company_description": description,
+        "description_source": source,
+        "description_source_url": source_url,
+    }
 
 
 def runtime_fact_provenance(
@@ -3211,6 +4292,14 @@ def parse_args() -> argparse.Namespace:
             "requires --artifact-output"
         ),
     )
+    parser.add_argument(
+        "--refresh-company-profiles",
+        action="store_true",
+        help=(
+            "re-query Wikidata profiles for every current SEC CIK while retaining "
+            "cached issuers that are no longer in the current universe"
+        ),
+    )
     arguments = parser.parse_args()
     if not arguments.package_only and not arguments.user_agent:
         parser.error(
@@ -3218,6 +4307,8 @@ def parse_args() -> argparse.Namespace:
         )
     if arguments.package_only and arguments.artifact_output is None:
         parser.error("--package-only requires --artifact-output")
+    if arguments.package_only and arguments.refresh_company_profiles:
+        parser.error("--package-only cannot refresh company profiles")
     if (
         arguments.artifact_manifest_output is not None
         and arguments.artifact_output is None
@@ -3261,6 +4352,7 @@ def main() -> int:
         return 0
 
     client = SecClient(args.user_agent, args.requests_per_second, args.cache_dir)
+    wikidata_client = WikidataClient(args.user_agent, args.cache_dir)
     generated_at = utc_now()
     generated_on = date.fromisoformat(generated_at[:10])
     reviewed_policies = load_reviewed_share_policies()
@@ -3378,6 +4470,14 @@ def main() -> int:
         latest_submissions,
         cover_share_components,
     )
+    company_profiles, company_profile_source = (
+        load_wikidata_company_profiles(
+            wikidata_client,
+            companies,
+            refresh=args.refresh_company_profiles,
+        )
+    )
+    enrich_companies_with_profiles(companies, company_profiles)
     validate_catalog(companies, unresolved_reasons)
 
     sources = [source_record(identity_source, TICKERS_URL, client)]
@@ -3389,6 +4489,7 @@ def main() -> int:
     sources.extend(fsds_shares_sources)
     sources.extend(submission_sources)
     sources.extend(cover_sources)
+    sources.append(company_profile_source)
     coverage = share_coverage(companies, unresolved_reasons)
     catalog = {
         "schema_version": SCHEMA_VERSION,
@@ -3419,6 +4520,23 @@ def main() -> int:
                 "Official SEC SIC taxonomy documentation labels for the latest "
                 "available Financial Statement Data Set year"
             ),
+            "company_descriptions": {
+                "source": (
+                    "English Wikidata item descriptions and industry labels "
+                    "matched by SEC CIK"
+                ),
+                "license": "CC0-1.0",
+                "profile_algorithm_version": (
+                    WIKIDATA_PROFILE_ALGORITHM_VERSION
+                ),
+                "refresh_policy": (
+                    "Reuse positive and empty per-CIK results; fetch missing or "
+                    "materially renamed issuers; refresh all only when requested"
+                ),
+                "covered_companies": len(company_profiles),
+                "catalog_companies": len(companies),
+                "maximum_length": MAX_COMPANY_DESCRIPTION_LENGTH,
+            },
             "quality_values": {
                 "public_float_and_shares": (
                     "public float and an SEC shares estimate were available"
@@ -3455,7 +4573,8 @@ def main() -> int:
     )
     temporary.replace(args.output)
     print(
-        f"wrote {len(companies)} companies from {len(sources)} SEC sources to {args.output}",
+        f"wrote {len(companies)} companies from {len(sources)} catalog sources "
+        f"to {args.output}",
         file=sys.stderr,
     )
     if args.artifact_output is not None:

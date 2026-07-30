@@ -1,8 +1,8 @@
-# SEC Catalog Publishing
+# Issuer Catalog Publishing
 
-This directory publishes only the compact SEC-derived issuer catalog. It does
-not receive, cache, or redistribute market-provider prices, bars, volume, news,
-or credentials.
+This directory publishes only the compact SEC-derived issuer catalog and its
+CC0 Wikidata company-context enrichment. It does not receive, cache, or
+redistribute market-provider prices, bars, volume, news, or credentials.
 
 ## Public Objects
 
@@ -13,12 +13,15 @@ The `stock-tui-catalog` R2 bucket is exposed through the custom domain
 | --- | --- | --- |
 | `/catalog/sec-catalog.json` | Stable compact catalog, transported with gzip content encoding | 5 minutes, with one-hour stale reuse |
 | `/catalog/sec-catalog.manifest.json` | Stable artifact checksum and metadata | 5 minutes, with one-hour stale reuse |
+| `/catalog/wikidata-company-profiles-v1.json` | Durable builder snapshot of positive and empty per-CIK profile lookups | Must revalidate |
 | `/catalog/versions/<version>/<timestamp>-<sha>.json` | Immutable compact catalog | 1 year, immutable |
 | Matching `.manifest.json` | Immutable checksum and metadata | 1 year, immutable |
+| `/catalog/profile-versions/v1-a1/<sha>.json` | Immutable company-profile snapshot | 1 year, immutable |
 
-The object named `.json` contains deterministic gzip bytes. R2 metadata sets
-`Content-Type: application/json` and `Content-Encoding: gzip`, so normal HTTP
-clients receive JSON after transparent decompression.
+The `sec-catalog.json` object contains deterministic gzip bytes. R2 metadata
+sets `Content-Type: application/json` and `Content-Encoding: gzip`, so normal
+HTTP clients receive JSON after transparent decompression. Profile snapshots
+are ordinary UTF-8 JSON used only by the catalog builder.
 
 ## One-Time Provisioning
 
@@ -66,8 +69,9 @@ lifetimes set by the publisher.
 
 ## Initial Publication
 
-Build a fresh audit catalog with a truthful SEC contact identity, package it,
-and run the same validated publisher used by CI:
+Build a fresh audit catalog with a truthful application/contact identity,
+package it, and run the same validated publisher used by CI. The builder uses
+that descriptive User-Agent for both SEC and Wikimedia requests:
 
 ```bash
 export SEC_USER_AGENT="stock-tui catalog <maintainer-contact>"
@@ -79,7 +83,8 @@ python3 tools/build_sec_catalog.py \
 infra/cloudflare/publish-catalog.sh \
   build/catalog/sec_universe.json \
   build/catalog/sec-catalog.json.gz \
-  build/catalog/sec-catalog.manifest.json
+  build/catalog/sec-catalog.manifest.json \
+  ~/.cache/stock-tui/sec-catalog/wikidata-company-profiles-v1.json
 ```
 
 Use `CATALOG_PUBLISH_DRY_RUN=1` to execute every local validation without
@@ -88,15 +93,18 @@ uploading.
 ## Scheduled Publication
 
 `.github/workflows/catalog-publish.yml` runs daily at 06:17 UTC and supports
-manual dispatch. Scheduled runs remain skipped until the repository variable
-`CATALOG_PUBLISH_ENABLED` is set to `true`. Configure these GitHub Actions
-repository secrets:
+manual dispatch. Ordinary runs reuse the durable per-CIK company-profile
+snapshot and fetch only previously unseen or materially renamed issuers. The
+first scheduled run of each month refreshes every current profile; a manual
+run can do the same by selecting `refresh_company_profiles`. Scheduled runs
+remain skipped until the repository variable `CATALOG_PUBLISH_ENABLED` is set
+to `true`. Configure these GitHub Actions repository secrets:
 
 | Secret | Required scope |
 | --- | --- |
 | `CLOUDFLARE_ACCOUNT_ID` | The account containing `stock-tui-catalog` |
 | `CLOUDFLARE_API_TOKEN` | Cloudflare REST token with Workers R2 Storage Write for the publishing account |
-| `SEC_USER_AGENT` | Truthful application and maintainer contact required by SEC fair-access policy |
+| `SEC_USER_AGENT` | Truthful application and maintainer contact required by SEC fair-access policy and reused for identified Wikimedia requests |
 
 The recurring token does not need DNS, zone, Worker script, D1, or general
 account administration permission. Provision the bucket and custom domain
@@ -110,10 +118,16 @@ gh variable set CATALOG_PUBLISH_ENABLED \
   --body true
 ```
 
-The workflow cache stores large immutable SEC downloads. Before each build,
-`refresh-sec-cache.sh` invalidates ticker associations and XBRL Frames inputs
-that can change. The full audit JSON is retained as a private Actions artifact
-for 14 days; only the compact artifact and manifest are sent to R2.
+The workflow cache stores large immutable SEC downloads and the versioned
+per-CIK company-profile snapshot. Before each build, the workflow restores the
+stable profile snapshot from R2, then `refresh-sec-cache.sh` invalidates only
+mutable SEC ticker associations, XBRL Frames inputs, and submissions. Wikidata
+positive and negative lookups remain stable between monthly refreshes, while
+new CIKs are fetched on the next daily build. The working snapshot is stored as
+`wikidata-company-profiles-v1.json` under the configured source-cache
+directory. The full audit JSON and profile snapshot are retained as private
+Actions artifacts for 14 days. R2 stores the compact catalog and manifest plus
+stable and content-addressed profile snapshots.
 
 ## Validation
 

@@ -3,9 +3,11 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 config="${WRANGLER_CONFIG:-$repo_root/infra/cloudflare/wrangler.jsonc}"
-source_catalog="${1:?usage: publish-catalog.sh AUDIT_JSON ARTIFACT_JSON_GZ ARTIFACT_MANIFEST}"
-artifact_path="${2:?usage: publish-catalog.sh AUDIT_JSON ARTIFACT_JSON_GZ ARTIFACT_MANIFEST}"
-manifest_path="${3:?usage: publish-catalog.sh AUDIT_JSON ARTIFACT_JSON_GZ ARTIFACT_MANIFEST}"
+usage="publish-catalog.sh AUDIT_JSON ARTIFACT_JSON_GZ ARTIFACT_MANIFEST [PROFILE_STORE]"
+source_catalog="${1:?usage: $usage}"
+artifact_path="${2:?usage: $usage}"
+manifest_path="${3:?usage: $usage}"
+profile_store="${4:-}"
 wrangler_version="${WRANGLER_VERSION:-4.114.0}"
 prefix="${R2_PREFIX:-catalog}"
 public_base_url="${R2_PUBLIC_BASE_URL:-https://stock.chatcode.dev}"
@@ -23,6 +25,10 @@ for required_file in "$source_catalog" "$artifact_path" "$manifest_path"; do
     exit 1
   }
 done
+if [[ -n "$profile_store" && ! -f "$profile_store" ]]; then
+  printf 'company-profile snapshot does not exist: %s\n' "$profile_store" >&2
+  exit 1
+fi
 [[ -f "$config" ]] || {
   printf 'Wrangler config does not exist: %s\n' "$config" >&2
   exit 1
@@ -104,12 +110,92 @@ gzip -cd "$artifact_path" | jq -e \
     )
   ' >/dev/null
 
+if [[ -n "$profile_store" ]]; then
+  jq -e \
+    --slurpfile catalog "$source_catalog" \
+    '
+      . as $profiles
+      | .schema_version == 1
+      and .algorithm_version == 1
+      and (.entries | type == "object" and length <= 25000)
+      and (
+        [
+          $catalog[0].companies[].cik
+          | select(
+              . as $cik
+              | ($profiles.entries | has($cik) | not)
+            )
+        ]
+        | length == 0
+      )
+      and all(
+        .entries | to_entries[];
+        (.key | test("^[0-9]{10}$"))
+        and (
+          .value.issuer_name
+            | type == "string" and length > 0 and length <= 200
+        )
+        and (
+          .value.issuer_key
+            | type == "string" and length > 0 and length <= 200
+        )
+        and (
+          .value.retrieved_at
+            | type == "string"
+            and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+        )
+        and (
+          .value.last_checked_at
+            | type == "string"
+            and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+        )
+        and (.value.algorithm_version == 1)
+        and (
+          if .value.profile == null then
+            true
+          else
+            (
+              .value.profile.description
+                | type == "string" and length > 0 and length <= 480
+            )
+            and (
+              .value.profile.item_id
+                | type == "string" and test("^Q[1-9][0-9]*$")
+            )
+            and (
+              .value.profile.source_url
+                == ("https://www.wikidata.org/wiki/" + .value.profile.item_id)
+            )
+            and (
+              .value.profile.item_label
+                | type == "string" and length > 0 and length <= 200
+            )
+            and (
+              .value.profile.industries
+                | type == "array" and length <= 4
+            )
+            and all(
+              .value.profile.industries[];
+              type == "string" and length > 0 and length <= 120
+            )
+          end
+        )
+      )
+    ' \
+    "$profile_store" >/dev/null
+fi
+
 version_slug="$(printf '%s' "$catalog_version" | tr -c 'A-Za-z0-9._-' '-')"
 timestamp_slug="$(printf '%s' "$generated_at" | tr -d ':-')"
 version_key="$prefix/versions/$version_slug/${timestamp_slug}-${actual_sha256}.json"
 version_manifest_key="${version_key%.json}.manifest.json"
 stable_key="$prefix/sec-catalog.json"
 stable_manifest_key="$prefix/sec-catalog.manifest.json"
+if [[ -n "$profile_store" ]]; then
+  profile_sha256="$(sha256sum "$profile_store" | awk '{print $1}')"
+  profile_version_key="$prefix/profile-versions/v1-a1/${profile_sha256}.json"
+  stable_profile_key="$prefix/wikidata-company-profiles-v1.json"
+fi
 
 put_object() {
   local key="$1"
@@ -139,8 +225,16 @@ put_object() {
 
 immutable_cache='public, max-age=31536000, immutable'
 current_cache='public, max-age=300, stale-while-revalidate=3600'
+profile_current_cache='public, max-age=0, must-revalidate'
 
-# Publish immutable compressed content first. The stable manifest is the final readiness marker.
+# Publish source state and immutable catalog content first. The stable catalog
+# manifest remains the final readiness marker.
+if [[ -n "$profile_store" ]]; then
+  put_object "$profile_version_key" "$profile_store" \
+    'application/json; charset=utf-8' "$immutable_cache"
+  put_object "$stable_profile_key" "$profile_store" \
+    'application/json; charset=utf-8' "$profile_current_cache"
+fi
 put_object "$version_key" "$artifact_path" 'application/json' "$immutable_cache" 'gzip'
 put_object "$version_manifest_key" "$manifest_path" 'application/json; charset=utf-8' "$immutable_cache"
 put_object "$stable_key" "$artifact_path" 'application/json' "$current_cache" 'gzip'

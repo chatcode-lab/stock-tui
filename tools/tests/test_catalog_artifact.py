@@ -33,6 +33,12 @@ def sample_catalog() -> dict[str, object]:
                 "exchange": "Nasdaq",
                 "sic": 3571,
                 "sic_description": "Electronic Computers",
+                "company_description": (
+                    "American computer hardware company. "
+                    "Industry: computer industry."
+                ),
+                "description_source": "wikidata",
+                "description_source_url": "https://www.wikidata.org/wiki/Q1",
                 "sector": "technology",
                 "public_float": 1_000_000_000,
                 "proxy_source": "sec_public_float",
@@ -123,6 +129,9 @@ class CatalogArtifactTests(unittest.TestCase):
                 "exchange",
                 "sic",
                 "sic_description",
+                "company_description",
+                "description_source",
+                "description_source_url",
                 "sector",
                 "public_float",
                 "shares_outstanding",
@@ -151,6 +160,7 @@ class CatalogArtifactTests(unittest.TestCase):
             runtime["companies"][1]["provenance"]["shares_outstanding"]
         )
         self.assertNotIn("sic_description", runtime["companies"][1])
+        self.assertNotIn("company_description", runtime["companies"][1])
 
     def test_gzip_and_manifest_are_byte_for_byte_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -288,6 +298,36 @@ class CatalogArtifactTests(unittest.TestCase):
         source["companies"][0]["sic_description"] = "unsafe\u0007description"
 
         with self.assertRaisesRegex(RuntimeError, "SIC description is invalid"):
+            catalog.runtime_catalog(source)
+
+    def test_runtime_projection_rejects_partial_description_provenance(
+        self,
+    ) -> None:
+        source = sample_catalog()
+        del source["companies"][0]["description_source_url"]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "description and source fields must all be present",
+        ):
+            catalog.runtime_catalog(source)
+
+    def test_runtime_projection_rejects_unsafe_company_description(
+        self,
+    ) -> None:
+        source = sample_catalog()
+        source["companies"][0]["company_description"] = "unsafe\u202edescription"
+
+        with self.assertRaisesRegex(RuntimeError, "unsafe or too long"):
+            catalog.runtime_catalog(source)
+
+    def test_runtime_projection_rejects_non_wikidata_source_url(self) -> None:
+        source = sample_catalog()
+        source["companies"][0]["description_source_url"] = (
+            "https://example.com/wiki/Q1"
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "source URL is invalid"):
             catalog.runtime_catalog(source)
 
 

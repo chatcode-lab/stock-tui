@@ -26,6 +26,7 @@ const MAX_SYMBOL_LEN: usize = 16;
 const MAX_NAME_LEN: usize = 160;
 const MAX_METADATA_LEN: usize = 128;
 const MAX_SIC_DESCRIPTION_LEN: usize = 160;
+const MAX_COMPANY_DESCRIPTION_LEN: usize = 480;
 
 #[derive(Debug, Deserialize)]
 struct Catalog {
@@ -49,6 +50,12 @@ struct CatalogCompany {
     sic: u16,
     #[serde(default)]
     sic_description: Option<String>,
+    #[serde(default)]
+    company_description: Option<String>,
+    #[serde(default)]
+    description_source: Option<String>,
+    #[serde(default)]
+    description_source_url: Option<String>,
     sector: Sector,
     public_float: f64,
     shares_outstanding: Option<f64>,
@@ -294,6 +301,15 @@ fn parse_catalog_json(catalog_json: &str, now: DateTime<Utc>) -> Result<ParsedCa
             company.symbol
         );
         ensure!(
+            valid_company_description(
+                company.company_description.as_deref(),
+                company.description_source.as_deref(),
+                company.description_source_url.as_deref(),
+            ),
+            "catalog company description is invalid for {}",
+            company.symbol
+        );
+        ensure!(
             company.public_float.is_finite() && company.public_float > 0.0,
             "catalog public float is invalid for {}",
             company.symbol
@@ -419,23 +435,18 @@ fn parse_catalog_json(catalog_json: &str, now: DateTime<Utc>) -> Result<ParsedCa
                         .context("validated catalog shares date became invalid")
                 })
                 .transpose()?;
-            let (industry, description) = entry.sic_description.map_or_else(
-                || {
-                    (
-                        format!("SEC SIC {}", entry.sic),
-                        format!(
-                            "{} is listed on {}; its SEC classification is SIC {} in the {} sector.",
-                            entry.name, entry.exchange, entry.sic, entry.sector
-                        ),
-                    )
-                },
-                |sic_description| {
-                    let description = format!(
-                        "{} is listed on {} and classified by the SEC as {sic_description} (SIC {}).",
-                        entry.name, entry.exchange, entry.sic
-                    );
-                    (sic_description, description)
-                },
+            let industry = entry
+                .sic_description
+                .clone()
+                .unwrap_or_else(|| format!("SEC SIC {}", entry.sic));
+            let description = catalog_company_description(
+                &entry.name,
+                &entry.symbol,
+                &entry.exchange,
+                entry.sic,
+                entry.sector,
+                entry.sic_description.as_deref(),
+                entry.company_description.as_deref(),
             );
             Ok(Company {
                 symbol: entry.symbol,
@@ -637,6 +648,79 @@ fn temporary_catalog_path(path: &Path) -> PathBuf {
     path.with_extension(format!("json.{}.tmp", std::process::id()))
 }
 
+fn catalog_company_description(
+    name: &str,
+    symbol: &str,
+    exchange: &str,
+    sic: u16,
+    sector: Sector,
+    sic_description: Option<&str>,
+    company_description: Option<&str>,
+) -> String {
+    let listing = format!("Traded on {exchange} as {symbol}");
+    match (company_description, sic_description) {
+        (Some(summary), Some(industry)) => format!(
+            "{} {listing}. SEC industry: {industry} (SIC {sic}).",
+            sentence(summary)
+        ),
+        (Some(summary), None) => format!(
+            "{} {listing}. SEC classification: SIC {sic}; {sector} sector.",
+            sentence(summary)
+        ),
+        (None, Some(industry)) => {
+            format!("{name} operates in the {industry} industry. {listing} (SEC SIC {sic}).")
+        }
+        (None, None) => format!(
+            "{name} trades on {exchange} as {symbol}. SEC classification: SIC {sic}; {sector} sector."
+        ),
+    }
+}
+
+fn sentence(value: &str) -> String {
+    let mut sentence = value.trim().to_owned();
+    if !matches!(sentence.chars().last(), Some('.' | '!' | '?')) {
+        sentence.push('.');
+    }
+    sentence
+}
+
+fn valid_company_description(
+    description: Option<&str>,
+    source: Option<&str>,
+    source_url: Option<&str>,
+) -> bool {
+    match (description, source, source_url) {
+        (None, None, None) => true,
+        (Some(description), Some("wikidata"), Some(source_url)) => {
+            safe_text(description, MAX_COMPANY_DESCRIPTION_LEN)
+                && valid_wikidata_item_url(source_url)
+        }
+        _ => false,
+    }
+}
+
+fn valid_wikidata_item_url(value: &str) -> bool {
+    let Ok(url) = Url::parse(value) else {
+        return false;
+    };
+    let Some(item) = url.path().strip_prefix("/wiki/Q") else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.host_str() == Some("www.wikidata.org")
+        && url.port().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && !item.is_empty()
+        && item.bytes().all(|byte| byte.is_ascii_digit())
+        && item
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_digit() && byte != b'0')
+}
+
 fn safe_text(value: &str, max_chars: usize) -> bool {
     !value.trim().is_empty()
         && value.chars().count() <= max_chars
@@ -802,8 +886,45 @@ mod tests {
         assert_eq!(
             company.description,
             format!(
-                "{} is listed on {exchange} and classified by the SEC as Electronic Computers (SIC {sic}).",
-                company.name
+                "{} operates in the Electronic Computers industry. Traded on {exchange} as {} (SEC SIC {sic}).",
+                company.name, company.symbol
+            )
+        );
+    }
+
+    #[test]
+    fn optional_company_description_precedes_classification_fallback() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(CATALOG_JSON).expect("committed catalog");
+        let company = value["companies"]
+            .as_array_mut()
+            .and_then(|companies| companies.first_mut())
+            .expect("catalog company");
+        let symbol = company["symbol"]
+            .as_str()
+            .expect("catalog symbol")
+            .to_owned();
+        let sic = company["sic"].as_u64().expect("catalog SIC");
+        let exchange = company["exchange"]
+            .as_str()
+            .expect("catalog exchange")
+            .to_owned();
+        company["sic_description"] = serde_json::json!("Electronic Computers");
+        company["company_description"] = serde_json::json!("American computer systems company");
+        company["description_source"] = serde_json::json!("wikidata");
+        company["description_source_url"] = serde_json::json!("https://www.wikidata.org/wiki/Q42");
+
+        let companies = companies_from_catalog_json(&value.to_string(), Utc::now())
+            .expect("catalog with company description");
+        let company = companies
+            .iter()
+            .find(|company| company.symbol == symbol)
+            .expect("modified company remains present");
+
+        assert_eq!(
+            company.description,
+            format!(
+                "American computer systems company. Traded on {exchange} as {symbol}. SEC industry: Electronic Computers (SIC {sic})."
             )
         );
     }
@@ -845,6 +966,40 @@ mod tests {
         let error = companies_from_catalog_json(&value.to_string(), Utc::now())
             .expect_err("unsafe SIC description");
         assert!(error.to_string().contains("SIC description is invalid"));
+    }
+
+    #[test]
+    fn unsafe_company_description_is_rejected() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(CATALOG_JSON).expect("committed catalog");
+        value["companies"][0]["company_description"] =
+            serde_json::json!("unsafe\u{1b}[2Jdescription");
+        value["companies"][0]["description_source"] = serde_json::json!("wikidata");
+        value["companies"][0]["description_source_url"] =
+            serde_json::json!("https://www.wikidata.org/wiki/Q42");
+
+        let error = companies_from_catalog_json(&value.to_string(), Utc::now())
+            .expect_err("unsafe company description");
+        assert!(error.to_string().contains("company description is invalid"));
+    }
+
+    #[test]
+    fn incomplete_or_noncanonical_company_description_source_is_rejected() {
+        let mut value: serde_json::Value =
+            serde_json::from_str(CATALOG_JSON).expect("committed catalog");
+        value["companies"][0]["company_description"] =
+            serde_json::json!("American software company.");
+
+        let error = companies_from_catalog_json(&value.to_string(), Utc::now())
+            .expect_err("description without source");
+        assert!(error.to_string().contains("company description is invalid"));
+
+        value["companies"][0]["description_source"] = serde_json::json!("wikidata");
+        value["companies"][0]["description_source_url"] =
+            serde_json::json!("https://example.com/wiki/Q42");
+        let error = companies_from_catalog_json(&value.to_string(), Utc::now())
+            .expect_err("description with foreign source URL");
+        assert!(error.to_string().contains("company description is invalid"));
     }
 
     #[test]

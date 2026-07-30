@@ -61,7 +61,8 @@ statistics, related news, sector rank, and absolute and relative gain.
 - Provides responsive sector grids and a ticker detail screen with a
   time-spaced Braille price trace, softly filled tint, price/time axes,
   exact cursor labels, cached-history coverage, a fine-grained volume
-  histogram, current-order rank, statistics, company context, and news.
+  histogram, current-order rank, statistics, concise company context, and
+  news.
 - Supports mouse hover, clicking, wheel input, keyboard navigation, and
   terminal resize events.
 - Searches cached companies by symbol or company name, including retained
@@ -455,10 +456,18 @@ heatmap keeps NASDAQ, NYSE, and ARCA instruments together. Only one market
 context is active during a launch.
 
 Freshly generated catalogs include SEC public float as a ranking proxy, dated,
-provenance-tagged share bases, and official SIC industry labels used for brief
-company context in roomy ticker-detail views. Unambiguous filing cover facts
-resolve automatically; reviewed multi-class, tracking-stock, Up-C, partnership,
-and SPAC structures use exact class signatures, explicit multipliers, and
+provenance-tagged share bases, official SIC industry labels, and concise CC0
+Wikidata company profiles matched by SEC CIK. Roomy ticker-detail views prefer
+the company-specific profile and retain the exchange, symbol, and SIC label as
+separate factual context. When no unambiguous Wikidata item is available, the
+view uses a readable SIC/listing fallback instead of presenting classification
+metadata as a full business description. Profile lookups are stored per CIK in
+a durable R2 snapshot: daily catalog publications fetch new or materially
+renamed issuers, while a monthly full pass refreshes the slow-changing
+descriptions. Unambiguous filing cover facts resolve automatically; reviewed
+multi-class, tracking-stock, Up-C,
+partnership, and SPAC structures use exact class signatures, explicit
+multipliers, and
 accession-scoped issuer-reported economic facts from
 [`data/sec_share_policies.json`](data/sec_share_policies.json). The builder
 rejects stale or structurally changed facts and fails publication if a current

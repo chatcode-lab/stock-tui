@@ -467,10 +467,14 @@ fn detail_description_uses_roomy_layout_and_clean_metadata_fallback() {
         .description
         .clear();
     let fallback_screen = screen_text(&render_at(&mut fallback, 120, 36));
-    assert!(
-        fallback_screen
-            .contains("Acme Systems is listed on NASDAQ and classified as Terminal Software.")
-    );
+    for expected in [
+        "Acme Systems operates",
+        "Terminal Software",
+        "NASDAQ",
+        "ACME",
+    ] {
+        assert!(fallback_screen.contains(expected));
+    }
 }
 
 #[test]

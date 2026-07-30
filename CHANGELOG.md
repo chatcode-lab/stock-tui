@@ -7,6 +7,26 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Added
+
+- Enriched roomy ticker-detail company context with concise CC0 Wikidata
+  descriptions and industry labels matched strictly by SEC CIK.
+- Retained per-company Wikidata source URLs and catalog-level CC0 provenance in
+  compact published catalogs.
+
+### Changed
+
+- Replaced the generic "listed and classified" sentence with a
+  company-specific profile plus explicit listing/SIC context, or a readable
+  classification fallback when no unambiguous profile is available.
+- Added catalog publication and release gates for safe, coupled company-profile
+  fields and minimum enrichment coverage.
+- Persisted positive and empty company-profile lookups per SEC CIK, limiting
+  routine catalog builds to new or materially renamed issuers and reserving a
+  full refresh for the monthly or explicitly requested catalog run. Stable and
+  content-addressed R2 snapshots preserve this builder state independently of
+  GitHub Actions cache retention.
+
 ## [0.2.5] - 2026-07-30
 
 ### Added

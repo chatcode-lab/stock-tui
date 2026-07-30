@@ -11,7 +11,7 @@ and terms change; verify them for your account and use case.
 
 | Data | Current source | Stored locally | Notes |
 | --- | --- | --- | --- |
-| Nine-sector candidates, SIC industry labels, size proxy, and common-share estimates | Versioned catalog generated from SEC identity, SIC taxonomy, and XBRL facts, published as compact JSON through Cloudflare R2 | Yes | Keeps 100-250 candidates per sector, with a validated embedded release fallback, and displays the selected top 100. |
+| Nine-sector candidates, SIC industry labels, concise company profiles, size proxy, and common-share estimates | Versioned catalog generated from SEC identity/SIC/XBRL facts plus CC0 Wikidata metadata, published as compact JSON through Cloudflare R2 | Yes | Matches Wikidata strictly by SEC CIK, keeps 100-250 candidates per sector, and retains a validated embedded release fallback. |
 | Issuer name, ticker, exchange associations | US SEC EDGAR catalog, supplemented by Alpaca active assets | Yes | Associations are identifiers, not a complete security master. |
 | Overview benchmarks | Alpaca stock data for `SPY`, `DIA`, and `QQQ` ETF proxies | Yes | Labeled as proxies; values are not literal S&P 500, Dow, or Nasdaq index levels. |
 | Current price, previous close, OHLC, volume | Alpaca stock snapshots | Yes | Coverage depends on the selected feed and subscription. |
@@ -21,10 +21,26 @@ and terms change; verify them for your account and use case.
 | Demo issuer identities | Embedded SEC-derived catalog | Yes | Real ticker/name associations; not a claim that the security remains active. |
 | Demo prices, rankings, volume, descriptions, news | Built-in deterministic generator | Yes | Entirely simulated and visibly labeled; no provider market data is used. |
 
-Live company context is deliberately concise: it combines the SEC issuer name,
-listing exchange, SIC code, and, when present in the selected catalog, the SIC
-taxonomy's official industry label. It is a classification summary, not a
-provider-supplied business profile.
+Live company context is deliberately concise. The catalog prefers an English
+[Wikidata item description](https://www.wikidata.org/wiki/Help:Description)
+and a bounded set of industry labels, matched by the issuer's SEC CIK and
+published under [CC0](https://www.wikidata.org/wiki/Wikidata:Licensing) with
+its source URL. The client then adds the listing exchange, symbol, and SEC SIC
+industry as factual context. Ambiguous CIK mappings are discarded. When no
+profile is available, the client shows a readable SIC/listing fallback rather
+than implying that the classification is a full business description.
+
+Wikidata descriptions are short disambiguating phrases, not authoritative
+issuer profiles. The richer future source is the latest issuer-authored annual
+filing: [Item 1 of Form 10-K](https://www.sec.gov/files/reada10k.pdf), Item 4.B
+of [Form 20-F](https://www.sec.gov/files/form20-f.pdf), or equivalent Form 40-F
+annual disclosure. A filing-derived implementation can locate filings through
+the [EDGAR APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces),
+but it must cache by immutable accession, extract sections defensively, retain
+form/date/source provenance, and label the result as based on the company's
+filing rather than written or endorsed by the SEC. Wikipedia lead text is not
+bundled because its CC BY-SA reuse obligations differ from the project's
+MIT-licensed code and CC0 catalog metadata.
 
 The source matrix describes the default Alpaca configuration. The separately
 selectable `stock-api` adapter consumes normalized observations from an
@@ -466,22 +482,40 @@ cargo test universe
 ```
 
 The tool accepts `SEC_USER_AGENT` instead of `--user-agent`, caches source
-downloads under `~/.cache/stock-tui/sec-catalog` by default, restricts requests
-to `www.sec.gov`, `data.sec.gov`, and `xbrl.sec.gov`, and defaults to eight
-requests per second. It refuses a setting above the SEC's current aggregate
-maximum of ten requests per second, retries transient failures, writes source
-receipts, validates unique CIKs/symbols, consecutive per-sector ranks, safe SIC
-labels, exact reviewed filing signatures, absolute share-fact freshness, and
-complete top-100 share coverage, then atomically replaces the output.
+downloads under `~/.cache/stock-tui/sec-catalog` by default, restricts SEC
+requests to `www.sec.gov`, `data.sec.gov`, and `xbrl.sec.gov`, and sends profile
+queries only to `query.wikidata.org`. SEC requests default to eight per second;
+Wikidata queries are serialized at one per second. The builder refuses an SEC
+setting above the current aggregate maximum of ten requests per second, retries
+transient failures, writes source receipts, validates unique CIKs/symbols,
+consecutive per-sector ranks, safe SIC labels, exact reviewed filing
+signatures, absolute share-fact freshness, and complete top-100 share coverage,
+then atomically replaces the output.
 
 `.github/workflows/catalog-publish.yml` runs daily at 06:17 UTC and can be
-dispatched manually. It restores the large SEC source cache, invalidates
-mutable ticker, Frames, and submissions responses, runs the network-free
-calculation fixtures, builds and validates the complete audit catalog, packages
-the compact deterministic artifact, and publishes it with Wrangler. Immutable versioned
-objects are written before the five-minute-cache stable object and manifest.
-The full audit catalog is retained only as a short-lived private workflow
-artifact; scheduled builds do not commit generated catalogs to the repository.
+dispatched manually. It restores the large SEC source cache and a versioned
+per-CIK Wikidata profile snapshot from R2, invalidates mutable SEC ticker,
+Frames, and submissions responses, runs the network-free calculation fixtures,
+builds and validates the complete audit catalog, packages the compact
+deterministic artifact, and publishes it with Wrangler. Ordinary runs reuse
+both successful and empty profile lookups and fetch only missing or materially
+renamed CIKs.
+The first scheduled run each month performs a full profile refresh; a manual
+run can request the same operation. Immutable versioned objects are written
+before the five-minute-cache stable object and manifest. The full audit catalog
+and `wikidata-company-profiles-v1.json` snapshot are retained as short-lived
+private workflow artifacts; the profile snapshot is also written to stable and
+content-addressed R2 objects, while scheduled builds do not commit generated
+catalogs to the repository. The published compact catalog contains the selected
+intros, so stock-tui clients never contact Wikidata.
+
+For a local full profile refresh, use:
+
+```bash
+python3 tools/build_sec_catalog.py \
+  --user-agent "stock-tui catalog support@chatcode.dev" \
+  --refresh-company-profiles
+```
 
 The R2 bucket is `stock-tui-catalog`, with `stock.chatcode.dev` attached as its
 custom domain. `infra/cloudflare/` contains the idempotent provisioning,

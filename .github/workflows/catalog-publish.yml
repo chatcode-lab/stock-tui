@@ -2,9 +2,17 @@ name: Publish SEC catalog
 
 on:
   schedule:
-    # Daily at 06:17 UTC; avoid top-of-hour scheduler traffic.
-    - cron: "17 6 * * *"
+    # Reuse durable company profiles on ordinary daily publications.
+    - cron: "17 6 2-31 * *"
+    # Re-check every current company profile on the first day of each month.
+    - cron: "17 6 1 * *"
   workflow_dispatch:
+    inputs:
+      refresh_company_profiles:
+        description: Re-fetch every current Wikidata company profile
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -22,10 +30,13 @@ jobs:
       CATALOG_ARTIFACT: build/catalog/sec-catalog.json.gz
       CATALOG_MANIFEST: build/catalog/sec-catalog.manifest.json
       CATALOG_OUTPUT: build/catalog/sec_universe.json
+      COMPANY_PROFILE_STORE: .cache/sec-catalog/wikidata-company-profiles-v1.json
+      COMPANY_PROFILE_STORE_URL: https://stock.chatcode.dev/catalog/wikidata-company-profiles-v1.json
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       SEC_CACHE_DIR: .cache/sec-catalog
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      REFRESH_COMPANY_PROFILES: ${{ github.event.schedule == '17 6 1 * *' || (github.event_name == 'workflow_dispatch' && inputs.refresh_company_profiles) }}
       WRANGLER_VERSION: "4.114.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,6 +61,50 @@ jobs:
           restore-keys: |
             sec-catalog-v2-${{ runner.os }}-
 
+      - name: Restore durable company profiles
+        shell: bash
+        run: |
+          mkdir -p "$(dirname "$COMPANY_PROFILE_STORE")"
+          temporary="${COMPANY_PROFILE_STORE}.download"
+          if ! status="$(
+            curl \
+              --silent \
+              --show-error \
+              --location \
+              --retry 3 \
+              --retry-all-errors \
+              --connect-timeout 15 \
+              --max-time 90 \
+              --max-filesize 67108864 \
+              --header 'Cache-Control: no-cache' \
+              --output "$temporary" \
+              --write-out '%{http_code}' \
+              "${COMPANY_PROFILE_STORE_URL}?build=${GITHUB_RUN_ID}"
+          )"; then
+            rm -f -- "$temporary"
+            printf 'could not restore the durable company-profile snapshot\n' >&2
+            exit 1
+          fi
+          case "$status" in
+            200)
+              [[ -s "$temporary" ]]
+              mv -- "$temporary" "$COMPANY_PROFILE_STORE"
+              ;;
+            404)
+              rm -f -- "$temporary"
+              if [[ -f "$COMPANY_PROFILE_STORE" ]]; then
+                printf 'R2 profile snapshot is absent; using the Actions cache\n'
+              else
+                printf 'R2 profile snapshot is absent; bootstrapping profiles\n'
+              fi
+              ;;
+            *)
+              rm -f -- "$temporary"
+              printf 'profile snapshot request failed with HTTP %s\n' "$status" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Refresh mutable SEC inputs
         run: bash infra/cloudflare/refresh-sec-cache.sh "$SEC_CACHE_DIR"
 
@@ -60,8 +115,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$(dirname "$CATALOG_OUTPUT")"
+          profile_args=()
+          if [[ "$REFRESH_COMPANY_PROFILES" == "true" ]]; then
+            profile_args+=(--refresh-company-profiles)
+          fi
           python3 tools/build_sec_catalog.py \
             --cache-dir "$SEC_CACHE_DIR" \
+            "${profile_args[@]}" \
             --output "$CATALOG_OUTPUT"
           jq -e '
             .schema_version == 2
@@ -79,12 +139,88 @@ jobs:
             )
             and (
               [.companies[]
+                | select(
+                    .rank <= 100
+                    and (.company_description | type) == "string"
+                    and (.description_source == "wikidata")
+                    and (.description_source_url | type) == "string"
+                    and (
+                      (.description_source_url // "")
+                      | test("^https://www\\.wikidata\\.org/wiki/Q[1-9][0-9]*$")
+                    )
+                  )
+              ]
+              | length >= 550
+            )
+            and (
+              [.companies[]
+                | select(.rank <= 100 and has("company_description"))
+              ]
+              | group_by(.sector)
+              | map({key: .[0].sector, value: length})
+              | from_entries
+              | (.consumer // 0) >= 55
+                and (.energy // 0) >= 25
+                and (.financial // 0) >= 75
+                and (.healthcare // 0) >= 50
+                and (.industrial // 0) >= 70
+                and (.materials // 0) >= 50
+                and (.services // 0) >= 70
+                and (.technology // 0) >= 75
+                and (.utilities // 0) >= 42
+            )
+            and (
+              [.companies[]
+                | select(
+                    (
+                      has("company_description")
+                      or has("description_source")
+                      or has("description_source_url")
+                    )
+                    and (
+                      (.company_description | type) != "string"
+                      or (.company_description | length) == 0
+                      or (.company_description | length) > 480
+                      or .description_source != "wikidata"
+                      or (.description_source_url | type) != "string"
+                      or (
+                        (.description_source_url // "")
+                        | test("^https://www\\.wikidata\\.org/wiki/Q[1-9][0-9]*$")
+                        | not
+                      )
+                    )
+                  )
+              ]
+              | length == 0
+            )
+            and (
+              [.companies[]
                 | select(.rank <= 100 and .shares_outstanding == null)
               ]
               | length == 0
             )
           ' \
             "$CATALOG_OUTPUT" >/dev/null
+          jq -e \
+            --slurpfile catalog "$CATALOG_OUTPUT" \
+            '
+              . as $profiles
+              | .schema_version == 1
+              and .algorithm_version == 1
+              and (.entries | type == "object")
+              and (.entries | length >= ($catalog[0].companies | length))
+              and (
+                [
+                  $catalog[0].companies[].cik
+                  | select(
+                      . as $cik
+                      | ($profiles.entries | has($cik) | not)
+                    )
+                ]
+                | length == 0
+              )
+            ' \
+            "$COMPANY_PROFILE_STORE" >/dev/null
 
       - name: Package compact runtime catalog
         run: |
@@ -102,7 +238,8 @@ jobs:
           bash infra/cloudflare/publish-catalog.sh \
             "$CATALOG_OUTPUT" \
             "$CATALOG_ARTIFACT" \
-            "$CATALOG_MANIFEST"
+            "$CATALOG_MANIFEST" \
+            "$COMPANY_PROFILE_STORE"
 
       - name: Retain publication record
         if: always()
@@ -113,5 +250,6 @@ jobs:
             ${{ env.CATALOG_OUTPUT }}
             ${{ env.CATALOG_ARTIFACT }}
             ${{ env.CATALOG_MANIFEST }}
+            ${{ env.COMPANY_PROFILE_STORE }}
           if-no-files-found: ignore
           retention-days: 14

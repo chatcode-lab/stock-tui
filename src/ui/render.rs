@@ -667,9 +667,10 @@ fn render_full_detail(
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
         .split(rows[1]);
+    let description_height = if columns[0].width < 100 { 6 } else { 5 };
     let left = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(10), Constraint::Length(5)])
+        .constraints([Constraint::Min(10), Constraint::Length(description_height)])
         .split(columns[0]);
     let accent = performance_accent(detail.period_return);
     render_price_volume(
@@ -953,14 +954,18 @@ fn format_history_span(start: DateTime<Utc>, end: DateTime<Utc>) -> String {
 fn render_description(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, tint: Color) {
     let description = if detail.company.description.trim().is_empty() {
         let name = detail.company.name.trim();
+        let symbol = detail.company.symbol.trim();
         let exchange = detail.company.exchange.trim();
         let industry = detail.company.industry.trim();
         match (exchange.is_empty(), industry.is_empty()) {
-            (false, false) => {
-                format!("{name} is listed on {exchange} and classified as {industry}.")
+            (false, false) => format!(
+                "{name} operates in the {} and trades on {exchange} as {symbol}.",
+                industry_phrase(industry)
+            ),
+            (false, true) => format!("{name} trades on {exchange} as {symbol}."),
+            (true, false) => {
+                format!("{name} operates in the {}.", industry_phrase(industry))
             }
-            (false, true) => format!("{name} is listed on {exchange}."),
-            (true, false) => format!("{name} is classified as {industry}."),
             (true, true) => name.to_owned(),
         }
     } else {
@@ -978,6 +983,15 @@ fn render_description(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, 
             ),
         area,
     );
+}
+
+fn industry_phrase(industry: &str) -> String {
+    let industry = industry.trim().trim_end_matches('.');
+    if industry.to_ascii_lowercase().ends_with("industry") {
+        industry.to_owned()
+    } else {
+        format!("{industry} industry")
+    }
 }
 
 fn render_news(

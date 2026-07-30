@@ -69,7 +69,12 @@ One normalized row per symbol. It stores name, normalized and raw sector,
 exchange, industry, optional estimated market cap, the numeric SEC public-float
 ranking proxy with source/date/confidence, the share estimate with
 source/date/method/confidence, catalog rank, description, current-universe and
-retained flags, and metadata update time.
+retained flags, and metadata update time. Catalog descriptions prefer
+CIK-matched CC0 Wikidata context; SIC/listing text remains the fallback.
+Catalog generation keeps positive and empty description lookups in a separate
+per-CIK source snapshot persisted through R2. Routine daily publications fetch
+only unknown or materially renamed issuers; a full refresh is scheduled
+monthly.
 
 The symbol is the primary key. Symbols are trimmed and uppercased at storage
 boundaries.

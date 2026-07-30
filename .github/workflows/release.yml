@@ -54,6 +54,8 @@ jobs:
           python3 - <<'PY'
           import hashlib
           import json
+          import re
+          from collections import Counter
           from pathlib import Path
 
           payload = Path("data/sec_universe.json").read_bytes()
@@ -71,6 +73,49 @@ jobs:
               or not row["sic_description"].strip()
               or len(row["sic_description"]) > 160
               or not row["sic_description"].isprintable()
+          ]
+          descriptions = [
+              row
+              for row in catalog["companies"]
+              if any(
+                  field in row
+                  for field in (
+                      "company_description",
+                      "description_source",
+                      "description_source_url",
+                  )
+              )
+          ]
+          top_descriptions = [row for row in descriptions if row["rank"] <= 100]
+          assert len(top_descriptions) >= 550
+          sector_floors = {
+              "consumer": 55,
+              "energy": 25,
+              "financial": 75,
+              "healthcare": 50,
+              "industrial": 70,
+              "materials": 50,
+              "services": 70,
+              "technology": 75,
+              "utilities": 42,
+          }
+          sector_counts = Counter(row["sector"] for row in top_descriptions)
+          assert all(
+              sector_counts[sector] >= minimum
+              for sector, minimum in sector_floors.items()
+          )
+          assert not [
+              row
+              for row in descriptions
+              if not isinstance(row.get("company_description"), str)
+              or not row["company_description"].strip()
+              or len(row["company_description"]) > 480
+              or not row["company_description"].isprintable()
+              or row.get("description_source") != "wikidata"
+              or re.fullmatch(
+                  r"https://www\.wikidata\.org/wiki/Q[1-9][0-9]*",
+                  str(row.get("description_source_url", "")),
+              ) is None
           ]
           assert not [
               row
