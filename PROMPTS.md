@@ -1697,6 +1697,38 @@ catalog-profile updates, documents the canonical dotted share-class contract,
 and ships five checksummed platform archives with signed and notarized macOS
 executables.
 
+## 63. Replace Boilerplate Company Introductions
+
+> I still do not see any meaningful company introductions in the ticker-detail
+> view.
+
+**Committed changes**
+
+- [`d0f1a20` - Improve company profile matching][commit-d0f1a20]
+- [`cbe2cea` - Apply catalog updates atomically][commit-cbe2cea]
+- [`7bf25d0` - Prepare stock-tui 0.2.7][commit-7bf25d0]
+- [Successful full catalog publication][catalog-run-30590280654]
+- [`v0.2.7` release][release-v0.2.7]
+
+**Summary**
+
+The screenshot exposed both an old running `v0.2.5` process and a weak Amazon
+legal-entity profile. The catalog builder now rejects legal, promotional,
+location-only, and stale-status boilerplate, then resolves a canonical
+Wikidata company only with a unique normalized name, business hierarchy, and
+matching active ticker/exchange evidence. It fails closed on ambiguity,
+deprecated or ended listings, dissolved entities, subsidiaries, truncated
+results, and known homonym collisions. Structured industry and fallback
+product/service facts provide concise business context when safe.
+
+The durable profile store and publication gates were versioned together. A
+full refresh published 1,082 profiles across 1,877 companies, including 640 of
+the 900 visible sector members, and canonical AMZN, WMT, and CSCO canaries.
+Runtime catalog installation and membership replacement are atomic and
+off-thread; in-flight provider requests cannot restore stale descriptions or
+derive market caps from mismatched share metadata. The release ships five
+checksummed archives, including signed and notarized macOS executables.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1771,6 +1803,10 @@ implementation work.
 [commit-d7d0dea]: https://github.com/chatcode-lab/stock-tui/commit/d7d0dea6378cb96aad93ff0538c869ee8f7c44b5
 [commit-9d04968]: https://github.com/chatcode-lab/stock-tui/commit/9d049685326e523f80aebed496b26f7d4b5e293e
 [commit-f68cb94]: https://github.com/chatcode-lab/stock-tui/commit/f68cb942dee9e47343a7539800c12fdd83422edc
+[commit-d0f1a20]: https://github.com/chatcode-lab/stock-tui/commit/d0f1a20bbc60ccd5eb9e62a24010563a808329c0
+[commit-cbe2cea]: https://github.com/chatcode-lab/stock-tui/commit/cbe2cea2ae56c6d5f2c09e49c4ff1450f188fa6c
+[commit-7bf25d0]: https://github.com/chatcode-lab/stock-tui/commit/7bf25d0c8de670160d36cac7b02e4826a469dcf3
+[catalog-run-30590280654]: https://github.com/chatcode-lab/stock-tui/actions/runs/30590280654
 [catalog-run-30578835793]: https://github.com/chatcode-lab/stock-tui/actions/runs/30578835793
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
@@ -1793,3 +1829,4 @@ implementation work.
 [release-v0.2.4]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.4
 [release-v0.2.5]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.5
 [release-v0.2.6]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.6
+[release-v0.2.7]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.7
