@@ -117,6 +117,52 @@ jobs:
                   str(row.get("description_source_url", "")),
               ) is None
           ]
+          expected_profiles = {
+              "AMZN": (
+                  "Q3884",
+                  re.compile(r"technology|e-commerce|retail|web hosting", re.I),
+              ),
+              "WMT": ("Q483551", re.compile(r"retail|discount", re.I)),
+              "CSCO": (
+                  "Q173395",
+                  re.compile(r"technology|network|telecommun", re.I),
+              ),
+          }
+          companies_by_symbol = {row["symbol"]: row for row in catalog["companies"]}
+          for symbol, (item, meaning) in expected_profiles.items():
+              row = companies_by_symbol[symbol]
+              assert row["description_source"] == "wikidata"
+              assert (
+                  row["description_source_url"]
+                  == f"https://www.wikidata.org/wiki/{item}"
+              )
+              assert meaning.search(row["company_description"])
+          rejected_items = {
+              "Q895512",  # Box village
+              "Q884653",  # Block family name
+              "Q381047",  # Mosaic web browser
+              "Q175081",  # Gap commune
+              "Q11209",   # U.S. Department of Defense
+              "Q213849",  # Defunct ATI Technologies
+              "Q3901581", # Alternative trading system
+              "Q725793",  # Union Pacific operating railroad
+              "Q658789",  # Garmin subsidiary
+          }
+          assert not [
+              row
+              for row in descriptions
+              if row["description_source_url"].rsplit("/", 1)[-1] in rejected_items
+          ]
+          rejected_text = re.compile(
+              r"(incorporated|registered|organized|domiciled) (in|under)"
+              r"|privately (held|owned)|^focus:",
+              re.I,
+            )
+          assert not [
+              row
+              for row in descriptions
+              if rejected_text.search(row["company_description"])
+          ]
           assert not [
               row
               for row in catalog["companies"]

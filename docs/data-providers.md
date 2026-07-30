@@ -11,7 +11,7 @@ and terms change; verify them for your account and use case.
 
 | Data | Current source | Stored locally | Notes |
 | --- | --- | --- | --- |
-| Nine-sector candidates, SIC industry labels, concise company profiles, size proxy, and common-share estimates | Versioned catalog generated from SEC identity/SIC/XBRL facts plus CC0 Wikidata metadata, published as compact JSON through Cloudflare R2 | Yes | Matches Wikidata strictly by SEC CIK, keeps 100-250 candidates per sector, and retains a validated embedded release fallback. |
+| Nine-sector candidates, SIC industry labels, concise company profiles, size proxy, and common-share estimates | Versioned catalog generated from SEC identity/SIC/XBRL facts plus CC0 Wikidata metadata, published as compact JSON through Cloudflare R2 | Yes | Anchors profiles by SEC CIK and conservatively resolves a canonical Wikidata company item when the CIK result is absent or administrative; keeps 100-250 candidates per sector and a validated embedded release fallback. |
 | Issuer name, ticker, exchange associations | US SEC EDGAR catalog, supplemented by Alpaca active assets | Yes | Associations are identifiers, not a complete security master. |
 | Overview benchmarks | Alpaca stock data for `SPY`, `DIA`, and `QQQ` ETF proxies | Yes | Labeled as proxies; values are not literal S&P 500, Dow, or Nasdaq index levels. |
 | Current price, previous close, OHLC, volume | Alpaca stock snapshots | Yes | Coverage depends on the selected feed and subscription. |
@@ -23,12 +23,18 @@ and terms change; verify them for your account and use case.
 
 Live company context is deliberately concise. The catalog prefers an English
 [Wikidata item description](https://www.wikidata.org/wiki/Help:Description)
-and a bounded set of industry labels, matched by the issuer's SEC CIK and
-published under [CC0](https://www.wikidata.org/wiki/Wikidata:Licensing) with
-its source URL. The client then adds the listing exchange, symbol, and SEC SIC
-industry as factual context. Ambiguous CIK mappings are discarded. When no
-profile is available, the client shows a readable SIC/listing fallback rather
-than implying that the classification is a full business description.
+plus bounded industry facts, published under
+[CC0](https://www.wikidata.org/wiki/Wikidata:Licensing) with the selected
+item's source URL. SEC CIK is the primary identity. If it returns no useful
+profile or only legal-jurisdiction boilerplate, a bounded entity search uses
+the normalized SEC issuer name and accepts only a unique exact match or a
+conservative corporate-name shortening with a current ticker/exchange
+statement and business identity. This fallback may also add bounded
+product/service facts. Ambiguous results, promotional text, administrative
+stubs, and one-fact generic output are discarded. The client then adds the
+listing exchange, symbol, and SEC SIC industry as separate factual context.
+When no safe profile is available, it shows a readable SIC/listing fallback
+rather than implying that classification is a full business description.
 
 Wikidata descriptions are short disambiguating phrases, not authoritative
 issuer profiles. The richer future source is the latest issuer-authored annual
@@ -500,7 +506,9 @@ Frames, and submissions responses, runs the network-free calculation fixtures,
 builds and validates the complete audit catalog, packages the compact
 deterministic artifact, and publishes it with Wrangler. Ordinary runs reuse
 both successful and empty profile lookups and fetch only missing or materially
-renamed CIKs.
+renamed CIKs. A profile-algorithm version change re-evaluates every current CIK
+and persists the canonical item, industries, products/services, and retrieval
+receipts that contributed to the selected prose.
 The first scheduled run each month performs a full profile refresh; a manual
 run can request the same operation. Immutable versioned objects are written
 before the five-minute-cache stable object and manifest. The full audit catalog

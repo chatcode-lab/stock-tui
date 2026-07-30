@@ -457,14 +457,22 @@ context is active during a launch.
 
 Freshly generated catalogs include SEC public float as a ranking proxy, dated,
 provenance-tagged share bases, official SIC industry labels, and concise CC0
-Wikidata company profiles matched by SEC CIK. Roomy ticker-detail views prefer
-the company-specific profile and retain the exchange, symbol, and SIC label as
-separate factual context. When no unambiguous Wikidata item is available, the
-view uses a readable SIC/listing fallback instead of presenting classification
-metadata as a full business description. Profile lookups are stored per CIK in
-a durable R2 snapshot: daily catalog publications fetch new or materially
-renamed issuers, while a monthly full pass refreshes the slow-changing
-descriptions. Unambiguous filing cover facts resolve automatically; reviewed
+Wikidata company profiles anchored by SEC CIK. When a CIK points only to an
+administrative legal-entity stub or has no useful profile, the builder performs
+a bounded entity search using the normalized SEC issuer name. It accepts only
+an unambiguous exact identity or a conservative corporate-name shortening with
+matching current ticker/exchange and business evidence, then combines the item
+description with structured industry and, on this fallback path,
+product/service facts. Legal-jurisdiction boilerplate and low-information
+single-fact output are rejected. Roomy ticker-detail views prefer the resulting
+company-specific profile and retain the exchange, symbol, and SIC label as
+separate factual context. When no safe Wikidata identity is available, the view
+uses a readable SIC/listing fallback instead of presenting classification
+metadata as a full business description. Profile lookups and every structured
+fact used in the prose are stored per CIK in a durable R2 snapshot: daily
+catalog publications fetch new or materially renamed issuers, while a monthly
+full pass refreshes the slow-changing descriptions. Unambiguous filing cover
+facts resolve automatically; reviewed
 multi-class, tracking-stock, Up-C,
 partnership, and SPAC structures use exact class signatures, explicit
 multipliers, and

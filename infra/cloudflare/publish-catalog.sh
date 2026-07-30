@@ -48,6 +48,23 @@ public_base_url="${public_base_url%/}"
 }
 
 jq -e '
+  def canonical_profile($symbol; $item; $meaning):
+    [
+      .companies[]
+      | select(
+          .symbol == $symbol
+          and .description_source == "wikidata"
+          and .description_source_url
+            == ("https://www.wikidata.org/wiki/" + $item)
+          and (.company_description | type) == "string"
+          and (.company_description | test($meaning; "i"))
+        )
+    ]
+    | length == 1;
+  def rejected_profile_source:
+    test(
+      "/(Q895512|Q884653|Q381047|Q175081|Q11209|Q213849|Q3901581|Q725793|Q658789)$"
+    );
   (.schema_version == 2)
   and (.catalog_version | type == "string" and length > 0)
   and (.generated_at | type == "string" and test("Z$"))
@@ -55,6 +72,41 @@ jq -e '
   and ([.companies[].symbol] | length == (unique | length))
   and ([.companies[].cik] | length == (unique | length))
   and ([.companies[].sector] | unique | length == 9)
+  and canonical_profile(
+    "AMZN";
+    "Q3884";
+    "technology|e-commerce|retail|web hosting"
+  )
+  and canonical_profile("WMT"; "Q483551"; "retail|discount")
+  and canonical_profile(
+    "CSCO";
+    "Q173395";
+    "technology|network|telecommun"
+  )
+  and (
+    [.companies[]
+      | select(
+          (.description_source_url | type) == "string"
+          and (.description_source_url | rejected_profile_source)
+        )
+    ]
+    | length == 0
+  )
+  and (
+    [.companies[]
+      | select(
+          (.company_description | type) == "string"
+          and (
+            .company_description
+            | test(
+                "(incorporated|registered|organized|domiciled) (in|under)|privately (held|owned)|^focus:";
+                "i"
+              )
+          )
+        )
+    ]
+    | length == 0
+  )
   and (
     [.companies[]
       | select(.rank <= 100 and .shares_outstanding == null)
@@ -115,8 +167,8 @@ if [[ -n "$profile_store" ]]; then
     --slurpfile catalog "$source_catalog" \
     '
       . as $profiles
-      | .schema_version == 1
-      and .algorithm_version == 1
+      | .schema_version == 2
+      and .algorithm_version == 2
       and (.entries | type == "object" and length <= 25000)
       and (
         [
@@ -149,7 +201,10 @@ if [[ -n "$profile_store" ]]; then
             | type == "string"
             and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
         )
-        and (.value.algorithm_version == 1)
+        and (
+          .value.algorithm_version
+            | type == "number" and floor == . and . >= 1 and . <= 2
+        )
         and (
           if .value.profile == null then
             true
@@ -174,12 +229,31 @@ if [[ -n "$profile_store" ]]; then
               .value.profile.industries
                 | type == "array" and length <= 4
             )
+            and (
+              .value.profile.products
+                | type == "array" and length <= 4
+            )
+            and (
+              (
+                (.value.profile.industries | length)
+                + (.value.profile.products | length)
+              ) <= 4
+            )
             and all(
               .value.profile.industries[];
               type == "string" and length > 0 and length <= 120
             )
+            and all(
+              .value.profile.products[];
+              type == "string" and length > 0 and length <= 120
+            )
           end
         )
+      )
+      and all(
+        $catalog[0].companies[].cik;
+        . as $cik
+        | $profiles.entries[$cik].algorithm_version == 2
       )
     ' \
     "$profile_store" >/dev/null
@@ -193,7 +267,7 @@ stable_key="$prefix/sec-catalog.json"
 stable_manifest_key="$prefix/sec-catalog.manifest.json"
 if [[ -n "$profile_store" ]]; then
   profile_sha256="$(sha256sum "$profile_store" | awk '{print $1}')"
-  profile_version_key="$prefix/profile-versions/v1-a1/${profile_sha256}.json"
+  profile_version_key="$prefix/profile-versions/v2-a2/${profile_sha256}.json"
   stable_profile_key="$prefix/wikidata-company-profiles-v1.json"
 fi
 

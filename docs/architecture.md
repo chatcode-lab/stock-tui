@@ -97,9 +97,12 @@ valid cached or embedded copy.
 
 The selected local catalog is upserted and supplies 100 dated members per
 sector. Newly generated catalogs also carry the SEC SIC taxonomy's short
-industry label, which the roomy ticker-detail layout turns into concise issuer
-context without another client-side profile service; older schema-v2 catalogs
-remain valid and use a numeric SIC fallback. Catalog share bases come from
+industry label and a bounded CC0 company profile. Profiles use SEC CIK first,
+then a conservative canonical-entity lookup with current ticker/exchange and
+business evidence when the CIK result is missing or administrative. The roomy
+ticker-detail layout consumes that context without another client-side profile
+service; older schema-v2 catalogs remain valid and use a numeric SIC fallback.
+Catalog share bases come from
 recent unambiguous filing facts or exact-signature reviewed policies for
 economically ambiguous issuer structures. Catalog publication fails if any
 candidate currently ranked in a sector top 100 lacks a share basis. A cached

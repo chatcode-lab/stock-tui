@@ -124,9 +124,61 @@ jobs:
             "${profile_args[@]}" \
             --output "$CATALOG_OUTPUT"
           jq -e '
+            def canonical_profile($symbol; $item; $meaning):
+              [
+                .companies[]
+                | select(
+                    .symbol == $symbol
+                    and .description_source == "wikidata"
+                    and .description_source_url
+                      == ("https://www.wikidata.org/wiki/" + $item)
+                    and (.company_description | type) == "string"
+                    and (.company_description | test($meaning; "i"))
+                  )
+              ]
+              | length == 1;
+            def rejected_profile_source:
+              test(
+                "/(Q895512|Q884653|Q381047|Q175081|Q11209|Q213849|Q3901581|Q725793|Q658789)$"
+              );
             .schema_version == 2
             and (.companies | length >= 900)
             and .selection.share_coverage.top_100_unresolved == 0
+            and canonical_profile(
+              "AMZN";
+              "Q3884";
+              "technology|e-commerce|retail|web hosting"
+            )
+            and canonical_profile("WMT"; "Q483551"; "retail|discount")
+            and canonical_profile(
+              "CSCO";
+              "Q173395";
+              "technology|network|telecommun"
+            )
+            and (
+              [.companies[]
+                | select(
+                    (.description_source_url | type) == "string"
+                    and (.description_source_url | rejected_profile_source)
+                  )
+              ]
+              | length == 0
+            )
+            and (
+              [.companies[]
+                | select(
+                    (.company_description | type) == "string"
+                    and (
+                      .company_description
+                      | test(
+                          "(incorporated|registered|organized|domiciled) (in|under)|privately (held|owned)|^focus:";
+                          "i"
+                        )
+                    )
+                  )
+              ]
+              | length == 0
+            )
             and (
               [.companies[]
                 | select(
@@ -205,8 +257,8 @@ jobs:
             --slurpfile catalog "$CATALOG_OUTPUT" \
             '
               . as $profiles
-              | .schema_version == 1
-              and .algorithm_version == 1
+              | .schema_version == 2
+              and .algorithm_version == 2
               and (.entries | type == "object")
               and (.entries | length >= ($catalog[0].companies | length))
               and (
@@ -214,7 +266,10 @@ jobs:
                   $catalog[0].companies[].cik
                   | select(
                       . as $cik
-                      | ($profiles.entries | has($cik) | not)
+                      | (
+                          ($profiles.entries | has($cik) | not)
+                          or $profiles.entries[$cik].algorithm_version != 2
+                        )
                     )
                 ]
                 | length == 0

@@ -16,6 +16,7 @@ import io
 import json
 import math
 import os
+import re
 import sys
 import time
 import unicodedata
@@ -82,11 +83,26 @@ MAX_SIC_DESCRIPTION_LENGTH = 160
 MAX_COMPANY_DESCRIPTION_LENGTH = 480
 MAX_WIKIDATA_ITEM_LABEL_LENGTH = 200
 MAX_WIKIDATA_INDUSTRY_LABEL_LENGTH = 120
+MAX_WIKIDATA_PRODUCT_LABEL_LENGTH = 120
 MAX_WIKIDATA_INDUSTRIES = 4
 WIKIDATA_QUERY_BATCH_SIZE = 100
+WIKIDATA_ENTITY_SEARCH_LIMIT = 8
+MAX_WIKIDATA_ENTITY_SEARCH_ROWS = 1_000
 WIKIDATA_REQUESTS_PER_SECOND = 1.0
-WIKIDATA_PROFILE_STORE_SCHEMA_VERSION = 1
-WIKIDATA_PROFILE_ALGORITHM_VERSION = 1
+WIKIDATA_BUSINESS_ITEM_ID = "Q4830453"
+WIKIDATA_EXCHANGE_ITEM_IDS = {
+    "CBOE": frozenset({"Q1071853"}),
+    "NYSE": frozenset({"Q13677"}),
+    "Nasdaq": frozenset({"Q82059"}),
+}
+WIKIDATA_ACTIVE_STATEMENT_RANKS = frozenset(
+    {
+        "http://wikiba.se/ontology#NormalRank",
+        "http://wikiba.se/ontology#PreferredRank",
+    }
+)
+WIKIDATA_PROFILE_STORE_SCHEMA_VERSION = 2
+WIKIDATA_PROFILE_ALGORITHM_VERSION = 2
 WIKIDATA_PROFILE_STORE_FILENAME = "wikidata-company-profiles-v1.json"
 MAX_WIKIDATA_PROFILE_STORE_ENTRIES = 25_000
 MAX_WIKIDATA_PROFILE_STORE_BYTES = 64 * 1024 * 1024
@@ -113,6 +129,63 @@ PROMOTIONAL_WIKIDATA_PHRASES = (
     "transformative",
     "world class",
     "world leading",
+)
+ADMINISTRATIVE_WIKIDATA_MARKERS = (
+    " based in ",
+    " domiciled in ",
+    " formed in ",
+    " formed under ",
+    " incorporated in ",
+    " incorporated under ",
+    " organized in ",
+    " organized under ",
+    " registered in ",
+    " registered under ",
+)
+STALE_WIKIDATA_STATUS_PHRASES = (
+    "privately held",
+    "privately owned",
+)
+GENERIC_WIKIDATA_COMPANY_MODIFIERS = frozenset(
+    {
+        "american",
+        "british",
+        "canadian",
+        "domestic",
+        "holding",
+        "international",
+        "multinational",
+        "private",
+        "privately",
+        "public",
+        "publicly",
+        "us",
+    }
+)
+GENERIC_WIKIDATA_COMPANY_NOUNS = frozenset(
+    {
+        "business",
+        "company",
+        "corporation",
+        "enterprise",
+        "organization",
+    }
+)
+WIKIDATA_ENTITY_CORPORATE_QUALIFIERS = frozenset(
+    {
+        "enterprises",
+        "global",
+        "group",
+        "holdings",
+        "industries",
+        "international",
+        "platforms",
+        "services",
+        "solutions",
+        "systems",
+        "technologies",
+        "technology",
+    }
 )
 LINK_NAMESPACE = "http://www.xbrl.org/2003/linkbase"
 XLINK_NAMESPACE = "http://www.w3.org/1999/xlink"
@@ -411,6 +484,7 @@ class CompanyProfile:
     item_id: str
     item_label: str
     industries: tuple[str, ...]
+    products: tuple[str, ...] = ()
     retrieved_at: str | None = None
 
 
@@ -815,6 +889,131 @@ ORDER BY ?cik ?item ?industry
 """
 
 
+def normalized_entity_search_issuer_name(value: str) -> str:
+    return re.sub(
+        r"\s*/(?:[A-Z]{2,3}|NEW)/?\s*$",
+        "",
+        value.strip(),
+        flags=re.IGNORECASE,
+    )
+
+
+def wikidata_entity_search_term(issuer_name: str) -> str:
+    key = normalize_issuer_label(
+        normalized_entity_search_issuer_name(issuer_name)
+    )
+    tokens = key.split()
+    if tokens and tokens[-1] == "com":
+        tokens.pop()
+    if not tokens:
+        raise ValueError("Wikidata entity-search issuer name is empty")
+    return " ".join(tokens)
+
+
+def normalized_wikidata_ticker(value: str) -> str:
+    return value.strip().upper().replace("-", ".")
+
+
+def validated_wikidata_listing_identity(
+    symbol: str,
+    exchange: str,
+) -> tuple[str, frozenset[str]]:
+    normalized_symbol = normalized_wikidata_ticker(symbol)
+    if not valid_ticker_symbol(normalized_symbol):
+        raise ValueError("invalid ticker for Wikidata entity search")
+    exchange_item_ids = WIKIDATA_EXCHANGE_ITEM_IDS.get(exchange)
+    if exchange_item_ids is None:
+        raise ValueError("unsupported exchange for Wikidata entity search")
+    return normalized_symbol, exchange_item_ids
+
+
+def wikidata_entity_search_query(
+    issuer_name: str,
+    symbol: str,
+    exchange: str,
+) -> str:
+    validated_name = validated_wikidata_text(
+        issuer_name,
+        "Wikidata entity-search issuer name",
+        MAX_WIKIDATA_ITEM_LABEL_LENGTH,
+    )
+    search_term = wikidata_entity_search_term(validated_name)
+    search_literal = json.dumps(search_term, ensure_ascii=True)
+    expected_symbol, exchange_item_ids = validated_wikidata_listing_identity(
+        symbol,
+        exchange,
+    )
+    ticker_literal = json.dumps(expected_symbol, ensure_ascii=True)
+    exchange_values = " ".join(
+        f"wd:{item_id}" for item_id in sorted(exchange_item_ids)
+    )
+    return f"""PREFIX bd: <http://www.bigdata.com/rdf#>
+PREFIX mwapi: <https://www.mediawiki.org/ontology#API/>
+PREFIX p: <http://www.wikidata.org/prop/>
+PREFIX ps: <http://www.wikidata.org/prop/statement/>
+PREFIX pq: <http://www.wikidata.org/prop/qualifier/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+PREFIX schema: <http://schema.org/>
+PREFIX wd: <http://www.wikidata.org/entity/>
+PREFIX wikibase: <http://wikiba.se/ontology#>
+PREFIX wdt: <http://www.wikidata.org/prop/direct/>
+SELECT DISTINCT ?ordinal ?item ?itemLabel ?itemDescription ?industryLabel
+                ?productLabel ?businessType ?listingExchange ?listingTicker
+                ?listingRank ?listingEnd ?ended ?parent WHERE {{
+  SERVICE wikibase:mwapi {{
+    bd:serviceParam wikibase:api "EntitySearch";
+                    wikibase:endpoint "www.wikidata.org";
+                    mwapi:search {search_literal};
+                    mwapi:language "en";
+                    mwapi:limit "{WIKIDATA_ENTITY_SEARCH_LIMIT}".
+    ?item wikibase:apiOutputItem mwapi:item.
+    ?ordinal wikibase:apiOrdinal true.
+  }}
+  ?item wdt:P31/wdt:P279* wd:{WIKIDATA_BUSINESS_ITEM_ID};
+        p:P414 ?listingStatement.
+  BIND(wd:{WIKIDATA_BUSINESS_ITEM_ID} AS ?businessType)
+  VALUES ?listingExchange {{ {exchange_values} }}
+  ?listingStatement wikibase:rank ?listingRank;
+                    ps:P414 ?listingExchange;
+                    pq:P249 ?listingTicker.
+  FILTER(?listingRank != wikibase:DeprecatedRank)
+  FILTER(
+    REPLACE(UCASE(STR(?listingTicker)), "-", ".") = {ticker_literal}
+  )
+  OPTIONAL {{ ?listingStatement pq:P582 ?listingEnd. }}
+  OPTIONAL {{ ?item wdt:P576 ?ended. }}
+  OPTIONAL {{ ?item wdt:P749 ?parent. }}
+  OPTIONAL {{
+    ?item rdfs:label ?englishLabel.
+    FILTER(LANG(?englishLabel) = "en")
+  }}
+  OPTIONAL {{
+    ?item rdfs:label ?multilingualLabel.
+    FILTER(LANG(?multilingualLabel) = "mul")
+  }}
+  BIND(COALESCE(?englishLabel, ?multilingualLabel) AS ?itemLabel)
+  FILTER(BOUND(?itemLabel))
+  OPTIONAL {{
+    ?item schema:description ?itemDescription.
+    FILTER(LANG(?itemDescription) = "en")
+  }}
+  OPTIONAL {{
+    ?item wdt:P452 ?industry.
+    ?industry rdfs:label ?industryLabel.
+    FILTER(LANG(?industryLabel) = "en")
+  }}
+  OPTIONAL {{
+    ?item wdt:P1056 ?product.
+    ?product rdfs:label ?productLabel.
+    FILTER(LANG(?productLabel) = "en")
+  }}
+}}
+ORDER BY ?ordinal ?item ?listingExchange ?listingTicker ?listingRank
+         ?industryLabel ?productLabel
+LIMIT {MAX_WIKIDATA_ENTITY_SEARCH_ROWS + 1}
+"""
+
+
 def sparql_binding_value(
     binding: dict[str, Any], field: str, *, optional: bool = False
 ) -> str | None:
@@ -826,47 +1025,119 @@ def sparql_binding_value(
     return str(value["value"])
 
 
+def cleaned_wikidata_description(description: str | None) -> str:
+    if description is None:
+        return ""
+    base = description.strip()
+    if not base:
+        return ""
+
+    administrative_suffix = re.compile(
+        r"\s+(?:based|domiciled|formed|incorporated|organized|registered)"
+        r"\s+(?:in|under)\s+.+$",
+        flags=re.IGNORECASE,
+    )
+    base = administrative_suffix.sub("", base).rstrip(" ,;:-")
+    if not base:
+        return ""
+    normalized_base = normalize_text_label(base)
+    padded_base = f" {normalized_base} "
+    location_prefix, separator, _ = normalized_base.partition(" in ")
+    location_prefix_tokens = location_prefix.split()
+    generic_location_description = (
+        bool(separator)
+        and bool(location_prefix_tokens)
+        and location_prefix_tokens[-1] in GENERIC_WIKIDATA_COMPANY_NOUNS
+        and set(location_prefix_tokens[:-1])
+        <= GENERIC_WIKIDATA_COMPANY_MODIFIERS
+    )
+    if (
+        normalized_base in GENERIC_WIKIDATA_DESCRIPTIONS
+        or normalized_base in {"american holding company", "holding company"}
+        or generic_location_description
+        or any(
+            f" {marker.strip()} " in padded_base
+            for marker in ADMINISTRATIVE_WIKIDATA_MARKERS
+        )
+        or any(
+            f" {phrase} " in padded_base
+            for phrase in STALE_WIKIDATA_STATUS_PHRASES
+        )
+        or any(
+            f" {phrase} " in padded_base
+            for phrase in PROMOTIONAL_WIKIDATA_PHRASES
+        )
+    ):
+        return ""
+
+    capitalized = base[0].upper() + base[1:]
+    if len(capitalized) <= MAX_COMPANY_DESCRIPTION_LENGTH:
+        base = capitalized
+    if base[-1] not in ".!?" and len(base) < MAX_COMPANY_DESCRIPTION_LENGTH:
+        base += "."
+    return base
+
+
 def synthesize_company_description(
     description: str | None,
     industries: Iterable[str],
+    products: Iterable[str] = (),
 ) -> str | None:
-    base = description or ""
-    if base:
-        capitalized = base[0].upper() + base[1:]
-        if len(capitalized) <= MAX_COMPANY_DESCRIPTION_LENGTH:
-            base = capitalized
-        if (
-            base[-1] not in ".!?"
-            and len(base) < MAX_COMPANY_DESCRIPTION_LENGTH
-        ):
-            base += "."
-        normalized_base = normalize_text_label(base)
-        padded_base = f" {normalized_base} "
-        if normalized_base in GENERIC_WIKIDATA_DESCRIPTIONS or any(
-            f" {phrase} " in padded_base
-            for phrase in PROMOTIONAL_WIKIDATA_PHRASES
-        ):
-            base = ""
+    result, _, _ = synthesized_company_profile_parts(
+        description,
+        industries,
+        products,
+    )
+    return result
 
-    ordered = refined_industry_labels(base, industries)
 
-    if not base and not ordered:
-        return None
-    if not ordered:
-        return base
+def synthesized_company_profile_parts(
+    description: str | None,
+    industries: Iterable[str],
+    products: Iterable[str] = (),
+) -> tuple[str | None, tuple[str, ...], tuple[str, ...]]:
+    base = cleaned_wikidata_description(description)
+    ordered_industries = refined_industry_labels(base, industries)
+    ordered_products = refined_product_labels(
+        base,
+        ordered_industries,
+        products,
+        max(0, 2 - len(ordered_industries)),
+    )
 
-    included: list[str] = []
-    for industry in ordered:
-        candidate_industries = [*included, industry]
-        suffix = "Focus: " + natural_language_list(candidate_industries) + "."
-        candidate = f"{base} {suffix}".strip()
-        if len(candidate) > MAX_COMPANY_DESCRIPTION_LENGTH:
+    selected_industries = list(ordered_industries)
+    selected_products = list(ordered_products)
+    while True:
+        parts = [base] if base else []
+        if selected_industries:
+            parts.append(
+                ("Focus: " if base else "Business areas: ")
+                + natural_language_list(selected_industries)
+                + "."
+            )
+        if selected_products:
+            parts.append(
+                "Products and services: "
+                + natural_language_list(selected_products)
+                + "."
+            )
+        result = " ".join(parts)
+        if len(result) <= MAX_COMPANY_DESCRIPTION_LENGTH:
             break
-        included = candidate_industries
-    if not included:
-        return base or None
-    suffix = "Focus: " + natural_language_list(included) + "."
-    return f"{base} {suffix}".strip()
+        if selected_products:
+            selected_products.pop()
+        elif selected_industries:
+            selected_industries.pop()
+        else:
+            return base or None, (), ()
+
+    if not base and len(selected_industries) + len(selected_products) < 2:
+        return None, (), ()
+    return (
+        result or None,
+        tuple(selected_industries),
+        tuple(selected_products),
+    )
 
 
 def industry_meaning_tokens(value: str) -> frozenset[str]:
@@ -969,6 +1240,63 @@ def refined_industry_labels(
     )
 
 
+def refined_product_labels(
+    description: str | None,
+    industries: Iterable[str],
+    products: Iterable[str],
+    maximum: int,
+) -> tuple[str, ...]:
+    if maximum <= 0:
+        return ()
+    context_tokens = industry_meaning_tokens(
+        " ".join([description or "", *industries])
+    )
+    candidates: dict[frozenset[str], str] = {}
+    for product in products:
+        display = " ".join(product.split())
+        normalized = normalize_text_label(display)
+        tokens = industry_meaning_tokens(display)
+        if (
+            not normalized
+            or normalized in {"goods", "product", "products", "service", "services"}
+            or not tokens
+            or tokens <= context_tokens
+        ):
+            continue
+        existing = candidates.get(tokens)
+        if existing is None or (
+            len(display),
+            normalize_text_label(display),
+            display,
+        ) < (
+            len(existing),
+            normalize_text_label(existing),
+            existing,
+        ):
+            candidates[tokens] = display
+
+    selected: list[tuple[frozenset[str], str]] = []
+    for tokens, display in sorted(
+        candidates.items(),
+        key=lambda item: (
+            -len(item[0]),
+            normalize_text_label(item[1]),
+            item[1],
+        ),
+    ):
+        if any(tokens <= selected_tokens for selected_tokens, _ in selected):
+            continue
+        selected.append((tokens, display))
+        if len(selected) == maximum:
+            break
+    return tuple(
+        sorted(
+            (display for _, display in selected),
+            key=lambda value: (normalize_text_label(value), value),
+        )
+    )
+
+
 def natural_language_list(values: list[str]) -> str:
     if not values:
         raise ValueError("natural-language list cannot be empty")
@@ -1005,16 +1333,20 @@ def validated_stored_company_profile(
     value: Any,
     location: str,
     retrieved_at: str,
+    schema_version: int,
 ) -> CompanyProfile | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != {
+    expected_fields = {
         "description",
         "source_url",
         "item_id",
         "item_label",
         "industries",
-    }:
+    }
+    if schema_version >= 2:
+        expected_fields.add("products")
+    if not isinstance(value, dict) or set(value) != expected_fields:
         raise RuntimeError(f"{location} has an unexpected shape")
     description = validated_wikidata_text(
         value["description"],
@@ -1067,12 +1399,36 @@ def validated_stored_company_profile(
         )
     ) != industries:
         raise RuntimeError(f"{location} industries must be sorted and unique")
+    raw_products = value.get("products", [])
+    if (
+        not isinstance(raw_products, list)
+        or len(raw_products) > MAX_WIKIDATA_INDUSTRIES
+    ):
+        raise RuntimeError(f"{location} products must be a bounded list")
+    products = tuple(
+        validated_wikidata_text(
+            product,
+            f"{location} product {index}",
+            MAX_WIKIDATA_PRODUCT_LABEL_LENGTH,
+        )
+        for index, product in enumerate(raw_products)
+    )
+    if tuple(
+        sorted(
+            set(products),
+            key=lambda product: (normalize_text_label(product), product),
+        )
+    ) != products:
+        raise RuntimeError(f"{location} products must be sorted and unique")
+    if len(industries) + len(products) > MAX_WIKIDATA_INDUSTRIES:
+        raise RuntimeError(f"{location} has too many structured profile facts")
     return CompanyProfile(
         description=description,
         source_url=source_url,
         item_id=item_id,
         item_label=item_label,
         industries=industries,
+        products=products,
         retrieved_at=retrieved_at,
     )
 
@@ -1093,7 +1449,12 @@ def parse_company_profile_store(
         "entries",
     }:
         raise RuntimeError(f"{location} has an unexpected shape")
-    if document["schema_version"] != WIKIDATA_PROFILE_STORE_SCHEMA_VERSION:
+    schema_version = document["schema_version"]
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or not 1 <= schema_version <= WIKIDATA_PROFILE_STORE_SCHEMA_VERSION
+    ):
         raise RuntimeError(f"{location} uses an unsupported schema version")
     validated_profile_algorithm_version(
         document["algorithm_version"],
@@ -1159,6 +1520,7 @@ def parse_company_profile_store(
                 value["profile"],
                 f"{entry_location} profile",
                 retrieved_at,
+                schema_version,
             ),
         )
     return entries
@@ -1224,6 +1586,7 @@ def serialize_company_profile_store(
                     "item_id": profile.item_id,
                     "item_label": profile.item_label,
                     "industries": list(profile.industries),
+                    "products": list(profile.products),
                 }
             ),
         }
@@ -1260,6 +1623,7 @@ def profile_with_retrieval_time(
         item_id=profile.item_id,
         item_label=profile.item_label,
         industries=profile.industries,
+        products=profile.products,
         retrieved_at=retrieved_at,
     )
 
@@ -1364,13 +1728,10 @@ def parse_wikidata_company_profiles(
                 key=lambda value: (normalize_text_label(value), value),
             )
         )
-        industries = refined_industry_labels(
-            descriptions[0] if descriptions else None,
+        base_description = descriptions[0] if descriptions else None
+        description, industries, products = synthesized_company_profile_parts(
+            base_description,
             raw_industries,
-        )
-        description = synthesize_company_description(
-            descriptions[0] if descriptions else None,
-            industries,
         )
         if description is None:
             continue
@@ -1380,8 +1741,248 @@ def parse_wikidata_company_profiles(
             item_id=selected_id,
             item_label=selected["label"],
             industries=industries,
+            products=products,
         )
     return profiles
+
+
+def wikidata_entity_identity_strength(
+    issuer_name: str,
+    item_label: str,
+) -> int | None:
+    issuer_key = wikidata_entity_search_term(issuer_name)
+    item_key = normalize_issuer_label(item_label)
+    if item_key == issuer_key:
+        return 0
+
+    issuer_tokens = issuer_key.split()
+    item_tokens = item_key.split()
+    if (
+        item_tokens
+        and issuer_tokens[: len(item_tokens)] == item_tokens
+        and len(item_tokens) < len(issuer_tokens)
+        and set(issuer_tokens[len(item_tokens) :])
+        <= WIKIDATA_ENTITY_CORPORATE_QUALIFIERS
+    ):
+        return 1
+    return None
+
+
+def parse_wikidata_entity_search_profile(
+    payload: bytes,
+    issuer_name: str,
+    symbol: str,
+    exchange: str,
+) -> CompanyProfile | None:
+    expected_name = validated_wikidata_text(
+        issuer_name,
+        "Wikidata entity-search issuer name",
+        MAX_WIKIDATA_ITEM_LABEL_LENGTH,
+    )
+    expected_symbol, expected_exchange_item_ids = (
+        validated_wikidata_listing_identity(symbol, exchange)
+    )
+    bindings = wikidata_result_bindings(payload)
+    if len(bindings) > MAX_WIKIDATA_ENTITY_SEARCH_ROWS:
+        raise RuntimeError("Wikidata entity search returned too many rows")
+
+    items: dict[str, dict[str, Any]] = {}
+    for row_index, value in enumerate(bindings):
+        if not isinstance(value, dict):
+            raise RuntimeError(
+                f"Wikidata entity-search row {row_index} is not an object"
+            )
+        raw_ordinal = sparql_binding_value(value, "ordinal")
+        if (
+            raw_ordinal is None
+            or not raw_ordinal.isascii()
+            or not raw_ordinal.isdigit()
+        ):
+            raise RuntimeError(
+                f"Wikidata entity-search row {row_index} has an invalid ordinal"
+            )
+        ordinal = int(raw_ordinal)
+        if not 0 <= ordinal < WIKIDATA_ENTITY_SEARCH_LIMIT:
+            raise RuntimeError(
+                f"Wikidata entity-search row {row_index} has an invalid ordinal"
+            )
+        item_id = wikidata_item_id(sparql_binding_value(value, "item"))
+        item_label = validated_wikidata_text(
+            sparql_binding_value(value, "itemLabel"),
+            f"Wikidata {item_id} label",
+            MAX_WIKIDATA_ITEM_LABEL_LENGTH,
+        )
+        business_type = wikidata_item_id(
+            sparql_binding_value(value, "businessType")
+        )
+        listing_exchange = wikidata_item_id(
+            sparql_binding_value(value, "listingExchange")
+        )
+        listing_ticker = validated_wikidata_text(
+            sparql_binding_value(value, "listingTicker"),
+            f"Wikidata {item_id} listing ticker",
+            32,
+        )
+        listing_rank = validated_wikidata_text(
+            sparql_binding_value(value, "listingRank"),
+            f"Wikidata {item_id} listing rank",
+            64,
+        )
+        listing_end = sparql_binding_value(
+            value,
+            "listingEnd",
+            optional=True,
+        )
+        ended = sparql_binding_value(value, "ended", optional=True)
+        raw_parent = sparql_binding_value(value, "parent", optional=True)
+        parent = (
+            None if raw_parent is None else wikidata_item_id(raw_parent)
+        )
+        raw_description = sparql_binding_value(
+            value, "itemDescription", optional=True
+        )
+        description = (
+            None
+            if raw_description is None
+            else validated_wikidata_text(
+                raw_description,
+                f"Wikidata {item_id} description",
+                MAX_COMPANY_DESCRIPTION_LENGTH,
+            )
+        )
+        raw_industry = sparql_binding_value(
+            value, "industryLabel", optional=True
+        )
+        industry = (
+            None
+            if raw_industry is None
+            else validated_wikidata_text(
+                raw_industry,
+                f"Wikidata {item_id} industry",
+                MAX_WIKIDATA_INDUSTRY_LABEL_LENGTH,
+            )
+        )
+        raw_product = sparql_binding_value(value, "productLabel", optional=True)
+        product = (
+            None
+            if raw_product is None
+            else validated_wikidata_text(
+                raw_product,
+                f"Wikidata {item_id} product",
+                MAX_WIKIDATA_PRODUCT_LABEL_LENGTH,
+            )
+        )
+
+        record = items.setdefault(
+            item_id,
+            {
+                "ordinal": ordinal,
+                "label": item_label,
+                "descriptions": set(),
+                "industries": set(),
+                "products": set(),
+                "business_types": set(),
+                "listings": set(),
+                "ended": False,
+                "parents": set(),
+            },
+        )
+        if record["ordinal"] != ordinal or record["label"] != item_label:
+            raise RuntimeError(
+                f"Wikidata {item_id} has conflicting entity-search identity"
+            )
+        if description is not None:
+            record["descriptions"].add(description)
+        if industry is not None:
+            record["industries"].add(industry)
+        if product is not None:
+            record["products"].add(product)
+        record["business_types"].add(business_type)
+        record["listings"].add(
+            (
+                listing_exchange,
+                normalized_wikidata_ticker(listing_ticker),
+                listing_rank,
+                listing_end is not None,
+            )
+        )
+        record["ended"] = record["ended"] or ended is not None
+        if parent is not None:
+            record["parents"].add(parent)
+
+    candidates: list[tuple[int, CompanyProfile]] = []
+    for item_id in sorted(items, key=lambda item: int(item[1:])):
+        item = items[item_id]
+        strength = wikidata_entity_identity_strength(
+            expected_name,
+            item["label"],
+        )
+        has_active_listing = any(
+            listing_exchange in expected_exchange_item_ids
+            and listing_ticker == expected_symbol
+            and listing_rank in WIKIDATA_ACTIVE_STATEMENT_RANKS
+            and not listing_ended
+            for (
+                listing_exchange,
+                listing_ticker,
+                listing_rank,
+                listing_ended,
+            ) in item["listings"]
+        )
+        if (
+            strength is None
+            or WIKIDATA_BUSINESS_ITEM_ID not in item["business_types"]
+            or not has_active_listing
+            or item["ended"]
+            or item["parents"]
+        ):
+            continue
+        descriptions = sorted(item["descriptions"])
+        if len(descriptions) > 1:
+            raise RuntimeError(
+                f"Wikidata {item_id} has conflicting English descriptions"
+            )
+        base_description = descriptions[0] if descriptions else None
+        raw_industries = tuple(
+            sorted(
+                item["industries"],
+                key=lambda value: (normalize_text_label(value), value),
+            )
+        )
+        raw_products = tuple(
+            sorted(
+                item["products"],
+                key=lambda value: (normalize_text_label(value), value),
+            )
+        )
+        description, industries, products = synthesized_company_profile_parts(
+            base_description,
+            raw_industries,
+            raw_products,
+        )
+        if description is None:
+            continue
+        candidates.append(
+            (
+                strength,
+                CompanyProfile(
+                    description=description,
+                    source_url=f"https://www.wikidata.org/wiki/{item_id}",
+                    item_id=item_id,
+                    item_label=item["label"],
+                    industries=industries,
+                    products=products,
+                ),
+            )
+        )
+
+    if not candidates:
+        return None
+    best_strength = min(strength for strength, _ in candidates)
+    best = [
+        profile for strength, profile in candidates if strength == best_strength
+    ]
+    return best[0] if len(best) == 1 else None
 
 
 def load_wikidata_company_profiles(
@@ -1391,6 +1992,7 @@ def load_wikidata_company_profiles(
     refresh: bool = False,
 ) -> tuple[dict[str, CompanyProfile], dict[str, str]]:
     expected: dict[str, str] = {}
+    listing_identities: dict[str, tuple[str, str]] = {}
     for company in companies:
         cik = normalize_sec_cik(company["cik"])
         if cik is None:
@@ -1400,6 +2002,14 @@ def load_wikidata_company_profiles(
             f"SEC issuer {cik} name",
             MAX_WIKIDATA_ITEM_LABEL_LENGTH,
         )
+        symbol, exchange_item_ids = validated_wikidata_listing_identity(
+            str(company["symbol"]),
+            str(company["exchange"]),
+        )
+        exchange = str(company["exchange"])
+        if not exchange_item_ids:
+            raise AssertionError("Wikidata exchange mapping cannot be empty")
+        listing_identities[cik] = (symbol, exchange)
     ordered_ciks = sorted(expected, key=int)
     store_path = client.cache_dir / WIKIDATA_PROFILE_STORE_FILENAME
     entries = load_company_profile_store(store_path)
@@ -1419,24 +2029,33 @@ def load_wikidata_company_profiles(
             client.query(query, bypass_cache=refresh),
             {cik: expected[cik] for cik in batch},
         )
-        checked_at = client.receipt_for_query(query)
+        batch_checked_at = client.receipt_for_query(query)
         for cik in batch:
-            previous = entries.get(cik)
             profile = parsed.get(cik)
+            checked_at = batch_checked_at
+            if profile is None:
+                symbol, exchange = listing_identities[cik]
+                search_query = wikidata_entity_search_query(
+                    expected[cik],
+                    symbol,
+                    exchange,
+                )
+                profile = parse_wikidata_entity_search_profile(
+                    client.query(search_query, bypass_cache=refresh),
+                    expected[cik],
+                    symbol,
+                    exchange,
+                )
+                checked_at = max(
+                    checked_at,
+                    client.receipt_for_query(search_query),
+                )
             if profile is not None:
                 retrieved_at = checked_at
                 stored_profile = profile_with_retrieval_time(
                     profile,
                     retrieved_at,
                 )
-            elif (
-                previous is not None
-                and previous.profile is not None
-                and previous.algorithm_version
-                == WIKIDATA_PROFILE_ALGORITHM_VERSION
-            ):
-                retrieved_at = previous.retrieved_at
-                stored_profile = previous.profile
             else:
                 retrieved_at = checked_at
                 stored_profile = None
@@ -1491,6 +2110,7 @@ def enrich_companies_with_profiles(
             "item": profile.item_id,
             "item_label": profile.item_label,
             "industries": list(profile.industries),
+            "products": list(profile.products),
             "license": "CC0-1.0",
         }
         if profile.retrieved_at is not None:
@@ -4523,7 +5143,9 @@ def main() -> int:
             "company_descriptions": {
                 "source": (
                     "English Wikidata item descriptions and industry labels "
-                    "matched by SEC CIK"
+                    "anchored by SEC CIK; conservative canonical-entity "
+                    "fallbacks require current listing and business evidence "
+                    "and may add product or service labels"
                 ),
                 "license": "CC0-1.0",
                 "profile_algorithm_version": (

@@ -13,10 +13,10 @@ The `stock-tui-catalog` R2 bucket is exposed through the custom domain
 | --- | --- | --- |
 | `/catalog/sec-catalog.json` | Stable compact catalog, transported with gzip content encoding | 5 minutes, with one-hour stale reuse |
 | `/catalog/sec-catalog.manifest.json` | Stable artifact checksum and metadata | 5 minutes, with one-hour stale reuse |
-| `/catalog/wikidata-company-profiles-v1.json` | Durable builder snapshot of positive and empty per-CIK profile lookups | Must revalidate |
+| `/catalog/wikidata-company-profiles-v1.json` | Durable schema-v2 builder snapshot of positive and empty per-CIK profile lookups and selected structured facts | Must revalidate |
 | `/catalog/versions/<version>/<timestamp>-<sha>.json` | Immutable compact catalog | 1 year, immutable |
 | Matching `.manifest.json` | Immutable checksum and metadata | 1 year, immutable |
-| `/catalog/profile-versions/v1-a1/<sha>.json` | Immutable company-profile snapshot | 1 year, immutable |
+| `/catalog/profile-versions/v2-a2/<sha>.json` | Immutable company-profile snapshot | 1 year, immutable |
 
 The `sec-catalog.json` object contains deterministic gzip bytes. R2 metadata
 sets `Content-Type: application/json` and `Content-Encoding: gzip`, so normal
@@ -123,11 +123,13 @@ per-CIK company-profile snapshot. Before each build, the workflow restores the
 stable profile snapshot from R2, then `refresh-sec-cache.sh` invalidates only
 mutable SEC ticker associations, XBRL Frames inputs, and submissions. Wikidata
 positive and negative lookups remain stable between monthly refreshes, while
-new CIKs are fetched on the next daily build. The working snapshot is stored as
-`wikidata-company-profiles-v1.json` under the configured source-cache
-directory. The full audit JSON and profile snapshot are retained as private
-Actions artifacts for 14 days. R2 stores the compact catalog and manifest plus
-stable and content-addressed profile snapshots.
+new CIKs are fetched on the next daily build. A profile-algorithm change
+re-evaluates every current issuer. The schema-v2 working snapshot retains the
+selected item, industries, products/services, and retrieval receipts under the
+backward-compatible `wikidata-company-profiles-v1.json` object name. The full
+audit JSON and profile snapshot are retained as private Actions artifacts for
+14 days. R2 stores the compact catalog and manifest plus stable and
+content-addressed profile snapshots.
 
 ## Validation
 

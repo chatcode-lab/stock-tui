@@ -70,11 +70,14 @@ exchange, industry, optional estimated market cap, the numeric SEC public-float
 ranking proxy with source/date/confidence, the share estimate with
 source/date/method/confidence, catalog rank, description, current-universe and
 retained flags, and metadata update time. Catalog descriptions prefer
-CIK-matched CC0 Wikidata context; SIC/listing text remains the fallback.
-Catalog generation keeps positive and empty description lookups in a separate
-per-CIK source snapshot persisted through R2. Routine daily publications fetch
-only unknown or materially renamed issuers; a full refresh is scheduled
-monthly.
+CIK-anchored CC0 Wikidata context. A conservative normalized-name lookup can
+select the canonical company item when a CIK item is absent or only
+administrative, but only with matching current ticker/exchange and business
+evidence; SIC/listing text remains the fallback. Catalog generation keeps
+positive and empty description lookups plus the structured facts used in the
+prose in a separate per-CIK source snapshot persisted through R2. Routine
+daily publications fetch only unknown or materially renamed issuers; a full
+refresh is scheduled monthly.
 
 The symbol is the primary key. Symbols are trimmed and uppercased at storage
 boundaries.

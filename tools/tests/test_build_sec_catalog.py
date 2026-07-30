@@ -95,6 +95,89 @@ def wikidata_payload(
     return json.dumps({"results": {"bindings": list(bindings)}}).encode()
 
 
+def wikidata_search_binding(
+    ordinal: int,
+    item_id: str,
+    label: str,
+    *,
+    business_type: str = catalog.WIKIDATA_BUSINESS_ITEM_ID,
+    exchange_item: str = "Q82059",
+    ticker: str = "EXM",
+    listing_rank: str = "http://wikiba.se/ontology#NormalRank",
+    listing_end: str | None = None,
+    ended: str | None = None,
+    parent: str | None = None,
+    description: str | None = None,
+    industry: str | None = None,
+    product: str | None = None,
+) -> dict[str, dict[str, str]]:
+    binding = {
+        "ordinal": {
+            "type": "literal",
+            "value": str(ordinal),
+        },
+        "item": {
+            "type": "uri",
+            "value": f"http://www.wikidata.org/entity/{item_id}",
+        },
+        "itemLabel": {
+            "type": "literal",
+            "xml:lang": "en",
+            "value": label,
+        },
+        "businessType": {
+            "type": "uri",
+            "value": f"http://www.wikidata.org/entity/{business_type}",
+        },
+        "listingExchange": {
+            "type": "uri",
+            "value": f"http://www.wikidata.org/entity/{exchange_item}",
+        },
+        "listingTicker": {
+            "type": "literal",
+            "value": ticker,
+        },
+        "listingRank": {
+            "type": "uri",
+            "value": listing_rank,
+        },
+    }
+    if listing_end is not None:
+        binding["listingEnd"] = {
+            "type": "literal",
+            "value": listing_end,
+        }
+    if ended is not None:
+        binding["ended"] = {
+            "type": "literal",
+            "value": ended,
+        }
+    if parent is not None:
+        binding["parent"] = {
+            "type": "uri",
+            "value": f"http://www.wikidata.org/entity/{parent}",
+        }
+    if description is not None:
+        binding["itemDescription"] = {
+            "type": "literal",
+            "xml:lang": "en",
+            "value": description,
+        }
+    if industry is not None:
+        binding["industryLabel"] = {
+            "type": "literal",
+            "xml:lang": "en",
+            "value": industry,
+        }
+    if product is not None:
+        binding["productLabel"] = {
+            "type": "literal",
+            "xml:lang": "en",
+            "value": product,
+        }
+    return binding
+
+
 class SicDescriptionTests(unittest.TestCase):
     def test_parses_documentation_labels_through_xbrl_arcs(self) -> None:
         payload = b"""<?xml version="1.0"?>
@@ -163,6 +246,53 @@ class WikidataCompanyProfileTests(unittest.TestCase):
         self.assertIn('"0000320193"', first)
         self.assertIn('"1652044"', first)
         self.assertIn('"0001652044"', first)
+
+    def test_entity_search_query_is_bounded_structured_and_escaped(self) -> None:
+        query = catalog.wikidata_entity_search_query(
+            "AMAZON COM INC",
+            "AMZN",
+            "Nasdaq",
+        )
+
+        self.assertIn('wikibase:api "EntitySearch"', query)
+        self.assertIn('mwapi:search "amazon"', query)
+        self.assertEqual(
+            catalog.wikidata_entity_search_term("AMAZON COM INC"),
+            "amazon",
+        )
+        self.assertEqual(
+            catalog.wikidata_entity_search_term(
+                "BANK OF AMERICA CORP /DE/"
+            ),
+            "bank of america",
+        )
+        self.assertIn("wdt:P452", query)
+        self.assertIn("wdt:P1056", query)
+        self.assertIn(
+            f"wdt:P31/wdt:P279* wd:{catalog.WIKIDATA_BUSINESS_ITEM_ID}",
+            query,
+        )
+        self.assertIn("pq:P249 ?listingTicker", query)
+        self.assertIn("wikibase:rank ?listingRank", query)
+        self.assertIn(
+            "FILTER(?listingRank != wikibase:DeprecatedRank)",
+            query,
+        )
+        self.assertIn("VALUES ?listingExchange { wd:Q82059 }", query)
+        self.assertIn('"AMZN"', query)
+        self.assertIn(
+            "COALESCE(?englishLabel, ?multilingualLabel)",
+            query,
+        )
+        self.assertIn(
+            f'mwapi:limit "{catalog.WIKIDATA_ENTITY_SEARCH_LIMIT}"',
+            query,
+        )
+        self.assertTrue(
+            query.rstrip().endswith(
+                f"LIMIT {catalog.MAX_WIKIDATA_ENTITY_SEARCH_ROWS + 1}"
+            )
+        )
 
     def test_builds_readable_description_with_sorted_distinct_industries(
         self,
@@ -256,24 +386,61 @@ class WikidataCompanyProfileTests(unittest.TestCase):
         self.assertIsNone(
             catalog.synthesize_company_description("company", ())
         )
-        self.assertEqual(
+        self.assertIsNone(
             catalog.synthesize_company_description(
                 "American company",
                 ("dental equipment industry",),
+            )
+        )
+        self.assertEqual(
+            catalog.synthesize_company_description(
+                "American company",
+                ("dental equipment industry", "medical technology industry"),
             ),
-            "Focus: dental equipment.",
+            "Business areas: dental equipment and medical technology.",
         )
 
     def test_promotional_description_is_replaced_by_factual_focus(self) -> None:
-        self.assertEqual(
+        self.assertIsNone(
             catalog.synthesize_company_description(
                 (
                     "Innovative biopharmaceutical company focused on "
                     "transformative medicines"
                 ),
                 ("pharmaceutical industry",),
+            )
+        )
+
+    def test_legal_and_jurisdiction_boilerplate_is_removed_or_rejected(
+        self,
+    ) -> None:
+        self.assertEqual(
+            catalog.cleaned_wikidata_description(
+                "American insurance company incorporated in Zurich."
             ),
-            "Focus: pharmaceuticals.",
+            "American insurance company.",
+        )
+        for description in (
+            "Company incorporated in Delaware",
+            "Corporation registered under Delaware law",
+            "American holding company",
+            "Public company based in New York",
+            "Privately held American software company",
+            "American company in Delaware",
+            "Private corporation in Toronto",
+            "Holding company in New York",
+            "; incorporated in Delaware",
+        ):
+            with self.subTest(description=description):
+                self.assertEqual(
+                    catalog.cleaned_wikidata_description(description),
+                    "",
+                )
+        self.assertEqual(
+            catalog.cleaned_wikidata_description(
+                "American software company in Seattle"
+            ),
+            "American software company in Seattle.",
         )
 
     def test_duplicate_cik_selects_only_one_exact_normalized_label(
@@ -350,6 +517,481 @@ class WikidataCompanyProfileTests(unittest.TestCase):
             {},
         )
 
+    def test_amazon_legal_stub_falls_back_to_canonical_company_profile(
+        self,
+    ) -> None:
+        exact_payload = wikidata_payload(
+            wikidata_binding(
+                "0001018724",
+                "Q133848906",
+                "Amazon.com, Inc.",
+                description="company incorporated in Delaware",
+            )
+        )
+        search_payload = wikidata_payload(
+            wikidata_search_binding(
+                0,
+                "Q3884",
+                "Amazon",
+                ticker="AMZN",
+                description="American multinational technology company",
+                industry="e-commerce",
+                product="Amazon Web Services",
+            ),
+            wikidata_search_binding(
+                1,
+                "Q133848906",
+                "Amazon.com, Inc.",
+                ticker="AMZN",
+                description="company incorporated in Delaware",
+            ),
+        )
+
+        self.assertEqual(
+            catalog.parse_wikidata_company_profiles(
+                exact_payload,
+                {"0001018724": "AMAZON COM INC"},
+            ),
+            {},
+        )
+        profile = catalog.parse_wikidata_entity_search_profile(
+            search_payload,
+            "AMAZON COM INC",
+            "AMZN",
+            "Nasdaq",
+        )
+
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(profile.item_id, "Q3884")
+        self.assertEqual(
+            profile.description,
+            (
+                "American multinational technology company. Focus: e-commerce. "
+                "Products and services: Amazon Web Services."
+            ),
+        )
+        self.assertEqual(profile.industries, ("e-commerce",))
+        self.assertEqual(profile.products, ("Amazon Web Services",))
+
+    def test_entity_search_accepts_two_structured_facts_without_a_stub(
+        self,
+    ) -> None:
+        profile = catalog.parse_wikidata_entity_search_profile(
+            wikidata_payload(
+                wikidata_search_binding(
+                    0,
+                    "Q10",
+                    "Example",
+                    product="industrial robots",
+                ),
+                wikidata_search_binding(
+                    0,
+                    "Q10",
+                    "Example",
+                    product="factory software",
+                ),
+            ),
+            "Example Inc.",
+            "EXM",
+            "Nasdaq",
+        )
+
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(
+            profile.description,
+            "Products and services: factory software and industrial robots.",
+        )
+
+    def test_entity_search_accepts_unique_top_corporate_name_shortening(
+        self,
+    ) -> None:
+        profile = catalog.parse_wikidata_entity_search_profile(
+            wikidata_payload(
+                wikidata_search_binding(
+                    0,
+                    "Q173395",
+                    "Cisco",
+                    ticker="CSCO",
+                    description="American digital communications company",
+                    industry="networking hardware",
+                ),
+                wikidata_search_binding(
+                    1,
+                    "Q20",
+                    "Cisco Systems India",
+                    ticker="CSCO",
+                    description="Indian subsidiary",
+                ),
+            ),
+            "CISCO SYSTEMS INC",
+            "CSCO",
+            "Nasdaq",
+        )
+
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(profile.item_id, "Q173395")
+        self.assertEqual(
+            profile.description,
+            (
+                "American digital communications company. "
+                "Focus: networking hardware."
+            ),
+        )
+
+    def test_entity_search_rejects_known_non_business_name_collisions(
+        self,
+    ) -> None:
+        collisions = (
+            ("BOX INC", "BOX", "Q895512", "Box", "Q43229", "English village"),
+            (
+                "BLOCK INC",
+                "XYZ",
+                "Q884653",
+                "Block",
+                "Q101352",
+                "family name",
+            ),
+            (
+                "MOSAIC CO",
+                "MOS",
+                "Q381047",
+                "Mosaic",
+                "Q131093",
+                "early web browser",
+            ),
+            (
+                "GAP INC",
+                "GAP",
+                "Q175081",
+                "Gap",
+                "Q484170",
+                "French commune",
+            ),
+        )
+        for issuer, symbol, item_id, label, item_type, description in collisions:
+            with self.subTest(symbol=symbol):
+                self.assertIsNone(
+                    catalog.parse_wikidata_entity_search_profile(
+                        wikidata_payload(
+                            wikidata_search_binding(
+                                0,
+                                item_id,
+                                label,
+                                business_type=item_type,
+                                exchange_item="Q13677",
+                                ticker=symbol,
+                                description=description,
+                            )
+                        ),
+                        issuer,
+                        symbol,
+                        "NYSE",
+                    )
+                )
+
+    def test_entity_search_accepts_unique_later_business_listing_match(
+        self,
+    ) -> None:
+        profile = catalog.parse_wikidata_entity_search_profile(
+            wikidata_payload(
+                wikidata_search_binding(
+                    0,
+                    "Q175081",
+                    "Gap",
+                    business_type="Q484170",
+                    exchange_item="Q13677",
+                    ticker="GAP",
+                    description="French commune",
+                ),
+                wikidata_search_binding(
+                    3,
+                    "Q420822",
+                    "Gap Inc.",
+                    exchange_item="Q13677",
+                    ticker="GAP",
+                    description="American clothing and accessories retailer",
+                    industry="retail",
+                ),
+            ),
+            "GAP INC",
+            "GAP",
+            "NYSE",
+        )
+
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(profile.item_id, "Q420822")
+
+    def test_entity_search_requires_active_compatible_independent_listing(
+        self,
+    ) -> None:
+        incompatible_evidence = (
+            {"ticker": "OTHER"},
+            {"exchange_item": "Q13677"},
+            {"listing_rank": "http://wikiba.se/ontology#DeprecatedRank"},
+            {"listing_end": "2025-01-01T00:00:00Z"},
+            {"ended": "2025-01-01T00:00:00Z"},
+            {"parent": "Q2"},
+        )
+        for evidence in incompatible_evidence:
+            with self.subTest(evidence=evidence):
+                self.assertIsNone(
+                    catalog.parse_wikidata_entity_search_profile(
+                        wikidata_payload(
+                            wikidata_search_binding(
+                                0,
+                                "Q1",
+                                "Example",
+                                description="American software company",
+                                **evidence,
+                            )
+                        ),
+                        "Example Inc.",
+                        "EXM",
+                        "Nasdaq",
+                    )
+                )
+
+    def test_entity_search_accepts_dot_hyphen_ticker_alias(self) -> None:
+        profile = catalog.parse_wikidata_entity_search_profile(
+            wikidata_payload(
+                wikidata_search_binding(
+                    0,
+                    "Q1",
+                    "Example",
+                    exchange_item="Q13677",
+                    ticker="EXM-A",
+                    description="American software company",
+                )
+            ),
+            "Example Inc.",
+            "EXM.A",
+            "NYSE",
+        )
+
+        self.assertIsNotNone(profile)
+
+    def test_entity_search_rejects_ambiguous_or_unrelated_candidates(
+        self,
+    ) -> None:
+        ambiguous = wikidata_payload(
+            wikidata_search_binding(
+                0,
+                "Q1",
+                "Example",
+                description="American software company",
+            ),
+            wikidata_search_binding(
+                0,
+                "Q2",
+                "Example Inc.",
+                description="European software company",
+            ),
+        )
+        unrelated = wikidata_payload(
+            wikidata_search_binding(
+                0,
+                "Q3",
+                "Example Annual Report",
+                description="annual report",
+            )
+        )
+
+        self.assertIsNone(
+            catalog.parse_wikidata_entity_search_profile(
+                ambiguous,
+                "Example Inc.",
+                "EXM",
+                "Nasdaq",
+            )
+        )
+        self.assertIsNone(
+            catalog.parse_wikidata_entity_search_profile(
+                unrelated,
+                "Example Inc.",
+                "EXM",
+                "Nasdaq",
+            )
+        )
+
+    def test_entity_search_rejects_malformed_results(self) -> None:
+        invalid_ordinal = wikidata_search_binding(
+            0,
+            "Q1",
+            "Example",
+            description="American software company",
+        )
+        invalid_ordinal["ordinal"]["value"] = "first"
+        conflicting_label = wikidata_payload(
+            wikidata_search_binding(
+                0,
+                "Q2",
+                "Example",
+                description="American software company",
+            ),
+            wikidata_search_binding(
+                0,
+                "Q2",
+                "Different",
+                description="American software company",
+            ),
+        )
+        unsafe_product = wikidata_search_binding(
+            0,
+            "Q3",
+            "Example",
+            description="American software company",
+            product="unsafe\u202eproduct",
+        )
+        truncated_payload = json.dumps(
+            {
+                "results": {
+                    "bindings": [
+                        {}
+                        for _ in range(
+                            catalog.MAX_WIKIDATA_ENTITY_SEARCH_ROWS + 1
+                        )
+                    ]
+                }
+            }
+        ).encode()
+
+        with self.assertRaisesRegex(RuntimeError, "invalid ordinal"):
+            catalog.parse_wikidata_entity_search_profile(
+                wikidata_payload(invalid_ordinal),
+                "Example Inc.",
+                "EXM",
+                "Nasdaq",
+            )
+        with self.assertRaisesRegex(RuntimeError, "too many rows"):
+            catalog.parse_wikidata_entity_search_profile(
+                truncated_payload,
+                "Example Inc.",
+                "EXM",
+                "Nasdaq",
+            )
+        with self.assertRaisesRegex(RuntimeError, "conflicting"):
+            catalog.parse_wikidata_entity_search_profile(
+                conflicting_label,
+                "Example Inc.",
+                "EXM",
+                "Nasdaq",
+            )
+        with self.assertRaisesRegex(RuntimeError, "unsafe or too long"):
+            catalog.parse_wikidata_entity_search_profile(
+                wikidata_payload(unsafe_product),
+                "Example Inc.",
+                "EXM",
+                "Nasdaq",
+            )
+
+    def test_entity_search_profile_is_stored_and_refresh_bypasses_cache(
+        self,
+    ) -> None:
+        exact_payload = wikidata_payload(
+            wikidata_binding(
+                "1018724",
+                "Q133848906",
+                "Amazon.com, Inc.",
+                description="company incorporated in Delaware",
+            )
+        )
+        search_payload = wikidata_payload(
+            wikidata_search_binding(
+                0,
+                "Q3884",
+                "Amazon",
+                ticker="AMZN",
+                description="American multinational technology company",
+                industry="e-commerce",
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache_dir = Path(directory)
+            client = catalog.WikidataClient(
+                "stock-tui test maintainer@example.com",
+                cache_dir,
+            )
+            calls: list[tuple[str, bool]] = []
+
+            def query(value: str, *, bypass_cache: bool = False) -> bytes:
+                calls.append((value, bypass_cache))
+                key = catalog.hashlib.sha256(
+                    f"{catalog.WIKIDATA_SPARQL_URL}\0{value}".encode()
+                ).hexdigest()
+                is_search = 'wikibase:api "EntitySearch"' in value
+                client.receipts[key] = (
+                    "2026-05-01T00:00:01Z"
+                    if is_search
+                    else "2026-05-01T00:00:00Z"
+                )
+                return search_payload if is_search else exact_payload
+
+            with mock.patch.object(client, "query", side_effect=query):
+                profiles, _ = catalog.load_wikidata_company_profiles(
+                    client,
+                    [
+                        {
+                            "cik": "0001018724",
+                            "name": "AMAZON COM INC",
+                            "symbol": "AMZN",
+                            "exchange": "Nasdaq",
+                        }
+                    ],
+                )
+
+            self.assertEqual(profiles["0001018724"].item_id, "Q3884")
+            self.assertEqual(
+                profiles["0001018724"].retrieved_at,
+                "2026-05-01T00:00:01Z",
+            )
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(all(not bypass for _, bypass in calls))
+
+            cached_client = catalog.WikidataClient(
+                "stock-tui test maintainer@example.com",
+                cache_dir,
+            )
+            with mock.patch.object(
+                cached_client,
+                "query",
+                side_effect=AssertionError("stored profile must be reused"),
+            ):
+                cached_profiles, _ = catalog.load_wikidata_company_profiles(
+                    cached_client,
+                    [
+                        {
+                            "cik": "0001018724",
+                            "name": "AMAZON COM INC",
+                            "symbol": "AMZN",
+                            "exchange": "Nasdaq",
+                        }
+                    ],
+                )
+            self.assertEqual(cached_profiles["0001018724"].item_id, "Q3884")
+
+            calls.clear()
+            with mock.patch.object(client, "query", side_effect=query):
+                refreshed_profiles, _ = catalog.load_wikidata_company_profiles(
+                    client,
+                    [
+                        {
+                            "cik": "0001018724",
+                            "name": "AMAZON COM INC",
+                            "symbol": "AMZN",
+                            "exchange": "Nasdaq",
+                        }
+                    ],
+                    refresh=True,
+                )
+            self.assertEqual(refreshed_profiles["0001018724"].item_id, "Q3884")
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(all(bypass for _, bypass in calls))
+
     def test_rejects_unsafe_or_unexpected_source_values(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "unsafe or too long"):
             catalog.parse_wikidata_company_profiles(
@@ -393,6 +1035,7 @@ class WikidataCompanyProfileTests(unittest.TestCase):
             item_id="Q2",
             item_label="Example",
             industries=("software industry",),
+            products=("terminal software",),
         )
 
         catalog.enrich_companies_with_profiles(
@@ -407,6 +1050,10 @@ class WikidataCompanyProfileTests(unittest.TestCase):
         self.assertEqual(
             companies[0]["provenance"]["company_description"]["license"],
             "CC0-1.0",
+        )
+        self.assertEqual(
+            companies[0]["provenance"]["company_description"]["products"],
+            ["terminal software"],
         )
         self.assertNotIn("company_description", companies[1])
 
@@ -466,8 +1113,18 @@ class WikidataCompanyProfileTests(unittest.TestCase):
                 profiles, source = catalog.load_wikidata_company_profiles(
                     client,
                     [
-                        {"cik": "0000000123", "name": "EXAMPLE INC"},
-                        {"cik": "0000000456", "name": "NO PROFILE CORP"},
+                        {
+                            "cik": "0000000123",
+                            "name": "EXAMPLE INC",
+                            "symbol": "EXM",
+                            "exchange": "Nasdaq",
+                        },
+                        {
+                            "cik": "0000000456",
+                            "name": "NO PROFILE CORP",
+                            "symbol": "NONE",
+                            "exchange": "NYSE",
+                        },
                     ],
                 )
 
@@ -490,6 +1147,37 @@ class WikidataCompanyProfileTests(unittest.TestCase):
                 ],
                 "2026-01-01T00:00:00Z",
             )
+
+    def test_profile_store_reads_schema_one_without_product_facts(self) -> None:
+        entry = catalog.CompanyProfileStoreEntry(
+            issuer_name="Example Inc.",
+            issuer_key="example",
+            retrieved_at="2026-01-01T00:00:00Z",
+            last_checked_at="2026-01-01T00:00:00Z",
+            algorithm_version=1,
+            profile=catalog.CompanyProfile(
+                description="American software company.",
+                source_url="https://www.wikidata.org/wiki/Q2",
+                item_id="Q2",
+                item_label="Example",
+                industries=("software",),
+                products=("terminal software",),
+            ),
+        )
+        document = json.loads(
+            catalog.serialize_company_profile_store(
+                {"0000000123": entry}
+            )
+        )
+        document["schema_version"] = 1
+        del document["entries"]["0000000123"]["profile"]["products"]
+
+        parsed = catalog.parse_company_profile_store(
+            json.dumps(document).encode(),
+            "schema-one fixture",
+        )
+
+        self.assertEqual(parsed["0000000123"].profile.products, ())
 
     def test_normal_build_queries_only_materially_renamed_issuer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -549,8 +1237,18 @@ class WikidataCompanyProfileTests(unittest.TestCase):
                 profiles, _ = catalog.load_wikidata_company_profiles(
                     client,
                     [
-                        {"cik": "0000000123", "name": "New Name Inc."},
-                        {"cik": "0000000456", "name": "Stable Corporation"},
+                        {
+                            "cik": "0000000123",
+                            "name": "New Name Inc.",
+                            "symbol": "NEW",
+                            "exchange": "Nasdaq",
+                        },
+                        {
+                            "cik": "0000000456",
+                            "name": "Stable Corporation",
+                            "symbol": "STBL",
+                            "exchange": "NYSE",
+                        },
                     ],
                 )
 
@@ -562,7 +1260,7 @@ class WikidataCompanyProfileTests(unittest.TestCase):
             self.assertEqual(stored["0000000123"].issuer_key, "new name")
             self.assertIn("0000000456", stored)
 
-    def test_forced_refresh_bypasses_query_cache_and_keeps_last_good_profile(
+    def test_forced_refresh_bypasses_query_cache_and_replaces_unsafe_profile(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -599,9 +1297,7 @@ class WikidataCompanyProfileTests(unittest.TestCase):
                     issuer_key="historical",
                     retrieved_at="2024-01-01T00:00:00Z",
                     last_checked_at="2024-01-01T00:00:00Z",
-                    algorithm_version=(
-                        catalog.WIKIDATA_PROFILE_ALGORITHM_VERSION
-                    ),
+                    algorithm_version=1,
                     profile=historical_profile,
                 ),
             }
@@ -626,24 +1322,103 @@ class WikidataCompanyProfileTests(unittest.TestCase):
             with mock.patch.object(client, "query", side_effect=query):
                 profiles, source = catalog.load_wikidata_company_profiles(
                     client,
-                    [{"cik": "0000000123", "name": "Current Inc."}],
+                    [
+                        {
+                            "cik": "0000000123",
+                            "name": "Current Inc.",
+                            "symbol": "CURR",
+                            "exchange": "Nasdaq",
+                        }
+                    ],
                     refresh=True,
                 )
 
-            self.assertEqual(profiles["0000000123"], old_profile)
-            self.assertEqual(
-                profiles["0000000123"].retrieved_at,
-                "2025-01-01T00:00:00Z",
-            )
+            self.assertNotIn("0000000123", profiles)
             self.assertEqual(source["retrieved_at"], "2026-03-01T00:00:00Z")
             stored = catalog.load_company_profile_store(
                 cache_dir / catalog.WIKIDATA_PROFILE_STORE_FILENAME
+            )
+            self.assertIsNone(stored["0000000123"].profile)
+            self.assertEqual(
+                stored["0000000123"].retrieved_at,
+                "2026-03-01T00:00:00Z",
             )
             self.assertEqual(
                 stored["0000000123"].last_checked_at,
                 "2026-03-01T00:00:00Z",
             )
             self.assertIn("0000000999", stored)
+            self.assertEqual(stored["0000000999"].algorithm_version, 1)
+
+    def test_material_rename_replaces_an_old_profile_with_fresh_negative(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache_dir = Path(directory)
+            old_profile = catalog.CompanyProfile(
+                description="American software company.",
+                source_url="https://www.wikidata.org/wiki/Q2",
+                item_id="Q2",
+                item_label="Old Name",
+                industries=("software",),
+                retrieved_at="2025-01-01T00:00:00Z",
+            )
+            catalog.write_company_profile_store(
+                cache_dir / catalog.WIKIDATA_PROFILE_STORE_FILENAME,
+                {
+                    "0000000123": catalog.CompanyProfileStoreEntry(
+                        issuer_name="Old Name Inc.",
+                        issuer_key="old name",
+                        retrieved_at="2025-01-01T00:00:00Z",
+                        last_checked_at="2025-01-01T00:00:00Z",
+                        algorithm_version=(
+                            catalog.WIKIDATA_PROFILE_ALGORITHM_VERSION
+                        ),
+                        profile=old_profile,
+                    )
+                },
+                {"0000000123"},
+            )
+            client = catalog.WikidataClient(
+                "stock-tui test maintainer@example.com",
+                cache_dir,
+            )
+
+            def query(value: str, *, bypass_cache: bool = False) -> bytes:
+                self.assertFalse(bypass_cache)
+                key = catalog.hashlib.sha256(
+                    f"{catalog.WIKIDATA_SPARQL_URL}\0{value}".encode()
+                ).hexdigest()
+                client.receipts[key] = "2026-03-15T00:00:00Z"
+                return wikidata_payload()
+
+            with mock.patch.object(
+                client, "query", side_effect=query
+            ) as query_mock:
+                profiles, source = catalog.load_wikidata_company_profiles(
+                    client,
+                    [
+                        {
+                            "cik": "0000000123",
+                            "name": "New Name Inc.",
+                            "symbol": "NEW",
+                            "exchange": "Nasdaq",
+                        }
+                    ],
+                )
+
+            self.assertEqual(query_mock.call_count, 2)
+            self.assertEqual(profiles, {})
+            self.assertEqual(source["retrieved_at"], "2026-03-15T00:00:00Z")
+            stored = catalog.load_company_profile_store(
+                cache_dir / catalog.WIKIDATA_PROFILE_STORE_FILENAME
+            )
+            self.assertEqual(stored["0000000123"].issuer_key, "new name")
+            self.assertIsNone(stored["0000000123"].profile)
+            self.assertEqual(
+                stored["0000000123"].retrieved_at,
+                "2026-03-15T00:00:00Z",
+            )
 
     def test_algorithm_change_does_not_relabel_an_old_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -693,7 +1468,14 @@ class WikidataCompanyProfileTests(unittest.TestCase):
             ):
                 profiles, _ = catalog.load_wikidata_company_profiles(
                     client,
-                    [{"cik": "0000000123", "name": "Example Inc."}],
+                    [
+                        {
+                            "cik": "0000000123",
+                            "name": "Example Inc.",
+                            "symbol": "EXM",
+                            "exchange": "Nasdaq",
+                        }
+                    ],
                 )
                 stored = catalog.load_company_profile_store(
                     cache_dir / catalog.WIKIDATA_PROFILE_STORE_FILENAME
@@ -718,7 +1500,7 @@ class WikidataCompanyProfileTests(unittest.TestCase):
         ):
             catalog.parse_company_profile_store(b"123456789", "fixture")
 
-    def test_client_reuses_persistent_query_cache(self) -> None:
+    def test_client_reuses_persistent_entity_search_query_cache(self) -> None:
         payload = wikidata_payload()
 
         class Response:
@@ -737,13 +1519,18 @@ class WikidataCompanyProfileTests(unittest.TestCase):
                 Path(directory),
             )
             client.minimum_interval = 0
+            query = catalog.wikidata_entity_search_query(
+                "AMAZON COM INC",
+                "AMZN",
+                "Nasdaq",
+            )
             with mock.patch(
                 "urllib.request.urlopen", return_value=Response()
             ) as urlopen:
-                first = client.query("SELECT * WHERE {}")
-                second = client.query("SELECT * WHERE {}")
+                first = client.query(query)
+                second = client.query(query)
                 refreshed = client.query(
-                    "SELECT * WHERE {}",
+                    query,
                     bypass_cache=True,
                 )
 
