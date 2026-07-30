@@ -13,7 +13,7 @@ omitted. Attached StockTouch and work-in-progress screenshots are described
 but not republished here. Every commit link is immutable; links into private
 infrastructure repositories require collaborator access.
 
-The chronology covers product-development prompts through the `v0.2.5`
+The chronology covers product-development prompts through the `v0.2.6`
 release, including the provider, onboarding, market-cap, SEC catalog, private
 development-provider, UI refinement, and signed distribution work. It excludes
 session-management instructions and this document's own editorial requests.
@@ -1660,6 +1660,8 @@ published catalog payload also matched its manifest size and SHA-256 digest.
 **Committed changes**
 
 - [`31b1b2c` - Normalize SEC share-class symbols][private-commit-31b1b2c]
+- [`0f243ab` - Preserve catalog provenance in stock API][private-commit-0f243ab]
+- [Successful private worker deployment][stock-api-deploy-30585050528]
 
 **Summary**
 
@@ -1669,7 +1671,31 @@ snapshots used dotted symbols. Catalog ingestion now converts share-class and
 preferred-share suffixes to the API's runtime notation before validation,
 lookup, and D1 persistence. End-to-end tests cover `BF-A` to `BF.A`, `BRK-B` to
 `BRK.B`, preferred-series notation, market-cap enrichment, cache reuse, and
-post-normalization collision rejection.
+post-normalization collision rejection. Compact nested fact provenance is also
+retained, and deployment smoke tests now require a fresh response followed by
+an identical cache hit with complete capitalization provenance for both
+share-class symbols.
+
+## 62. Deploy the Fix and Release v0.2.6
+
+> Deploy the private worker changes and create a new stock-tui release.
+
+**Committed changes**
+
+- [`0f243ab` - Preserve catalog provenance in stock API][private-commit-0f243ab]
+- [`f68cb94` - Prepare stock-tui 0.2.6][commit-f68cb94]
+- [Successful private worker deployment][stock-api-deploy-30585050528]
+- [`v0.2.6` release][release-v0.2.6]
+
+**Summary**
+
+The private worker was deployed with deterministic production checks for
+`NVDA`, `BF.A`, and `BRK.B`, including current prices, reviewed share counts,
+estimated market caps, provenance fields, and byte-identical R2 cache reuse.
+The client release packages company-specific CC0 descriptions and durable
+catalog-profile updates, documents the canonical dotted share-class contract,
+and ships five checksummed platform archives with signed and notarized macOS
+executables.
 
 ## Maintenance Outside the Prompt Loop
 
@@ -1744,6 +1770,7 @@ implementation work.
 [commit-07cdf18]: https://github.com/chatcode-lab/stock-tui/commit/07cdf189d07974baf5ed1fe8b3e13729dce5b036
 [commit-d7d0dea]: https://github.com/chatcode-lab/stock-tui/commit/d7d0dea6378cb96aad93ff0538c869ee8f7c44b5
 [commit-9d04968]: https://github.com/chatcode-lab/stock-tui/commit/9d049685326e523f80aebed496b26f7d4b5e293e
+[commit-f68cb94]: https://github.com/chatcode-lab/stock-tui/commit/f68cb942dee9e47343a7539800c12fdd83422edc
 [catalog-run-30578835793]: https://github.com/chatcode-lab/stock-tui/actions/runs/30578835793
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
@@ -1753,6 +1780,8 @@ implementation work.
 [private-commit-6bf23bb]: https://github.com/chatcode-lab/stock-api/commit/6bf23bb3c765ee871d5ef3e63ea5c8f91d3d6c40
 [private-commit-cc1f6ca]: https://github.com/chatcode-lab/stock-api/commit/cc1f6ca2a0aaadc5a76dbd99b942e49f6aa58b1d
 [private-commit-31b1b2c]: https://github.com/chatcode-lab/stock-api/commit/31b1b2c1062cd8c27822dc23a76c8e3068592183
+[private-commit-0f243ab]: https://github.com/chatcode-lab/stock-api/commit/0f243abd74a38d0bb94bbf7d5d8720b054085ea3
+[stock-api-deploy-30585050528]: https://github.com/chatcode-lab/stock-api/actions/runs/30585050528
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
 [issue-10]: https://github.com/chatcode-lab/stock-tui/issues/10
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
@@ -1763,3 +1792,4 @@ implementation work.
 [release-v0.2.3]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.3
 [release-v0.2.4]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.4
 [release-v0.2.5]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.5
+[release-v0.2.6]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.6
