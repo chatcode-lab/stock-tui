@@ -1758,6 +1758,28 @@ the mouse. Responsive buffer tests cover the original long-headline failure,
 adjacent rows, metadata fallback, minimum `60x20` rendering, late selection,
 and hover stability.
 
+## 65. Release v0.3.0
+
+> Create and publish a new `v0.3.0` release.
+
+**Committed changes**
+
+- [`d95e9c8` - Polish ticker news layout][commit-d95e9c8]
+- [`10b564d` - Prepare stock-tui 0.3.0][commit-10b564d]
+- [Successful `main` CI][ci-run-30629067495]
+- [Successful five-platform build-only preflight][release-preflight-run-30629238846]
+- [Successful tagged release workflow][release-run-30629889605]
+- [`v0.3.0` release][release-v0.3.0]
+
+**Summary**
+
+Version `0.3.0` packages the streamlined ticker Statistics panel and adaptive
+related-news rows that keep complete date/source metadata attached, preserve
+stable mouse positions, and scroll keyboard focus into view. Cross-platform
+`main` CI and a non-publishing five-platform preflight validated the release
+commit before the annotated tag published checksummed Linux, Windows, and
+signed and notarized Intel and Apple Silicon macOS archives.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1836,8 +1858,12 @@ implementation work.
 [commit-cbe2cea]: https://github.com/chatcode-lab/stock-tui/commit/cbe2cea2ae56c6d5f2c09e49c4ff1450f188fa6c
 [commit-7bf25d0]: https://github.com/chatcode-lab/stock-tui/commit/7bf25d0c8de670160d36cac7b02e4826a469dcf3
 [commit-d95e9c8]: https://github.com/chatcode-lab/stock-tui/commit/d95e9c809d3c363da0c9478530c7e1b47f0b86c4
+[commit-10b564d]: https://github.com/chatcode-lab/stock-tui/commit/10b564dbe42ef98675e9d64a23a6bd8274f2f0a9
 [catalog-run-30590280654]: https://github.com/chatcode-lab/stock-tui/actions/runs/30590280654
 [catalog-run-30578835793]: https://github.com/chatcode-lab/stock-tui/actions/runs/30578835793
+[ci-run-30629067495]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629067495
+[release-preflight-run-30629238846]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629238846
+[release-run-30629889605]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629889605
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1860,3 +1886,4 @@ implementation work.
 [release-v0.2.5]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.5
 [release-v0.2.6]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.6
 [release-v0.2.7]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.7
+[release-v0.3.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.3.0
