@@ -231,8 +231,8 @@ price is placed beside that intersection and its date or time beside the X
 axis, on the roomier side of the cursor.
 
 Ticker detail derives complete cached-history coverage from the earliest and
-latest price observations across timeframes. The header and Statistics expose
-that span. A fixed range control is muted when it adds no older cached interval
+latest price observations across timeframes. The header exposes that span. A
+fixed range control is muted when it adds no older cached interval
 beyond the next-shorter preset, without changing its hit target or shortcut;
 `ALL` remains the unbounded cached-history choice.
 

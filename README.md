@@ -366,8 +366,7 @@ and ordering.
 
 When the chart is wide enough, its cursor labels the selected price beside the
 trace intersection and the selected date or time beside the X axis. Detail
-headers summarize the cached price-observation span and its start, while
-Statistics shows both boundary dates.
+headers summarize the cached price-observation span and its start.
 Ranges that add no older cached interval beyond the next-shorter preset are
 muted in the detail rail, but remain fully clickable and keep their keyboard
 shortcuts; `ALL` always means all cached history.

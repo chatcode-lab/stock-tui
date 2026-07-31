@@ -397,6 +397,7 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
     assert!(statistics_screen.contains("STATISTICS"));
     assert!(statistics_screen.contains("OPEN"));
     assert!(statistics_screen.contains("EST. CAP"));
+    assert!(!statistics_screen.contains("HISTORY"));
 
     assert!(press(&mut compact, KeyCode::Tab, KeyModifiers::NONE).is_empty());
     assert_eq!(compact.detail_tab, DetailTab::News);
@@ -439,6 +440,154 @@ fn detail_renders_combined_full_view_and_each_compact_tab() {
         vec![AppCommand::OpenUrl(
             "https://example.invalid/acme/results".to_owned()
         )]
+    );
+}
+
+#[test]
+fn detail_news_rows_keep_metadata_attached_without_blank_gaps() {
+    let mut state = detail_state();
+    let detail = state.detail.as_mut().expect("fixture detail");
+    let mut short = detail.news[0].clone();
+    short.headline = "Acme updates guidance".to_owned();
+    short.source = "Short Wire".to_owned();
+    let mut wrapped = detail.news[1].clone();
+    wrapped.headline = "Acme signs a renewable infrastructure agreement covering sustainable fuels, regional processing facilities, and long-term supply".to_owned();
+    wrapped.source = "Long Form News".to_owned();
+    let mut trailing = short.clone();
+    trailing.id = "acme-dividend".to_owned();
+    trailing.headline = "Acme declares a quarterly dividend".to_owned();
+    trailing.source = "Dividend Desk".to_owned();
+    trailing.published_at -= Duration::days(2);
+    detail.news = vec![short, wrapped, trailing];
+    state.selected_news = 1;
+
+    let buffer = render_at(&mut state, 160, 48);
+    let mut targets = state
+        .hit_targets
+        .iter()
+        .filter_map(|target| match &target.action {
+            UiAction::OpenNews(index) => Some((*index, target.rect)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    targets.sort_by_key(|(index, _)| *index);
+    assert_eq!(targets.len(), 3);
+    assert_eq!(targets[0].1.height, 2, "a short row has no spacer");
+    assert_eq!(
+        targets[1].1.height, 4,
+        "a three-line headline reserves its metadata row"
+    );
+
+    for ((index, rect), next) in targets.iter().zip(targets.iter().skip(1)) {
+        let item = &state.detail.as_ref().expect("fixture detail").news[*index];
+        let metadata = Rect::new(rect.x, rect.bottom() - 1, rect.width, 1);
+        let metadata_text = rect_text(&buffer, metadata);
+        let published = item.published_at.with_timezone(&Local).format("%b %d");
+        assert!(metadata_text.contains(&published.to_string()));
+        assert!(metadata_text.contains(&item.source));
+        assert_eq!(rect.bottom(), next.1.y, "news rows must be adjacent");
+    }
+    let (last_index, last_rect) = targets.last().expect("last news row");
+    let last_item = &state.detail.as_ref().expect("fixture detail").news[*last_index];
+    let last_metadata = Rect::new(last_rect.x, last_rect.bottom() - 1, last_rect.width, 1);
+    assert!(rect_text(&buffer, last_metadata).contains(&last_item.source));
+    assert!(rect_text(&buffer, targets[1].1).contains('›'));
+}
+
+#[test]
+fn compact_news_keeps_a_late_selection_visible_with_complete_metadata() {
+    let mut state = detail_state();
+    state.detail_tab = DetailTab::News;
+    let template = state.detail.as_ref().expect("fixture detail").news[0].clone();
+    let news = (0..10)
+        .map(|index| {
+            let mut item = template.clone();
+            item.id = format!("acme-news-{index}");
+            item.headline = if index == 9 {
+                "Acme signs a renewable infrastructure agreement covering sustainable fuels, regional processing facilities, and long-term supply".to_owned()
+            } else {
+                format!("Acme update {index}")
+            };
+            item.source = if index == 9 {
+                "   ".to_owned()
+            } else {
+                format!("Wire {index}")
+            };
+            item.published_at -= Duration::days(index);
+            item
+        })
+        .collect();
+    state.detail.as_mut().expect("fixture detail").news = news;
+    state.selected_news = 9;
+
+    let buffer = render_at(&mut state, 60, 20);
+    assert!(!screen_text(&buffer).contains("needs at least"));
+    assert!(
+        !state
+            .hit_targets
+            .iter()
+            .any(|target| target.action == UiAction::OpenNews(0)),
+        "the compact viewport should scroll past its first article"
+    );
+    let selected = state
+        .hit_targets
+        .iter()
+        .find(|target| target.action == UiAction::OpenNews(9))
+        .expect("late selected article remains visible");
+    let selected_text = rect_text(&buffer, selected.rect);
+    assert!(selected_text.contains('›'));
+    let metadata = Rect::new(
+        selected.rect.x,
+        selected.rect.bottom() - 1,
+        selected.rect.width,
+        1,
+    );
+    let metadata_text = rect_text(&buffer, metadata);
+    assert!(metadata_text.contains("Source unavailable"));
+    assert!(
+        metadata_text.contains(
+            &(template.published_at - Duration::days(9))
+                .with_timezone(&Local)
+                .format("%b %d")
+                .to_string()
+        )
+    );
+
+    let _ = render_at(&mut state, 80, 24);
+    let before_hover = state
+        .hit_targets
+        .iter()
+        .filter_map(|target| match &target.action {
+            UiAction::OpenNews(index) => Some((*index, target.rect)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(before_hover.len() > 1, "the roomy compact page has peers");
+    let (_, first_rect) = before_hover[0];
+    assert!(
+        handle_event(
+            &mut state,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: first_rect.x,
+                row: first_rect.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+        .is_empty()
+    );
+    let _ = render_at(&mut state, 80, 24);
+    let after_hover = state
+        .hit_targets
+        .iter()
+        .filter_map(|target| match &target.action {
+            UiAction::OpenNews(index) => Some((*index, target.rect)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        after_hover, before_hover,
+        "hover must not move its news page"
     );
 }
 
@@ -1660,7 +1809,7 @@ fn detail_dims_ranges_beyond_observed_history_without_disabling_them() {
 
     let screen = screen_text(&buffer);
     assert!(screen.contains("Data 2Y 2M 10D since 2024-05-04"));
-    assert!(screen.contains("2Y 2M 10D · 2024-05-04 to 2026-07-13"));
+    assert!(!screen.contains("HISTORY"));
 }
 
 #[test]

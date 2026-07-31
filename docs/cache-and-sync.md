@@ -289,10 +289,10 @@ Preferred chart timeframes are:
 While a preferred timeframe has no price observations, storage chooses an
 available fallback appropriate for that range. Changing the range on a detail
 view triggers another lazy request and redraws from whatever is already cached.
-The detail header summarizes the complete cached price-observation span, and
-Statistics shows its first and last dates. A fixed range is visually muted only
-when it adds no older observations beyond the next-shorter preset; it remains
-selectable, and `ALL` always uses the complete cached span.
+The detail header summarizes the complete cached price-observation span. A
+fixed range is visually muted only when it adds no older observations beyond
+the next-shorter preset; it remains selectable, and `ALL` always uses the
+complete cached span.
 
 News is not globally downloaded for every sector company or benchmark proxy.
 This keeps startup and provider usage bounded. Cached headlines remain

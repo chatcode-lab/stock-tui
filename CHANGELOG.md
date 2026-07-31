@@ -7,6 +7,18 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Removed the redundant cached-history row from ticker Statistics; the same
+  coverage remains visible in the detail header.
+
+### Fixed
+
+- Size related-news rows to their wrapped headlines and reserve a dedicated
+  metadata line, keeping every visible date/source attached to its article
+  without blank separator rows, selection-dependent wrapping, or off-screen
+  keyboard focus.
+
 ## [0.2.7] - 2026-07-30
 
 ### Changed

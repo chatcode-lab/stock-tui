@@ -689,7 +689,7 @@ fn render_full_detail(
     render_description(frame, detail, left[1], tint);
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Min(6)])
+        .constraints([Constraint::Length(9), Constraint::Min(6)])
         .split(columns[1]);
     render_statistics(frame, detail, right[0], tint);
     render_news(frame, state, &detail.news, right[1], tint);
@@ -868,7 +868,6 @@ fn render_statistics(frame: &mut Frame<'_>, detail: &TickerDetail, area: Rect, t
             snapshot.and_then(|quote| quote.volume).map(format_compact),
         ),
         ("EST. CAP", detail.company.market_cap.map(format_money)),
-        ("HISTORY", history_coverage(detail)),
         ("SECTOR", detail.sector_return.map(format_percent)),
     ];
     let lines: Vec<Line<'_>> = rows
@@ -915,16 +914,6 @@ fn compact_history_coverage(detail: &TickerDetail) -> Option<String> {
         "Data {} since {}",
         format_history_span(start, end),
         start.date_naive()
-    ))
-}
-
-fn history_coverage(detail: &TickerDetail) -> Option<String> {
-    let (start, end) = detail.history_start_at.zip(detail.history_end_at)?;
-    Some(format!(
-        "{} · {} to {}",
-        format_history_span(start, end),
-        start.date_naive(),
-        end.date_naive()
     ))
 }
 
@@ -1021,39 +1010,91 @@ fn render_news(
         );
         return;
     }
+    if inner.width < 2 {
+        return;
+    }
     state.selected_news = state.selected_news.min(news.len() - 1);
-    let row_height = if inner.height >= 12 { 3 } else { 2 };
-    for (index, item) in news.iter().enumerate() {
-        let y = inner.y + index as u16 * row_height;
-        if y >= inner.bottom() {
+    const MAX_HEADLINE_LINES: u16 = 3;
+    let headline_width = inner.width - 1;
+    let row_heights = news
+        .iter()
+        .map(|item| {
+            let headline = news_headline(item, false, tint);
+            u16::try_from(headline.line_count(headline_width))
+                .unwrap_or(u16::MAX)
+                .clamp(1, MAX_HEADLINE_LINES)
+                + 1
+        })
+        .collect::<Vec<_>>();
+    let first_visible = news_view_start(&row_heights, state.selected_news, inner.height);
+    let mut y = inner.y;
+    for (index, item) in news.iter().enumerate().skip(first_visible) {
+        if inner.bottom().saturating_sub(y) < 2 {
             break;
         }
-        let height = row_height.min(inner.bottom() - y);
-        let rect = Rect::new(inner.x, y, inner.width, height);
-        let published = item.published_at.with_timezone(&Local).format("%b %d");
         let selected = index == state.selected_news;
         let row_tint = if selected { PANEL_ALT } else { tint };
-        let marker = if selected { "›" } else { " " };
-        let text = vec![
-            Line::styled(
-                format!("{marker}{}", item.headline),
+        let headline = news_headline(item, selected, row_tint);
+        let row_height = row_heights[index];
+        let headline_height = row_height - 1;
+        if row_height > inner.bottom() - y {
+            break;
+        }
+        let rect = Rect::new(inner.x, y, inner.width, row_height);
+        let marker_rect = Rect::new(inner.x, y, 1, headline_height);
+        let headline_rect = Rect::new(inner.x + 1, y, headline_width, headline_height);
+        let metadata_rect = Rect::new(inner.x, y + headline_height, inner.width, 1);
+        let published = item.published_at.with_timezone(&Local).format("%b %d");
+        let source = match item.source.trim() {
+            "" => "Source unavailable",
+            source => source,
+        };
+        frame.render_widget(
+            Paragraph::new(if selected { "›" } else { " " }).style(
                 Style::default()
                     .fg(if selected { CYAN } else { TEXT })
+                    .bg(row_tint)
                     .bold(),
             ),
-            Line::styled(
-                format!(" {published}  ·  {}", item.source),
-                Style::default().fg(MUTED),
-            ),
-        ];
+            marker_rect,
+        );
+        frame.render_widget(headline, headline_rect);
         frame.render_widget(
-            Paragraph::new(text)
-                .wrap(Wrap { trim: true })
-                .style(Style::default().bg(row_tint)),
-            rect,
+            Paragraph::new(format!(" {published}  ·  {source}"))
+                .style(Style::default().fg(MUTED).bg(row_tint)),
+            metadata_rect,
         );
         state.register(rect, UiAction::OpenNews(index), None);
+        y += row_height;
     }
+}
+
+fn news_headline(item: &NewsItem, selected: bool, tint: Color) -> Paragraph<'static> {
+    Paragraph::new(Line::styled(
+        item.headline.trim().to_owned(),
+        Style::default()
+            .fg(if selected { CYAN } else { TEXT })
+            .bold(),
+    ))
+    .wrap(Wrap { trim: true })
+    .style(Style::default().bg(tint))
+}
+
+fn news_view_start(row_heights: &[u16], selected: usize, available: u16) -> usize {
+    let selected = selected.min(row_heights.len().saturating_sub(1));
+    let mut start = 0;
+    let mut used = 0u16;
+    for (index, height) in row_heights.iter().copied().enumerate() {
+        if index > start && used.saturating_add(height) > available {
+            start = index;
+            used = 0;
+        }
+        if index == selected {
+            return start;
+        }
+        used = used.saturating_add(height);
+    }
+    start
 }
 
 fn render_overlay(frame: &mut Frame<'_>, state: &mut UiState, area: Rect, overlay: Overlay) {
