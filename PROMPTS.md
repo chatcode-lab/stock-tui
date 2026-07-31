@@ -13,10 +13,11 @@ omitted. Attached StockTouch and work-in-progress screenshots are described
 but not republished here. Every commit link is immutable; links into private
 infrastructure repositories require collaborator access.
 
-The chronology covers product-development prompts through the `v0.2.6`
-release, including the provider, onboarding, market-cap, SEC catalog, private
-development-provider, UI refinement, and signed distribution work. It excludes
-session-management instructions and this document's own editorial requests.
+The chronology covers product-development prompts through the `v0.2.7`
+release and subsequent UI refinements, including the provider, onboarding,
+market-cap, SEC catalog, private development-provider, UI refinement, and
+signed distribution work. It excludes session-management instructions and
+this document's own editorial requests.
 
 ## 1. Build a StockTouch-Inspired Market TUI
 
@@ -1729,6 +1730,34 @@ off-thread; in-flight provider requests cannot restore stale descriptions or
 derive market caps from mismatched share metadata. The release ships five
 checksummed archives, including signed and notarized macOS executables.
 
+## 64. Remove Redundant History and Repair News Rows
+
+> Remove the `HISTORY` item from ticker Statistics because the same information
+> is already shown in the detail header and looks out of place in that panel.
+>
+> Polish the related-news section shown in the supplied screenshot:
+>
+> 1. Ensure every visible article includes its date and source, including long
+>    selected headlines.
+> 2. Remove the unexplained blank line that sometimes appears after an
+>    article's date/source and before the next headline.
+
+**Committed changes**
+
+- [`d95e9c8` - Polish ticker news layout][commit-d95e9c8]
+
+**Summary**
+
+Ticker Statistics no longer repeats the cached-history span already present in
+the header, and the reclaimed row expands the News panel. News items now size
+themselves to one to three wrapped headline lines plus a dedicated metadata
+line, so short items have no spacer and long items cannot clip their date or
+source. A fixed selection gutter prevents hover-induced wrapping changes, and
+stable pages keep keyboard-selected articles visible without moving rows under
+the mouse. Responsive buffer tests cover the original long-headline failure,
+adjacent rows, metadata fallback, minimum `60x20` rendering, late selection,
+and hover stability.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1806,6 +1835,7 @@ implementation work.
 [commit-d0f1a20]: https://github.com/chatcode-lab/stock-tui/commit/d0f1a20bbc60ccd5eb9e62a24010563a808329c0
 [commit-cbe2cea]: https://github.com/chatcode-lab/stock-tui/commit/cbe2cea2ae56c6d5f2c09e49c4ff1450f188fa6c
 [commit-7bf25d0]: https://github.com/chatcode-lab/stock-tui/commit/7bf25d0c8de670160d36cac7b02e4826a469dcf3
+[commit-d95e9c8]: https://github.com/chatcode-lab/stock-tui/commit/d95e9c809d3c363da0c9478530c7e1b47f0b86c4
 [catalog-run-30590280654]: https://github.com/chatcode-lab/stock-tui/actions/runs/30590280654
 [catalog-run-30578835793]: https://github.com/chatcode-lab/stock-tui/actions/runs/30578835793
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
