@@ -5,6 +5,8 @@ model of StockTouch. It turns a broad US equity universe into a dense 3x3
 market map, lets you open a sector's top 100 companies, and then drills into a
 ticker with price, volume, statistics, and related news.
 
+[![Animated stock-tui walkthrough showing the market overview, Technology sector, and ticker charts](docs/screenshots/stock-tui-2.gif)](docs/screenshots/stock-tui-2.gif)
+
 This is an independent open-source project. It is not affiliated with,
 endorsed by, or a continuation of StockTouch or its creators.
 
