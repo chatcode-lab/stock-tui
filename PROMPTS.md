@@ -1780,6 +1780,35 @@ stable mouse positions, and scroll keyboard focus into view. Cross-platform
 commit before the annotated tag published checksummed Linux, Windows, and
 signed and notarized Intel and Apple Silicon macOS archives.
 
+## 66. Merge Dependency Updates and Add an Animated Cover
+
+> Review and merge the open Dependabot pull requests.
+>
+> Add the supplied `stock-tui-2.gif` to the repository and embed it in the
+> README as cover media.
+
+**Committed changes**
+
+- [`54ac0b9` - Merge Dependabot PR #11][commit-54ac0b9]
+- [`cf5d025` - Merge Dependabot PR #12][commit-cf5d025]
+- [`e3a60ff` - Add animated README cover][commit-e3a60ff]
+- [Successful PR #11 merge CI][ci-run-30909086660]
+- [Successful PR #12 merge CI][ci-run-30909293682]
+- [Dependabot PR #11][pr-11]
+- [Dependabot PR #12][pr-12]
+
+**Summary**
+
+The reviewed dependency updates move the catalog workflow to the pinned
+`actions/cache` 6.1.0 commit and refresh the lockfile to `rustls` 0.23.43,
+`toml` 1.1.4, and `webbrowser` 1.2.2. Each merge passed Linux, macOS, Windows,
+Rust 1.95, and dependency-policy CI before the next change proceeded.
+
+The supplied 1080x557, 14.6-second terminal walkthrough now lives with the
+existing screenshot assets and appears directly below the README introduction
+with descriptive alternative text. Static demo captures remain available
+below it, and Cargo packaging includes the linked animation.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1859,9 +1888,14 @@ implementation work.
 [commit-7bf25d0]: https://github.com/chatcode-lab/stock-tui/commit/7bf25d0c8de670160d36cac7b02e4826a469dcf3
 [commit-d95e9c8]: https://github.com/chatcode-lab/stock-tui/commit/d95e9c809d3c363da0c9478530c7e1b47f0b86c4
 [commit-10b564d]: https://github.com/chatcode-lab/stock-tui/commit/10b564dbe42ef98675e9d64a23a6bd8274f2f0a9
+[commit-54ac0b9]: https://github.com/chatcode-lab/stock-tui/commit/54ac0b9c5f617924f7bf2ce7ad8c02b769221206
+[commit-cf5d025]: https://github.com/chatcode-lab/stock-tui/commit/cf5d025996c7fe7ed6b68d946e291c3e52de40ed
+[commit-e3a60ff]: https://github.com/chatcode-lab/stock-tui/commit/e3a60ff49993fdfae9df8148fa3ef06916132b99
 [catalog-run-30590280654]: https://github.com/chatcode-lab/stock-tui/actions/runs/30590280654
 [catalog-run-30578835793]: https://github.com/chatcode-lab/stock-tui/actions/runs/30578835793
 [ci-run-30629067495]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629067495
+[ci-run-30909086660]: https://github.com/chatcode-lab/stock-tui/actions/runs/30909086660
+[ci-run-30909293682]: https://github.com/chatcode-lab/stock-tui/actions/runs/30909293682
 [release-preflight-run-30629238846]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629238846
 [release-run-30629889605]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629889605
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
@@ -1875,6 +1909,8 @@ implementation work.
 [private-commit-0f243ab]: https://github.com/chatcode-lab/stock-api/commit/0f243abd74a38d0bb94bbf7d5d8720b054085ea3
 [stock-api-deploy-30585050528]: https://github.com/chatcode-lab/stock-api/actions/runs/30585050528
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
+[pr-11]: https://github.com/chatcode-lab/stock-tui/pull/11
+[pr-12]: https://github.com/chatcode-lab/stock-tui/pull/12
 [issue-10]: https://github.com/chatcode-lab/stock-tui/issues/10
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
