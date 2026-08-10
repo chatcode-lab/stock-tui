@@ -210,7 +210,7 @@ jobs:
         with:
           toolchain: "1.95"
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Install musl tools
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
@@ -280,7 +280,7 @@ jobs:
         with:
           toolchain: "1.95"
           targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build --locked --release --target "${{ matrix.target }}"
       - name: Stage macOS payload
         shell: bash
