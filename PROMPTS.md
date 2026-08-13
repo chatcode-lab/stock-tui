@@ -1809,6 +1809,40 @@ existing screenshot assets and appears directly below the README introduction
 with descriptive alternative text. Static demo captures remain available
 below it, and Cargo packaging includes the linked animation.
 
+## 67. Audit Pull Requests and Worker Request Volume
+
+> Review the new pull requests. Investigate why a background stock-tui session
+> generated about 30,000 private Worker requests in 24 hours using the supplied
+> log export. Confirm that the traffic and upstream allowance are safe, and
+> prevent unnecessary Cloudflare request, log, cache, and database usage.
+
+**Committed changes**
+
+- [`e4a3c95` - Merge Dependabot PR #13][commit-e4a3c95]
+- [`8d7e238` - Merge Dependabot PR #14][commit-8d7e238]
+- [`95d2a29` - Reduce automatic provider traffic][commit-95d2a29]
+- [`0ff93b6` - Reduce Worker cache and log amplification][private-commit-0ff93b6]
+- [Dependabot PR #13][pr-13]
+- [Dependabot PR #14][pr-14]
+
+**Summary**
+
+The trace showed two clients independently repeating broad snapshot, daily,
+and weekly history work every five minutes; it contained no scheduled Worker
+events, retries, errors, or rate-limit responses. Timed refreshes now request
+only current sector members, benchmarks, and explicit favorites, never start
+bulk history, and pause while the terminal is unfocused. Startup, catalog
+reconciliation, and manual `r` retain the broader discovery and incremental
+history behavior, and the Data Status view explains that distinction.
+
+The private Worker now keeps snapshot response pages solely in R2 instead of
+duplicating observations in D1. Catalog fallback UPSERTs skip unchanged and
+older records, routine invocation logs and traces are disabled, explicit
+warnings and errors remain available, and tests cover R2 reuse, zero snapshot
+rows, stable catalog replays, and monotonic catalog rollover. Exported Worker
+logs are ignored at the repository root and documented as sensitive local
+diagnostic artifacts.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1891,6 +1925,9 @@ implementation work.
 [commit-54ac0b9]: https://github.com/chatcode-lab/stock-tui/commit/54ac0b9c5f617924f7bf2ce7ad8c02b769221206
 [commit-cf5d025]: https://github.com/chatcode-lab/stock-tui/commit/cf5d025996c7fe7ed6b68d946e291c3e52de40ed
 [commit-e3a60ff]: https://github.com/chatcode-lab/stock-tui/commit/e3a60ff49993fdfae9df8148fa3ef06916132b99
+[commit-e4a3c95]: https://github.com/chatcode-lab/stock-tui/commit/e4a3c95bbc885a83bf085212500496a9d95d1b3d
+[commit-8d7e238]: https://github.com/chatcode-lab/stock-tui/commit/8d7e238cfa7d6218cc6633d408b740ee6cc2a3a4
+[commit-95d2a29]: https://github.com/chatcode-lab/stock-tui/commit/95d2a293aef52b148902d6706bc9214bee660f20
 [catalog-run-30590280654]: https://github.com/chatcode-lab/stock-tui/actions/runs/30590280654
 [catalog-run-30578835793]: https://github.com/chatcode-lab/stock-tui/actions/runs/30578835793
 [ci-run-30629067495]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629067495
@@ -1907,10 +1944,13 @@ implementation work.
 [private-commit-cc1f6ca]: https://github.com/chatcode-lab/stock-api/commit/cc1f6ca2a0aaadc5a76dbd99b942e49f6aa58b1d
 [private-commit-31b1b2c]: https://github.com/chatcode-lab/stock-api/commit/31b1b2c1062cd8c27822dc23a76c8e3068592183
 [private-commit-0f243ab]: https://github.com/chatcode-lab/stock-api/commit/0f243abd74a38d0bb94bbf7d5d8720b054085ea3
+[private-commit-0ff93b6]: https://github.com/chatcode-lab/stock-api/commit/0ff93b6feacd59c4100449aaa8c3f7cb8bbde316
 [stock-api-deploy-30585050528]: https://github.com/chatcode-lab/stock-api/actions/runs/30585050528
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
 [pr-11]: https://github.com/chatcode-lab/stock-tui/pull/11
 [pr-12]: https://github.com/chatcode-lab/stock-tui/pull/12
+[pr-13]: https://github.com/chatcode-lab/stock-tui/pull/13
+[pr-14]: https://github.com/chatcode-lab/stock-tui/pull/14
 [issue-10]: https://github.com/chatcode-lab/stock-tui/issues/10
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
