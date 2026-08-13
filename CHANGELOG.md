@@ -7,6 +7,31 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-13
+
+### Added
+
+- Added an animated README cover showing the overview, sector, and ticker
+  workflows in the terminal UI.
+
+### Changed
+
+- Limited five-minute automatic refreshes to current sector members, benchmark
+  proxies, and explicit favorites. Startup, catalog reconciliation, and manual
+  `r` retain broad candidate discovery and incremental history updates.
+- Paused automatic refresh while a compatible terminal forwards focus loss,
+  and restarted a full interval after focus returns instead of issuing a
+  catch-up request.
+- Updated pinned GitHub Actions and Rust dependencies after cross-platform and
+  minimum-supported-Rust-version validation.
+
+### Fixed
+
+- Prevented background clients from restarting daily and weekly history work
+  every five minutes, substantially reducing provider and private API traffic.
+- Updated Data Status to distinguish the automatic active-set scope from the
+  manual broad refresh and history behavior.
+
 ## [0.3.0] - 2026-07-31
 
 ### Changed
@@ -384,7 +409,8 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.5...v0.2.6
