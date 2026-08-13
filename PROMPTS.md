@@ -1843,6 +1843,36 @@ rows, stable catalog replays, and monotonic catalog rollover. Exported Worker
 logs are ignored at the repository root and documented as sensitive local
 diagnostic artifacts.
 
+## 68. Deploy the Private API and Publish v0.3.1
+
+> Deploy stock-api and make a new release.
+
+**Committed changes**
+
+- [`95d2a29` - Reduce automatic provider traffic][commit-95d2a29]
+- [`0ff93b6` - Reduce Worker cache and log amplification][private-commit-0ff93b6]
+- [`085fab6` - Prepare stock-tui 0.3.1][commit-085fab6]
+- [Successful private Worker deployment][stock-api-deploy-31737734634]
+- [Successful cross-platform CI][ci-run-31738536270]
+- [Successful release preflight][release-preflight-run-31738698966]
+- [Successful v0.3.1 release workflow][release-run-31739404103]
+- [stock-tui v0.3.1][release-v0.3.1]
+
+**Summary**
+
+The optimized private Worker was deployed through its protected GitHub Actions
+workflow. Provisioning, migrations, credential validation, private-route smoke
+tests, R2 cache reuse, and catalog-enriched market-cap responses all passed;
+routine invocation logs and traces are disabled while explicit warnings and
+errors remain available.
+
+Version 0.3.1 packages the lower-traffic automatic refresh behavior, focus-aware
+refresh pausing, the animated README cover, and current dependency and workflow
+updates. Local checks, the normal cross-platform CI matrix, a build-only release
+preflight, and the tag-triggered release workflow passed before publication.
+The five Linux, macOS, and Windows archives were checksum-verified, and both
+macOS binaries were signed and notarized.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1928,13 +1958,17 @@ implementation work.
 [commit-e4a3c95]: https://github.com/chatcode-lab/stock-tui/commit/e4a3c95bbc885a83bf085212500496a9d95d1b3d
 [commit-8d7e238]: https://github.com/chatcode-lab/stock-tui/commit/8d7e238cfa7d6218cc6633d408b740ee6cc2a3a4
 [commit-95d2a29]: https://github.com/chatcode-lab/stock-tui/commit/95d2a293aef52b148902d6706bc9214bee660f20
+[commit-085fab6]: https://github.com/chatcode-lab/stock-tui/commit/085fab6469d592088ca43a76a41466de9830f576
 [catalog-run-30590280654]: https://github.com/chatcode-lab/stock-tui/actions/runs/30590280654
 [catalog-run-30578835793]: https://github.com/chatcode-lab/stock-tui/actions/runs/30578835793
 [ci-run-30629067495]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629067495
 [ci-run-30909086660]: https://github.com/chatcode-lab/stock-tui/actions/runs/30909086660
 [ci-run-30909293682]: https://github.com/chatcode-lab/stock-tui/actions/runs/30909293682
+[ci-run-31738536270]: https://github.com/chatcode-lab/stock-tui/actions/runs/31738536270
 [release-preflight-run-30629238846]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629238846
+[release-preflight-run-31738698966]: https://github.com/chatcode-lab/stock-tui/actions/runs/31738698966
 [release-run-30629889605]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629889605
+[release-run-31739404103]: https://github.com/chatcode-lab/stock-tui/actions/runs/31739404103
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1946,6 +1980,7 @@ implementation work.
 [private-commit-0f243ab]: https://github.com/chatcode-lab/stock-api/commit/0f243abd74a38d0bb94bbf7d5d8720b054085ea3
 [private-commit-0ff93b6]: https://github.com/chatcode-lab/stock-api/commit/0ff93b6feacd59c4100449aaa8c3f7cb8bbde316
 [stock-api-deploy-30585050528]: https://github.com/chatcode-lab/stock-api/actions/runs/30585050528
+[stock-api-deploy-31737734634]: https://github.com/chatcode-lab/stock-api/actions/runs/31737734634
 [pr-6]: https://github.com/chatcode-lab/stock-tui/pull/6
 [pr-11]: https://github.com/chatcode-lab/stock-tui/pull/11
 [pr-12]: https://github.com/chatcode-lab/stock-tui/pull/12
@@ -1963,3 +1998,4 @@ implementation work.
 [release-v0.2.6]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.6
 [release-v0.2.7]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.7
 [release-v0.3.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.3.0
+[release-v0.3.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.3.1
