@@ -105,7 +105,7 @@ The client therefore defaults to:
 - 180 requests per minute, leaving headroom below the documented Basic limit
 - 100 symbols per snapshot request
 - 50 symbols per historical-bars request
-- a five-minute snapshot refresh cadence
+- a five-minute active-set snapshot refresh cadence
 
 These are client-side limits, not a promise that an account is entitled to a
 request. Alpaca remains authoritative. The adapter handles pagination, retries
@@ -119,6 +119,13 @@ company rows, favorites, and cached observations are preserved. A later
 active-asset response reactivates catalog candidates. Alpaca's `active` status
 does not by itself guarantee current liquidity, tradability for a particular
 account, or complete quote coverage.
+
+Startup, explicit `r`, and catalog reconciliation request the broad retained
+candidate pool. The timed cadence requests only current sector members,
+benchmark proxies, and explicit favorites, and does not start history. The
+timer pauses while the terminal is unfocused. This keeps routine request volume
+proportional to the active UI universe while preserving an explicit path for
+discovering new top-100 entrants.
 
 Alpaca can emit flat zero-volume daily rows while a security has no trades,
 including during a halt. The client preserves those rows in its raw cache but
@@ -416,18 +423,20 @@ provider supplies intervening forward and reverse splits. Runtime applies their
 ratios to the dated price-equivalent common shares before multiplying by current
 price. A failed required split lookup leaves the local estimate unavailable
 instead of combining stale shares with a post-split price. Each successful
-candidate snapshot refresh then selects 100 companies per sector using
+broad candidate snapshot refresh then selects 100 companies per sector using
 estimated market cap when available or numeric public float otherwise. Those
 900 companies and the three explicitly configured benchmark ETF proxies
 receive the bulk daily and all-provider-available weekly history backfills.
 
 This means a company can move into the visible top 100 as prices change if it
-is already in the resolved candidate pool and has usable shares. A large
-proxy-only issuer no longer loses automatically to every issuer with any known
-cap. A new issuer, newly eligible filer, or company outside that pool requires
-a successful catalog publication, but no longer requires a client release.
-Public-float and share facts can have different as-of dates, and a missing
-share fact leaves membership dependent on the proxy.
+is already in the resolved candidate pool and has usable shares. An unselected
+candidate is reconsidered by the broad pass at startup, after explicit `r`, or
+after catalog reconciliation, not by each five-minute active-set refresh. A
+large proxy-only issuer no longer loses automatically to every issuer with any
+known cap. A new issuer, newly eligible filer, or company outside that pool
+requires a successful catalog publication, but no longer requires a client
+release. Public-float and share facts can have different as-of dates, and a
+missing share fact leaves membership dependent on the proxy.
 
 The selected asset provider's response refreshes names and exchange identifiers
 for symbols it recognizes without overwriting SEC-derived SIC sector, numeric

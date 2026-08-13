@@ -2,7 +2,7 @@ use std::{collections::HashSet, io, time::Duration};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use crossterm::event::EventStream;
+use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -209,6 +209,7 @@ pub async fn run(settings: Settings) -> Result<()> {
     let mut dirty = true;
     let mut quit = false;
     let mut last_auto_refresh = Instant::now();
+    let mut terminal_focused = true;
 
     let mut result: Result<()> = async {
         while !quit {
@@ -222,6 +223,12 @@ pub async fn run(settings: Settings) -> Result<()> {
                 input_event = input.next() => {
                     match input_event {
                         Some(Ok(event)) => {
+                            if let Some(focused) = terminal_focus_state(&event) {
+                                terminal_focused = focused;
+                                if focused {
+                                    last_auto_refresh = Instant::now();
+                                }
+                            }
                             let commands = handle_event(&mut state, event);
                             for command in commands {
                                 let resets_auto_refresh =
@@ -266,10 +273,15 @@ pub async fn run(settings: Settings) -> Result<()> {
                     dirty = true;
                 }
                 _ = tick.tick() => {
-                    if let Some(commands) = sync_commands.as_ref()
-                        && last_auto_refresh.elapsed() >= settings.refresh_interval
+                    if auto_refresh_due(
+                        sync_commands.is_some(),
+                        terminal_focused,
+                        last_auto_refresh.elapsed(),
+                        settings.refresh_interval,
+                    )
+                        && let Some(commands) = sync_commands.as_ref()
                     {
-                        let _ = commands.send(SyncCommand::Refresh);
+                        let _ = commands.send(SyncCommand::AutoRefresh);
                         last_auto_refresh = Instant::now();
                     }
                     dirty = state.overlay.is_some() || state.detail_hover.is_some();
@@ -468,6 +480,23 @@ fn execute_command(
 
 fn should_reset_auto_refresh(command: &AppCommand, remote_sync_enabled: bool) -> bool {
     remote_sync_enabled && matches!(command, AppCommand::Refresh)
+}
+
+fn terminal_focus_state(event: &Event) -> Option<bool> {
+    match event {
+        Event::FocusGained => Some(true),
+        Event::FocusLost => Some(false),
+        _ => None,
+    }
+}
+
+fn auto_refresh_due(
+    remote_sync_enabled: bool,
+    terminal_focused: bool,
+    elapsed: Duration,
+    interval: Duration,
+) -> bool {
+    remote_sync_enabled && terminal_focused && elapsed >= interval
 }
 
 async fn install_catalog_off_thread(
@@ -717,12 +746,14 @@ mod tests {
     };
 
     use chrono::Utc;
+    use crossterm::event::Event;
     use tempfile::tempdir;
 
     use super::{
-        DemoCacheState, bootstrap_companies, bootstrap_universe, classify_demo_cache,
-        finish_catalog_update, install_catalog, install_catalog_off_thread, load_detail,
-        recover_news_url, reload_tiles, should_reset_auto_refresh,
+        DemoCacheState, auto_refresh_due, bootstrap_companies, bootstrap_universe,
+        classify_demo_cache, finish_catalog_update, install_catalog, install_catalog_off_thread,
+        load_detail, recover_news_url, reload_tiles, should_reset_auto_refresh,
+        terminal_focus_state,
     };
     use crate::{
         app::AppCommand,
@@ -739,6 +770,24 @@ mod tests {
         assert!(should_reset_auto_refresh(&AppCommand::Refresh, true));
         assert!(!should_reset_auto_refresh(&AppCommand::Refresh, false));
         assert!(!should_reset_auto_refresh(&AppCommand::ReloadTiles, true));
+    }
+
+    #[test]
+    fn focus_events_control_automatic_refresh_eligibility() {
+        assert_eq!(terminal_focus_state(&Event::FocusLost), Some(false));
+        assert_eq!(terminal_focus_state(&Event::FocusGained), Some(true));
+        assert_eq!(terminal_focus_state(&Event::Resize(120, 40)), None);
+
+        let interval = StdDuration::from_secs(300);
+        assert!(auto_refresh_due(true, true, interval, interval));
+        assert!(!auto_refresh_due(true, false, interval, interval));
+        assert!(!auto_refresh_due(false, true, interval, interval));
+        assert!(!auto_refresh_due(
+            true,
+            true,
+            interval - StdDuration::from_secs(1),
+            interval,
+        ));
     }
 
     #[test]

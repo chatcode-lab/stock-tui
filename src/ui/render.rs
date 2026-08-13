@@ -1280,8 +1280,13 @@ fn render_sync(frame: &mut Frame<'_>, state: &mut UiState, area: Rect) {
         status_row("Auto refresh", cadence, TEXT),
         status_row("Price cache", snapshot, TEXT),
         status_row(
-            "Coverage",
-            "Refresh requests every retained ticker".to_owned(),
+            "Auto scope",
+            "Active set + benchmarks + favorites".to_owned(),
+            MUTED,
+        ),
+        status_row(
+            "Manual r",
+            "Retained candidates + incremental history".to_owned(),
             MUTED,
         ),
         status_row(

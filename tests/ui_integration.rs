@@ -1724,7 +1724,8 @@ fn rail_and_help_expose_keyboard_controls_and_demo_state() {
     for expected in [
         "DATA STATUS",
         "Auto refresh Disabled (demo/offline)",
-        "Coverage     Refresh requests every retained ticker",
+        "Auto scope   Active set + benchmarks + favorites",
+        "Manual r     Retained candidates + incremental history",
         "Stale data   Provider observation is over 72h old",
     ] {
         assert!(

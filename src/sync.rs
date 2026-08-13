@@ -12,6 +12,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum SyncCommand {
+    AutoRefresh,
     Refresh,
     ReconcileUniverse,
     LoadTicker { symbol: String, range: DateRange },
@@ -65,6 +66,32 @@ struct HistoryPlan {
     message: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotScope {
+    Broad,
+    Active,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RefreshPolicy {
+    snapshot_scope: SnapshotScope,
+    refresh_history: bool,
+}
+
+fn refresh_policy(command: &SyncCommand) -> Option<RefreshPolicy> {
+    match command {
+        SyncCommand::AutoRefresh => Some(RefreshPolicy {
+            snapshot_scope: SnapshotScope::Active,
+            refresh_history: false,
+        }),
+        SyncCommand::Refresh | SyncCommand::ReconcileUniverse => Some(RefreshPolicy {
+            snapshot_scope: SnapshotScope::Broad,
+            refresh_history: true,
+        }),
+        SyncCommand::LoadTicker { .. } | SyncCommand::Shutdown => None,
+    }
+}
+
 const HISTORY_PLANS: [HistoryPlan; 2] = [
     HistoryPlan {
         timeframe: "1Day",
@@ -116,14 +143,15 @@ async fn run_worker(
         tracing::warn!(error = %error, "initial active-asset refresh failed");
         let _ = events.send(SyncEvent::Error(error));
     }
-    let snapshots_ready = match refresh_snapshots(&storage, &providers, &events).await {
-        Ok(()) => true,
-        Err(error) => {
-            tracing::warn!(error = %error, "initial snapshot refresh failed");
-            let _ = events.send(SyncEvent::Error(error));
-            false
-        }
-    };
+    let snapshots_ready =
+        match refresh_snapshots(&storage, &providers, &events, SnapshotScope::Broad).await {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(error = %error, "initial snapshot refresh failed");
+                let _ = events.send(SyncEvent::Error(error));
+                false
+            }
+        };
     let mut history_task = snapshots_ready.then(|| {
         Box::pin(backfill_history(
             storage.clone(),
@@ -156,8 +184,37 @@ async fn run_worker(
             }
         };
         match command {
-            SyncCommand::Refresh => match refresh_snapshots(&storage, &providers, &events).await {
-                Ok(()) if history_task.is_none() => {
+            SyncCommand::AutoRefresh | SyncCommand::Refresh => {
+                let policy = refresh_policy(&command).expect("refresh command has a policy");
+                match refresh_snapshots(&storage, &providers, &events, policy.snapshot_scope).await
+                {
+                    Ok(()) if policy.refresh_history && history_task.is_none() => {
+                        history_task = Some(Box::pin(backfill_history(
+                            storage.clone(),
+                            providers.clone(),
+                            events.clone(),
+                            cancellation.child_token(),
+                            options.history_batch_size,
+                        )));
+                    }
+                    Ok(()) => {}
+                    Err(error) => {
+                        tracing::warn!(error = %error, "snapshot refresh failed");
+                        let _ = events.send(SyncEvent::Error(error));
+                    }
+                }
+            }
+            SyncCommand::ReconcileUniverse => {
+                let policy = refresh_policy(&command).expect("reconcile command has a policy");
+                if let Err(error) = refresh_assets(&storage, &providers, &events).await {
+                    tracing::warn!(error = %error, "active-asset reconciliation failed");
+                    let _ = events.send(SyncEvent::Error(error));
+                } else if let Err(error) =
+                    refresh_snapshots(&storage, &providers, &events, policy.snapshot_scope).await
+                {
+                    tracing::warn!(error = %error, "post-catalog snapshot refresh failed");
+                    let _ = events.send(SyncEvent::Error(error));
+                } else if policy.refresh_history && history_task.is_none() {
                     history_task = Some(Box::pin(backfill_history(
                         storage.clone(),
                         providers.clone(),
@@ -165,20 +222,6 @@ async fn run_worker(
                         cancellation.child_token(),
                         options.history_batch_size,
                     )));
-                }
-                Ok(()) => {}
-                Err(error) => {
-                    tracing::warn!(error = %error, "snapshot refresh failed");
-                    let _ = events.send(SyncEvent::Error(error));
-                }
-            },
-            SyncCommand::ReconcileUniverse => {
-                if let Err(error) = refresh_assets(&storage, &providers, &events).await {
-                    tracing::warn!(error = %error, "active-asset reconciliation failed");
-                    let _ = events.send(SyncEvent::Error(error));
-                } else if let Err(error) = refresh_snapshots(&storage, &providers, &events).await {
-                    tracing::warn!(error = %error, "post-catalog snapshot refresh failed");
-                    let _ = events.send(SyncEvent::Error(error));
                 }
             }
             SyncCommand::LoadTicker { symbol, range } => {
@@ -200,13 +243,22 @@ async fn refresh_snapshots(
     storage: &Storage,
     providers: &ProviderSet,
     events: &mpsc::UnboundedSender<SyncEvent>,
+    scope: SnapshotScope,
 ) -> Result<(), String> {
     let companies = storage
         .companies(None, false)
         .map_err(|error| error.to_string())?;
+    let favorite_symbols = match scope {
+        SnapshotScope::Broad => HashSet::new(),
+        SnapshotScope::Active => storage
+            .favorite_symbols()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .collect(),
+    };
     let companies = companies
         .into_iter()
-        .filter(is_snapshot_candidate)
+        .filter(|company| is_snapshot_candidate(company, scope, &favorite_symbols))
         .collect::<Vec<_>>();
     let symbols: Vec<String> = companies
         .iter()
@@ -232,7 +284,7 @@ async fn refresh_snapshots(
     storage
         .upsert_snapshots(&snapshots)
         .map_err(|error| error.to_string())?;
-    store_snapshot_market_caps(storage, &snapshots, &split_coverage, now)?;
+    store_snapshot_market_caps(storage, &snapshots, &split_coverage, now, scope)?;
     storage
         .set_sync_checkpoint("snapshots", now)
         .map_err(|error| error.to_string())?;
@@ -253,12 +305,13 @@ fn store_snapshot_market_caps(
     snapshots: &[crate::domain::Snapshot],
     split_coverage: &StockSplitCoverage,
     now: chrono::DateTime<Utc>,
+    scope: SnapshotScope,
 ) -> Result<(), String> {
     storage
-        .update_company_universe(now.date_naive(), |existing, _favorites| {
+        .update_company_universe(now.date_naive(), |existing, favorites| {
             let companies = existing
                 .values()
-                .filter(|company| is_snapshot_candidate(company))
+                .filter(|company| is_snapshot_candidate(company, scope, favorites))
                 .cloned()
                 .collect();
             update_market_caps(companies, snapshots, split_coverage, now)
@@ -791,8 +844,15 @@ fn reconcile_active_assets(
     merged
 }
 
-fn is_snapshot_candidate(company: &Company) -> bool {
-    company.retained || company.in_universe
+fn is_snapshot_candidate(
+    company: &Company,
+    scope: SnapshotScope,
+    favorite_symbols: &HashSet<String>,
+) -> bool {
+    match scope {
+        SnapshotScope::Broad => company.retained || company.in_universe,
+        SnapshotScope::Active => company.in_universe || favorite_symbols.contains(&company.symbol),
+    }
 }
 
 fn send_progress(
@@ -1065,8 +1125,14 @@ mod tests {
             .expect("install catalog update during provider wait");
         let provider_snapshot = snapshot("LIVE", 200.0, Some(8_000_000.0));
 
-        store_snapshot_market_caps(&storage, &[provider_snapshot], &coverage, instant())
-            .expect("store bulk snapshot market caps");
+        store_snapshot_market_caps(
+            &storage,
+            &[provider_snapshot],
+            &coverage,
+            instant(),
+            SnapshotScope::Broad,
+        )
+        .expect("store bulk snapshot market caps");
 
         let stored = storage
             .company("LIVE")
@@ -1199,20 +1265,43 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_candidates_exclude_reconciled_inactive_catalog_rows() {
-        assert!(is_snapshot_candidate(&company(
-            "LIVE",
-            Some(Sector::Technology),
-            true,
-            false
-        )));
-        assert!(is_snapshot_candidate(&company("SPY", None, true, true)));
-        assert!(!is_snapshot_candidate(&company(
-            "GONE",
-            Some(Sector::Technology),
-            false,
-            false
-        )));
+    fn broad_snapshot_candidates_include_retained_catalog_rows() {
+        let favorites = HashSet::new();
+        assert!(is_snapshot_candidate(
+            &company("LIVE", Some(Sector::Technology), true, false),
+            SnapshotScope::Broad,
+            &favorites
+        ));
+        assert!(is_snapshot_candidate(
+            &company("SPY", None, true, true),
+            SnapshotScope::Broad,
+            &favorites,
+        ));
+        assert!(!is_snapshot_candidate(
+            &company("GONE", Some(Sector::Technology), false, false),
+            SnapshotScope::Broad,
+            &favorites
+        ));
+    }
+
+    #[test]
+    fn active_snapshot_candidates_include_only_universe_and_favorites() {
+        let favorites = HashSet::from(["FAVE".to_owned()]);
+        assert!(!is_snapshot_candidate(
+            &company("BROAD", Some(Sector::Technology), true, false),
+            SnapshotScope::Active,
+            &favorites,
+        ));
+        assert!(is_snapshot_candidate(
+            &company("SPY", None, true, true),
+            SnapshotScope::Active,
+            &favorites,
+        ));
+        assert!(is_snapshot_candidate(
+            &company("FAVE", None, false, false),
+            SnapshotScope::Active,
+            &favorites,
+        ));
     }
 
     #[test]
@@ -1420,7 +1509,7 @@ mod tests {
         .with_corporate_actions(Arc::new(FailingCorporateActions));
         let (events, _received) = mpsc::unbounded_channel();
 
-        refresh_snapshots(&storage, &providers, &events)
+        refresh_snapshots(&storage, &providers, &events, SnapshotScope::Broad)
             .await
             .expect("price refresh survives split failure");
 
@@ -1470,7 +1559,7 @@ mod tests {
         );
         let (events, _received) = mpsc::unbounded_channel();
 
-        refresh_snapshots(&storage, &providers, &events)
+        refresh_snapshots(&storage, &providers, &events, SnapshotScope::Broad)
             .await
             .expect("snapshot refresh");
 
@@ -1568,6 +1657,27 @@ mod tests {
                         && progress.total == 2
             )
         }));
+    }
+
+    #[test]
+    fn automatic_and_explicit_refreshes_have_distinct_workloads() {
+        assert_eq!(
+            refresh_policy(&SyncCommand::AutoRefresh),
+            Some(RefreshPolicy {
+                snapshot_scope: SnapshotScope::Active,
+                refresh_history: false,
+            })
+        );
+        let broad_refresh = Some(RefreshPolicy {
+            snapshot_scope: SnapshotScope::Broad,
+            refresh_history: true,
+        });
+        assert_eq!(refresh_policy(&SyncCommand::Refresh), broad_refresh);
+        assert_eq!(
+            refresh_policy(&SyncCommand::ReconcileUniverse),
+            broad_refresh
+        );
+        assert_eq!(refresh_policy(&SyncCommand::Shutdown), None);
     }
 
     #[test]

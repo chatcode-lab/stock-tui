@@ -225,6 +225,11 @@ committed independently, so quitting partway through preserves completed
 symbols; a later launch resumes from the stored watermarks. A plan-level
 checkpoint is written only after every batch in that plan succeeds.
 
+A bulk history pass starts after the broad snapshot refresh at live startup.
+An explicit `r` refresh or a catalog-driven universe reconciliation also starts
+an incremental pass when no history pass is already running. The automatic
+snapshot timer never starts history work.
+
 History requests use `adjustment=all`, ascending order, pagination, and the
 configured feed. "Adjusted" is provider-defined and does not guarantee that
 every corporate action is represented correctly.
@@ -234,20 +239,35 @@ by a background pruning job. Repeated overlap upserts do not duplicate rows.
 
 ## Current-Day Refresh
 
-The worker refreshes candidate snapshots once on startup and at the configured
-cadence, five minutes by default. Each successful refresh can update estimated
-market caps and writes that day's top-100 membership. Snapshot and available
-split requests run together; a split-request error does not discard valid
-prices or provider-supplied caps, but it suppresses share-derived caps for that
-refresh. Successful per-symbol split coverage, including an empty result, is
-cached in memory for up to 24 hours and reused by broad and lazy ticker
-refreshes. `r` or the Refresh rail action asks for an immediate snapshot
-refresh and restarts the cadence timer, preventing a scheduled refresh
-immediately afterward. No streaming or per-trade connection is used. If the
-prior history job has finished, a successful refresh also starts another
-incremental history pass so newly selected members are backfilled without
-restarting the application. Demo and offline modes do not schedule or request
+The worker uses separate broad and active snapshot scopes. Live startup
+requests every retained sector candidate plus the three benchmark ETF proxies;
+this broad result updates estimated market caps and re-selects that day's
+top-100 memberships. A successful remote catalog update first reconciles the
+provider's active assets, then performs the same broad snapshot work and starts
+incremental history when the history worker is idle.
+
+The automatic cadence, five minutes by default, is intentionally smaller. It
+requests only current sector members, benchmark proxies, and explicitly
+starred tickers. It can update prices and ranks within that active set, but it
+does not request the remaining candidate pool and never starts incremental
+history. Automatic refresh pauses when the terminal reports `FocusLost`.
+`FocusGained` restarts the full interval, so returning to the terminal does not
+cause a catch-up request burst.
+
+`r` or the Refresh rail action immediately requests the broad snapshot scope
+and restarts the automatic cadence timer. If no history pass is already
+running, it also starts an incremental history pass so newly selected members
+are backfilled without restarting the application. Therefore a retained but
+unselected candidate is reconsidered at startup, on explicit refresh, or after
+catalog reconciliation, rather than every five minutes. No streaming or
+per-trade connection is used. Demo and offline modes do not schedule or request
 remote refreshes.
+
+Snapshot and available split requests run together. A split-request error does
+not discard valid prices or provider-supplied caps, but it suppresses
+share-derived caps for that refresh. Successful per-symbol split coverage,
+including an empty result, is cached in memory for up to 24 hours and reused by
+broad, active, and lazy ticker refreshes.
 
 Snapshots drive `1D` return when price and previous close are present. The UI
 falls back to cached price-observation bars when snapshot fields are
@@ -260,12 +280,13 @@ underlined while retaining the same contrast-aware foreground as current
 labels.
 
 Every broad refresh requests every currently retained candidate and benchmark
-proxy. A successful request does not guarantee a new observation for every
+proxy. A timed active refresh instead scales with the visible universe plus
+favorites. A successful request does not guarantee a new observation for every
 symbol: an active but thinly traded security can still carry an older IEX trade
 timestamp, and the client deliberately does not replace it with the request
-time. The active-asset reconciliation at startup removes inactive catalog
-symbols from current membership while preserving their cached history and
-favorite state.
+time. Active-asset reconciliation at startup and after a catalog update removes
+inactive catalog symbols from current membership while preserving their cached
+history and favorite state.
 
 ## Lazy Detail Sync
 

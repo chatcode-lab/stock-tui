@@ -156,7 +156,7 @@ placeholders and is safe to commit; a filled `.env` is not.
 | `--feed <FEED>` | Select `iex`, `delayed_sip`, or `sip`. |
 | `--catalog-url <URL>` | Override the compact SEC catalog endpoint. |
 | `--catalog-refresh-hours <N>` | Recheck the catalog after `N` hours, clamped to 1 through 168. |
-| `--refresh-seconds <N>` | Set snapshot refresh cadence, clamped to 30 through 86,400 seconds. |
+| `--refresh-seconds <N>` | Set the foreground active-set snapshot cadence, clamped to 30 through 86,400 seconds. |
 | `--print-config` | Print redacted effective settings and exit. |
 | `-h`, `--help` | Print CLI help. |
 | `-V`, `--version` | Print the binary version. |
@@ -240,7 +240,7 @@ Supported keys and validation:
 | Key | Default | Accepted value |
 | --- | --- | --- |
 | `provider` | `alpaca` | A compiled provider adapter ID: `alpaca` or `stock-api` |
-| `refresh_seconds` | `300` | Integer, clamped to 30..86,400 |
+| `refresh_seconds` | `300` | Foreground active-set snapshot cadence in seconds, clamped to 30..86,400 |
 | `catalog_url` | Public `stock.chatcode.dev` catalog | HTTPS URL, or loopback HTTP for tests |
 | `catalog_refresh_hours` | `12` | Integer, clamped to 1..168 |
 | `providers.alpaca.api_key` | Unset | Personal Alpaca API key ID; must be set with `api_secret` |
@@ -342,9 +342,13 @@ provider responses indicate pressure.
 
 Larger symbol batches reduce request count but increase payload size, response
 latency, and the amount retried after a failure. Defaults are designed for the
-broader candidate snapshot pool and the selected 900-company history universe
-plus three benchmark ETF proxies. Increasing them does not increase account
-entitlement and may exceed endpoint-specific symbol or response limits.
+broader candidate snapshot pool used at startup, on manual refresh, and after a
+catalog update, plus the selected 900-company history universe and three
+benchmark ETF proxies. Timed refreshes use only current sector members,
+benchmark proxies, and explicit favorites; they do not launch history. The
+timer pauses while the terminal is unfocused and starts a fresh interval when
+focus returns. Increasing batch sizes does not increase account entitlement and
+may exceed endpoint-specific symbol or response limits.
 
 Transient requests use a 20-second timeout, up to three retries, exponential
 delays starting at 250 milliseconds, and a 30-second cap. A provider

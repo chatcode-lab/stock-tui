@@ -355,7 +355,7 @@ navigation views; an open overlay owns its relevant keys as described below.
 | `g`, then `c s h e t f i m u` | Open Consumer, Services, Healthcare, Energy, Technology, Financial, Industrial, Materials, or Utilities |
 | `Alt`/`Meta` + sector letter | Optional direct form of the same sector shortcut |
 | `Tab` | Cycle Chart, Statistics, and News in compact ticker view |
-| `r` | Request an immediate broad-market snapshot refresh |
+| `r` | Refresh the broad candidate pool and start incremental history when idle |
 | `S` | Open read-only data status |
 | `?` | Open keyboard help |
 | `q` or `Ctrl-C` | Quit and restore the terminal when no overlay is open |
@@ -509,9 +509,17 @@ view omits closed periods; daily and weekly histories use ordinal observations.
 Long gaps during an open session carry the last traded price to the next
 observation. Session membership is calculated in the configured market
 timezone and labels are shown in the user's local timezone.
-In live mode, the broad-market snapshot refresh runs immediately on startup
-and every five minutes by default; `r` starts one immediately and restarts that
-timer. Opening a ticker or changing its range separately triggers a lazy detail
+In live mode, startup refreshes the broad retained candidate pool and benchmark
+proxies, then starts the two bulk history plans. The automatic refresh runs
+every five minutes by default but requests only the current sector members,
+benchmark proxies, and explicitly starred tickers; it never starts a history
+pass. Automatic refresh pauses while the terminal reports lost focus. Regaining
+focus starts a fresh interval instead of issuing an immediate catch-up request.
+`r` refreshes the broad candidate pool, starts an incremental history pass when
+one is not already running, and restarts the timer. Consequently, discovery of
+an unselected candidate that can enter a sector top 100 occurs at startup,
+after `r`, or after catalog reconciliation, rather than on every timed refresh.
+Opening a ticker or changing its range separately triggers a lazy detail
 request. Demo and offline modes never schedule remote refreshes. `S` only opens
 the status panel; it does not start synchronization.
 

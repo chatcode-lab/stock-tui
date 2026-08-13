@@ -130,10 +130,19 @@ The worker initially:
    backfills for the selected 900 members and three benchmark ETF proxies in
    the background.
 
-It then accepts manual or timed snapshot refresh commands and ticker-detail
-requests. Opening a ticker reads cached detail immediately and requests a
-current snapshot, the preferred chart timeframe, and up to 20 related news
-items in parallel.
+It then accepts distinct manual and timed refresh commands. The timed command
+requests snapshots only for current sector members, benchmark proxies, and
+explicit favorites; it neither scans the broader retained candidate pool nor
+starts history. The runtime pauses that timer on terminal `FocusLost` and
+starts a fresh interval on `FocusGained`. A manual refresh requests broad
+candidate snapshots and starts incremental history when the history worker is
+idle. A catalog update first reconciles assets, then uses the same broad
+snapshot and history policy. This confines discovery of potential new top-100
+entrants to startup, manual refresh, and catalog reconciliation.
+
+Ticker-detail requests remain independent. Opening a ticker reads cached
+detail immediately and requests a current snapshot, the preferred chart
+timeframe, and up to 20 related news items in parallel.
 
 See [Cache and Sync](cache-and-sync.md) for watermarks and failure behavior.
 

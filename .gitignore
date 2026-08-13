@@ -29,6 +29,7 @@ build/
 # Runtime logs
 *.log
 *.log.*
+/logs-*.json
 
 # Application state
 .stock-tui/
