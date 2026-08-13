@@ -346,9 +346,9 @@ broader candidate snapshot pool used at startup, on manual refresh, and after a
 catalog update, plus the selected 900-company history universe and three
 benchmark ETF proxies. Timed refreshes use only current sector members,
 benchmark proxies, and explicit favorites; they do not launch history. The
-timer pauses while the terminal is unfocused and starts a fresh interval when
-focus returns. Increasing batch sizes does not increase account entitlement and
-may exceed endpoint-specific symbol or response limits.
+timer pauses while the terminal forwards an unfocused state and starts a fresh
+interval when focus returns. Increasing batch sizes does not increase account
+entitlement and may exceed endpoint-specific symbol or response limits.
 
 Transient requests use a 20-second timeout, up to three retries, exponential
 delays starting at 250 milliseconds, and a 30-second cap. A provider

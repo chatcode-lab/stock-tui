@@ -250,7 +250,7 @@ The automatic cadence, five minutes by default, is intentionally smaller. It
 requests only current sector members, benchmark proxies, and explicitly
 starred tickers. It can update prices and ranks within that active set, but it
 does not request the remaining candidate pool and never starts incremental
-history. Automatic refresh pauses when the terminal reports `FocusLost`.
+history. Automatic refresh pauses when the terminal forwards `FocusLost`.
 `FocusGained` restarts the full interval, so returning to the terminal does not
 cause a catch-up request burst.
 

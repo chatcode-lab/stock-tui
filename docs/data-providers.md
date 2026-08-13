@@ -123,9 +123,9 @@ account, or complete quote coverage.
 Startup, explicit `r`, and catalog reconciliation request the broad retained
 candidate pool. The timed cadence requests only current sector members,
 benchmark proxies, and explicit favorites, and does not start history. The
-timer pauses while the terminal is unfocused. This keeps routine request volume
-proportional to the active UI universe while preserving an explicit path for
-discovering new top-100 entrants.
+timer pauses while the terminal forwards focus events and is unfocused. This
+keeps routine request volume proportional to the active UI universe while
+preserving an explicit path for discovering new top-100 entrants.
 
 Alpaca can emit flat zero-volume daily rows while a security has no trades,
 including during a halt. The client preserves those rows in its raw cache but

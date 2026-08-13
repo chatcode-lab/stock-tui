@@ -1831,7 +1831,7 @@ The trace showed two clients independently repeating broad snapshot, daily,
 and weekly history work every five minutes; it contained no scheduled Worker
 events, retries, errors, or rate-limit responses. Timed refreshes now request
 only current sector members, benchmarks, and explicit favorites, never start
-bulk history, and pause while the terminal is unfocused. Startup, catalog
+bulk history, and pause when the terminal forwards focus loss. Startup, catalog
 reconciliation, and manual `r` retain the broader discovery and incremental
 history behavior, and the Data Status view explains that distinction.
 

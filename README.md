@@ -513,8 +513,10 @@ In live mode, startup refreshes the broad retained candidate pool and benchmark
 proxies, then starts the two bulk history plans. The automatic refresh runs
 every five minutes by default but requests only the current sector members,
 benchmark proxies, and explicitly starred tickers; it never starts a history
-pass. Automatic refresh pauses while the terminal reports lost focus. Regaining
-focus starts a fresh interval instead of issuing an immediate catch-up request.
+pass. Automatic refresh pauses while the terminal forwards lost focus.
+Regaining focus starts a fresh interval instead of issuing an immediate
+catch-up request. tmux users must enable `set -g focus-events on` for those
+events to reach the application.
 `r` refreshes the broad candidate pool, starts an incremental history pass when
 one is not already running, and restarts the timer. Consequently, discovery of
 an unselected candidate that can enter a sector top 100 occurs at startup,

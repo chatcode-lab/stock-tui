@@ -133,8 +133,9 @@ The worker initially:
 It then accepts distinct manual and timed refresh commands. The timed command
 requests snapshots only for current sector members, benchmark proxies, and
 explicit favorites; it neither scans the broader retained candidate pool nor
-starts history. The runtime pauses that timer on terminal `FocusLost` and
-starts a fresh interval on `FocusGained`. A manual refresh requests broad
+starts history. When the terminal multiplexer forwards focus events, the
+runtime pauses that timer on `FocusLost` and starts a fresh interval on
+`FocusGained`. A manual refresh requests broad
 candidate snapshots and starts incremental history when the history worker is
 idle. A catalog update first reconciles assets, then uses the same broad
 snapshot and history policy. This confines discovery of potential new top-100
