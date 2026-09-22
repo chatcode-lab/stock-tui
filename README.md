@@ -73,8 +73,8 @@ statistics, related news, sector rank, and absolute and relative gain.
 - Opens immediately from a local SQLite cache while network synchronization
   proceeds in the background.
 - Refreshes its compact SEC-derived issuer catalog from a public R2 object,
-  while retaining a validated catalog inside every release for offline and
-  outage-safe startup.
+  while retaining a validated catalog inside every prebuilt release for
+  offline and outage-safe startup.
 - Runs an explicitly selected demo, via `--demo` or onboarding, using 900 real
   SEC-catalog issuer identities plus three benchmark ETF identities, with
   deterministic, clearly labeled simulated market values.
@@ -279,6 +279,30 @@ populate a live cache, or use `--demo` for a self-contained experience.
 
 ## Install
 
+### Homebrew
+
+Install the maintained formula on macOS or Linux:
+
+```bash
+brew install chatcode-lab/tap/stock-tui
+```
+
+Homebrew refreshes the tap during `brew update`; use `brew upgrade stock-tui`
+for later releases.
+
+### Cargo
+
+With Rust 1.95 or newer installed, build and install the released crate in the
+current user's Cargo binary directory:
+
+```bash
+cargo install --locked stock-tui
+```
+
+Cargo builds embed the reviewed catalog snapshot committed with that version;
+an online launch refreshes it from the same public catalog endpoint. Prebuilt
+GitHub binaries instead embed the catalog captured by their release workflow.
+
 ### Prebuilt Binaries
 
 Download the release asset for your operating system and CPU from
@@ -290,6 +314,8 @@ it against the attached `SHA256SUMS`, open or extract it, and place `stock-tui`
 | --- | --- |
 | Linux x86_64 | `stock-tui-v<VERSION>-x86_64-unknown-linux-musl.tar.gz` |
 | Linux ARM64 | `stock-tui-v<VERSION>-aarch64-unknown-linux-musl.tar.gz` |
+| Debian/Ubuntu x86_64 | `stock-tui_<VERSION>_amd64.deb` |
+| Debian/Ubuntu ARM64 | `stock-tui_<VERSION>_arm64.deb` |
 | macOS Apple Silicon | `stock-tui-v<VERSION>-aarch64-apple-darwin.tar.gz` |
 | macOS Intel | `stock-tui-v<VERSION>-x86_64-apple-darwin.tar.gz` |
 | Windows x86_64 | `stock-tui-v<VERSION>-x86_64-pc-windows-msvc.zip` |
@@ -306,6 +332,17 @@ The GitHub CLI can display and download the latest available assets:
 gh release view --repo chatcode-lab/stock-tui
 gh release download --repo chatcode-lab/stock-tui
 ```
+
+Install a downloaded Debian or Ubuntu package with APT so the package manager
+tracks the local installation:
+
+```bash
+sudo apt install ./stock-tui_<VERSION>_amd64.deb
+```
+
+Replace `amd64` with `arm64` on ARM64 systems. These release assets are local
+packages, not a hosted APT repository; download a newer package before using
+APT to upgrade it.
 
 ### Build From Source
 

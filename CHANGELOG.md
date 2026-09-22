@@ -7,6 +7,25 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-22
+
+### Added
+
+- Added protected crates.io package verification and publication workflows,
+  including a one-time token bootstrap and secretless OIDC publishing for
+  subsequent releases.
+- Added native `amd64` and `arm64` Debian packages built from the existing
+  static Linux binaries and install-tested on their matching release runners.
+- Added supported Homebrew installation through the public
+  `chatcode-lab/tap` repository.
+
+### Changed
+
+- Strengthened release validation to require the exact five platform archives
+  and two Debian packages before checksums and GitHub release publication.
+- Documented Homebrew, crates.io, and local Debian package installation,
+  upgrades, verification, and maintainer release controls.
+
 ## [0.3.1] - 2026-08-13
 
 ### Added
@@ -409,7 +428,8 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.6...v0.2.7

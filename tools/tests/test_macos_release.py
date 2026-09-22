@@ -32,7 +32,7 @@ class MacosReleasePolicyTests(unittest.TestCase):
         )
         self.assertIn("needs: [build, build-macos]", workflow)
         self.assertIn("pattern: stock-tui-*", workflow)
-        self.assertIn("Expected exactly 5 platform archives", workflow)
+        self.assertIn("Expected exactly 7 release assets", workflow)
         self.assertIn(
             "APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.",
             workflow,

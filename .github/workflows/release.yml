@@ -28,8 +28,29 @@ jobs:
           package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
           test "v${package_version}" = "${GITHUB_REF_NAME}"
       - run: cargo test --locked --all-targets
+      - name: Verify crates.io package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo package --locked --list > "$RUNNER_TEMP/package-files.txt"
+          tools/release/verify-crate-contents.sh "$RUNNER_TEMP/package-files.txt"
+          cargo publish --dry-run --locked --registry crates-io
+          package_version="$(cargo metadata --locked --no-deps --format-version=1 \
+            | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
+          crate_file="target/package/stock-tui-${package_version}.crate"
+          test -f "$crate_file"
+          crate_size="$(wc -c < "$crate_file" | tr -d '[:space:]')"
+          if (( crate_size > 10485760 )); then
+            printf 'Package is %s bytes; crates.io permits at most 10485760 bytes.\n' \
+              "$crate_size" >&2
+            exit 1
+          fi
       - name: Validate release scripts
-        run: bash -n tools/release/sign-notarize-macos.sh
+        run: |
+          bash -n tools/release/sign-notarize-macos.sh
+          bash -n tools/release/build-deb.sh
+          bash -n tools/release/verify-crate-contents.sh
 
   catalog:
     needs: verify
@@ -187,10 +208,12 @@ jobs:
           - os: ubuntu-latest
             artifact: stock-tui-x86_64-unknown-linux-musl
             binary: stock-tui
+            deb_arch: amd64
             target: x86_64-unknown-linux-musl
           - os: ubuntu-24.04-arm
             artifact: stock-tui-aarch64-unknown-linux-musl
             binary: stock-tui
+            deb_arch: arm64
             target: aarch64-unknown-linux-musl
           - os: windows-latest
             artifact: stock-tui-x86_64-pc-windows-msvc
@@ -234,6 +257,38 @@ jobs:
           cp README.md LICENSE CHANGELOG.md config.example.toml .env.example dist/
           "./dist/${{ matrix.binary }}" --version
           tar -C dist -czf "stock-tui-v${package_version}-${{ matrix.target }}.tar.gz" .
+      - name: Build and test Debian package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          package_version="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          package="stock-tui_${package_version}_${{ matrix.deb_arch }}.deb"
+
+          tools/release/build-deb.sh \
+            "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            "$package_version" \
+            "${{ matrix.deb_arch }}"
+
+          test "$(dpkg-deb --field "$package" Package)" = stock-tui
+          test "$(dpkg-deb --field "$package" Version)" = "$package_version"
+          test "$(dpkg-deb --field "$package" Architecture)" = "${{ matrix.deb_arch }}"
+          dpkg-deb --contents "$package"
+
+          sudo dpkg --install "$package"
+          test "$(/usr/bin/stock-tui --version)" = "stock-tui $package_version"
+          test "$(dpkg-query --show --showformat='${db:Status-Status}' stock-tui)" = installed
+          test "$(stat --format=%a /usr/bin/stock-tui)" = 755
+          test -f /usr/share/doc/stock-tui/README.md
+          test -f /usr/share/doc/stock-tui/copyright
+          test -f /usr/share/doc/stock-tui/changelog.gz
+          test -f /usr/share/doc/stock-tui/examples/config.toml
+          test -f /usr/share/doc/stock-tui/examples/environment
+          sudo dpkg --remove stock-tui
+          test ! -e /usr/bin/stock-tui
+          test ! -e /usr/share/doc/stock-tui
+          ! dpkg-query --show --showformat='${db:Status-Status}\n' stock-tui 2>/dev/null \
+            | grep --fixed-strings --line-regexp installed
       - name: Stage Windows artifact
         if: runner.os == 'Windows'
         shell: pwsh
@@ -251,6 +306,7 @@ jobs:
           path: |
             stock-tui-v*-${{ matrix.target }}.tar.gz
             stock-tui-v*-${{ matrix.target }}.zip
+            stock-tui_*.deb
           if-no-files-found: error
 
   build-macos:
@@ -350,14 +406,29 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          archives=(stock-tui-v*.tar.gz stock-tui-v*.zip)
           files=(*)
-          if (( ${#archives[@]} != 5 || ${#files[@]} != 5 )); then
-            printf 'Expected exactly 5 platform archives; found %d archives and %d files.\n' \
-              "${#archives[@]}" "${#files[@]}" >&2
+          version="${GITHUB_REF_NAME#v}"
+          expected=(
+            "stock-tui-v${version}-aarch64-apple-darwin.tar.gz"
+            "stock-tui-v${version}-aarch64-unknown-linux-musl.tar.gz"
+            "stock-tui-v${version}-x86_64-apple-darwin.tar.gz"
+            "stock-tui-v${version}-x86_64-pc-windows-msvc.zip"
+            "stock-tui-v${version}-x86_64-unknown-linux-musl.tar.gz"
+            "stock-tui_${version}_amd64.deb"
+            "stock-tui_${version}_arm64.deb"
+          )
+          if (( ${#files[@]} != ${#expected[@]} )); then
+            printf 'Expected exactly 7 release assets (5 platform archives and 2 Debian packages); found %d.\n' \
+              "${#files[@]}" >&2
             printf 'Downloaded file: %s\n' "${files[@]}" >&2
             exit 1
           fi
+          for expected_file in "${expected[@]}"; do
+            if [[ ! -f "$expected_file" ]]; then
+              printf 'Missing expected release asset: %s\n' "$expected_file" >&2
+              exit 1
+            fi
+          done
       - name: Generate checksums
         working-directory: artifacts
         run: sha256sum * > SHA256SUMS

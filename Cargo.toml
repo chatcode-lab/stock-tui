@@ -1,6 +1,6 @@
 [package]
 name = "stock-tui"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 rust-version = "1.95"
 description = "A mouse-first terminal stock market heatmap inspired by StockTouch"
@@ -14,6 +14,7 @@ categories = ["command-line-utilities", "visualization"]
 include = [
   "/.editorconfig",
   "/.env.example",
+  "/.github/workflows/publish-crate.yml",
   "/.github/workflows/release.yml",
   "/CHANGELOG.md",
   "/CODE_OF_CONDUCT.md",
@@ -32,7 +33,9 @@ include = [
   "/src/**/*.rs",
   "/tests/**/*.rs",
   "/tools/build_sec_catalog.py",
+  "/tools/release/build-deb.sh",
   "/tools/release/sign-notarize-macos.sh",
+  "/tools/release/verify-crate-contents.sh",
   "/tools/tests/*.py",
   "/tools/tests/fixtures/*.json",
 ]

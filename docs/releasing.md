@@ -5,18 +5,20 @@ Local source builds do not require signing credentials.
 
 ## Release Outputs
 
-The release workflow builds five target archives. Every macOS archive contains
-a Developer ID-signed, notarized command-line executable:
+The release workflow builds five target archives and two Debian packages.
+Every macOS archive contains a Developer ID-signed, notarized command-line
+executable:
 
 | Target | Archive containing signed executable |
 | --- | --- |
 | Apple Silicon | `stock-tui-v<VERSION>-aarch64-apple-darwin.tar.gz` |
 | Intel | `stock-tui-v<VERSION>-x86_64-apple-darwin.tar.gz` |
 
-Tag runs publish all archives and a `SHA256SUMS` file to GitHub Releases.
-Manually dispatched runs perform the same signing and Apple validation but
-retain the results as short-lived workflow artifacts instead of publishing a
-release.
+The Linux jobs also package and install-test `stock-tui_<VERSION>_amd64.deb`
+and `stock-tui_<VERSION>_arm64.deb` on native runners. Tag runs publish all
+seven payloads and a `SHA256SUMS` file to GitHub Releases. Manually dispatched
+runs perform the same packaging, signing, and validation but retain the
+results as short-lived workflow artifacts instead of publishing a release.
 
 Apple's notary service accepts a temporary ZIP containing the signed
 executable and publishes a ticket for its code-directory hash. The ZIP is only
@@ -109,18 +111,18 @@ gh secret set APPLE_NOTARY_ISSUER_ID \
    [CONTRIBUTING.md](../CONTRIBUTING.md).
 2. Push the reviewed release commit.
 3. Manually dispatch `Release` from `main` as a build-only preflight. Verify
-   all five platform archives, including both signed and notarized macOS
-   binaries. A manual run must skip the `publish` job and create no tag or
-   GitHub release.
+   all five platform archives and both Debian packages, including both signed
+   and notarized macOS binaries. A manual run must skip the `publish` job and
+   create no tag or GitHub release.
 4. Create and push the exact `v<VERSION>` tag.
 5. Watch the tagged `Release` workflow. A missing or invalid Apple credential
    fails both macOS release jobs before publication.
 6. Confirm that both macOS jobs report accepted notarization and successful
    online ticket verification before treating the GitHub release as complete.
-7. Download the published assets, verify all five archives against
-   `SHA256SUMS`, confirm each archive contains the expected executable and
-   documentation, and review the release title and notes against
-   `CHANGELOG.md`.
+7. Download the published assets, verify all seven payloads against
+   `SHA256SUMS`, confirm each archive and Debian package contains the expected
+   executable and documentation, and review the release title and notes
+   against `CHANGELOG.md`.
 
 The workflow imports the signing identity into an ephemeral keychain,
 temporarily registers it in the runner's user search list, signs the executable
@@ -137,6 +139,55 @@ to a temporary directory, byte-compares its executable with the accepted source
 file, then repeats the signature and online ticket checks. The original search
 list is restored, and the temporary ZIP, key material, response logs, and
 keychain are removed when the step exits.
+
+## crates.io Publication
+
+The separate `Publish crate` workflow is manual and must be dispatched from
+the reviewed `main` branch with an existing annotated release tag. Before any
+upload, it verifies that the tag exactly matches the `Cargo.toml` version, the
+tag commit is on `origin/main`, the GitHub Release is published, and the
+`Release` workflow succeeded for the same tag and commit. It then runs
+`cargo publish --dry-run --locked`, rejects local credential or database
+files, and enforces crates.io's 10 MiB compressed package limit. The `verify`
+operation performs only these checks and does not enter a protected
+environment. The build-only release preflight performs the same Cargo dry-run
+and size check before a release tag is created.
+
+Create a GitHub Actions environment named `crates-io`, restrict it to `main`,
+and require a maintainer review for deployment when the repository plan
+supports reviewers. The first publication cannot use trusted publishing
+because crates.io does not allow a trusted publisher to be configured before
+the crate exists. Store a narrowly scoped temporary token as the environment
+secret `CRATES_TOKEN`, then run:
+
+```bash
+gh workflow run publish-crate.yml \
+  --repo chatcode-lab/stock-tui \
+  --ref main \
+  -f release_tag=v<VERSION> \
+  -f operation=publish-initial
+```
+
+After the first version appears on crates.io, configure its trusted publisher
+with owner `chatcode-lab`, repository `stock-tui`, workflow
+`publish-crate.yml`, and environment `crates-io`. Revoke the temporary
+crates.io token and remove `CRATES_TOKEN` from GitHub. Future releases use the
+short-lived OIDC credential issued by the official crates.io action:
+
+```bash
+gh workflow run publish-crate.yml \
+  --repo chatcode-lab/stock-tui \
+  --ref main \
+  -f release_tag=v<VERSION> \
+  -f operation=publish-trusted
+```
+
+Once the OIDC path has been verified, enable crates.io's option to require
+trusted publishing for new versions. See the official
+[trusted publishing documentation](https://crates.io/docs/trusted-publishing)
+for the current crates.io controls. Crate versions are immutable, so confirm
+the package summary and protected-environment review before approving either
+publish job.
 
 ## Independent Verification
 
