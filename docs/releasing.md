@@ -171,7 +171,8 @@ gh workflow run publish-crate.yml \
 After the first version appears on crates.io, configure its trusted publisher
 with owner `chatcode-lab`, repository `stock-tui`, workflow
 `publish-crate.yml`, and environment `crates-io`. Verify that exact binding
-without uploading another version:
+without uploading another version. This also installs the published crate into
+a temporary directory and checks its reported version:
 
 ```bash
 gh workflow run publish-crate.yml \

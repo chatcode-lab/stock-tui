@@ -222,6 +222,18 @@ jobs:
           set -euo pipefail
           test -n "${CARGO_REGISTRY_TOKEN:-}"
           printf 'Trusted publisher authentication succeeded.\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify published crate installation
+        if: inputs.operation == 'verify-trusted'
+        shell: bash
+        env:
+          EXPECTED_VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          install_root="$RUNNER_TEMP/stock-tui-install"
+          cargo install --locked --root "$install_root" \
+            --version "=${EXPECTED_VERSION}" "$CRATE_NAME"
+          test "$("$install_root/bin/stock-tui" --version)" \
+            = "stock-tui ${EXPECTED_VERSION}"
       - name: Publish to crates.io
         if: inputs.operation == 'publish-trusted'
         shell: bash

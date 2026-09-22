@@ -54,6 +54,8 @@ class CrateReleasePolicyTests(unittest.TestCase):
         self.assertIn("- verify-trusted", workflow)
         self.assertIn("inputs.operation == 'verify-trusted'", workflow)
         self.assertIn("Verify trusted publisher authentication", workflow)
+        self.assertIn("Verify published crate installation", workflow)
+        self.assertIn("cargo install --locked", workflow)
         self.assertIn("CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}", workflow)
         self.assertNotIn("pull_request_target", workflow)
 

@@ -344,6 +344,38 @@ Replace `amd64` with `arm64` on ARM64 systems. These release assets are local
 packages, not a hosted APT repository; download a newer package before using
 APT to upgrade it.
 
+### Update, Remove, or Roll Back
+
+Homebrew updates and removes the tapped formula normally:
+
+```bash
+brew update
+brew upgrade stock-tui
+brew uninstall stock-tui
+```
+
+Cargo replaces an installed version when `--force` is supplied. Pin an exact
+older version to roll back, or uninstall it from Cargo's binary directory:
+
+```bash
+cargo install --locked --force stock-tui
+cargo install --locked --force --version '=0.3.2' stock-tui
+cargo uninstall stock-tui
+```
+
+For a standalone binary, verify and replace it with the desired archive from
+the corresponding GitHub Release. This is also the simplest Homebrew rollback
+path if a previous tap formula is no longer available.
+
+APT accepts a downloaded newer package as an upgrade. To install an older
+release intentionally, pass `--allow-downgrades`; remove the package normally:
+
+```bash
+sudo apt install ./stock-tui_<NEWER_VERSION>_amd64.deb
+sudo apt install --allow-downgrades ./stock-tui_<OLDER_VERSION>_amd64.deb
+sudo apt remove stock-tui
+```
+
 ### Build From Source
 
 ```bash
