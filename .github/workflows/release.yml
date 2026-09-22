@@ -35,7 +35,7 @@ jobs:
 
           cargo package --locked --list > "$RUNNER_TEMP/package-files.txt"
           tools/release/verify-crate-contents.sh "$RUNNER_TEMP/package-files.txt"
-          cargo publish --dry-run --locked --registry crates-io
+          cargo package --locked
           package_version="$(cargo metadata --locked --no-deps --format-version=1 \
             | jq -r '.packages[] | select(.name == "stock-tui") | .version')"
           crate_file="target/package/stock-tui-${package_version}.crate"

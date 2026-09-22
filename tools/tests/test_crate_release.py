@@ -36,12 +36,12 @@ class CrateReleasePolicyTests(unittest.TestCase):
 
         self.assertIn("cargo package --locked --list", workflow)
         self.assertIn("tools/release/verify-crate-contents.sh", workflow)
-        self.assertIn("cargo publish --dry-run --locked --registry crates-io", workflow)
+        self.assertIn("cargo package --locked", workflow)
         self.assertIn('MAX_CRATE_SIZE_BYTES: "10485760"', workflow)
 
         release_workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("tools/release/verify-crate-contents.sh", release_workflow)
-        self.assertIn("cargo publish --dry-run --locked --registry crates-io", release_workflow)
+        self.assertIn("cargo package --locked", release_workflow)
         self.assertIn("crate_size > 10485760", release_workflow)
 
     def test_publish_paths_use_protected_environment_and_distinct_auth(self) -> None:

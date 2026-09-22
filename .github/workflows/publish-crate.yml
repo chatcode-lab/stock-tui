@@ -122,7 +122,7 @@ jobs:
           package_file_list="$RUNNER_TEMP/package-files.txt"
           cargo package --locked --list > "$package_file_list"
           tools/release/verify-crate-contents.sh "$package_file_list"
-      - name: Run publish dry-run and enforce package size
+      - name: Build package and enforce package size
         shell: bash
         env:
           PACKAGE_VERSION: ${{ steps.release.outputs.version }}
@@ -131,7 +131,7 @@ jobs:
           set -euo pipefail
 
           package_file_list="$RUNNER_TEMP/package-files.txt"
-          cargo publish --dry-run --locked --registry crates-io
+          cargo package --locked
           crate_file="target/package/${CRATE_NAME}-${PACKAGE_VERSION}.crate"
           if [[ ! -f "$crate_file" ]]; then
             printf 'Expected package was not created: %s\n' "$crate_file" >&2

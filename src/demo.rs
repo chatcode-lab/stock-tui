@@ -604,7 +604,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(returns.iter().any(|value| *value < -0.07));
         assert!(returns.iter().any(|value| *value > 0.07));
-        for sector_returns in returns.chunks_exact(COMPANIES_PER_SECTOR) {
+        let (sector_returns, remainder) = returns.as_chunks::<COMPANIES_PER_SECTOR>();
+        assert!(remainder.is_empty());
+        for sector_returns in sector_returns {
             let sign_alternations = sector_returns
                 .windows(2)
                 .filter(|pair| pair[0].is_sign_positive() != pair[1].is_sign_positive())

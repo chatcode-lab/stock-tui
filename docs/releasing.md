@@ -147,10 +147,10 @@ the reviewed `main` branch with an existing annotated release tag. Before any
 upload, it verifies that the tag exactly matches the `Cargo.toml` version, the
 tag commit is on `origin/main`, the GitHub Release is published, and the
 `Release` workflow succeeded for the same tag and commit. It then runs
-`cargo publish --dry-run --locked`, rejects local credential or database
+`cargo package --locked`, rejects local credential or database
 files, and enforces crates.io's 10 MiB compressed package limit. The `verify`
 operation performs only these checks and does not enter a protected
-environment. The build-only release preflight performs the same Cargo dry-run
+environment. The build-only release preflight performs the same Cargo package
 and size check before a release tag is created.
 
 Create a GitHub Actions environment named `crates-io`, restrict it to `main`,
