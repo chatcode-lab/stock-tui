@@ -153,26 +153,15 @@ operation performs only these checks and does not enter a protected
 environment. The build-only release preflight performs the same Cargo package
 and size check before a release tag is created.
 
-Create a GitHub Actions environment named `crates-io`, restrict it to `main`,
-and require a maintainer review for deployment when the repository plan
-supports reviewers. The first publication cannot use trusted publishing
-because crates.io does not allow a trusted publisher to be configured before
-the crate exists. Store a narrowly scoped temporary token as the environment
-secret `CRATES_TOKEN`, then run:
+The `crates-io` GitHub Actions environment is restricted to `main`. The
+crates.io trusted publisher is bound to owner `chatcode-lab`, repository
+`stock-tui`, workflow `publish-crate.yml`, and environment `crates-io`.
+Trusted publishing is required for new versions. Do not configure a
+`CRATES_TOKEN` secret or another long-lived crates.io token.
 
-```bash
-gh workflow run publish-crate.yml \
-  --repo chatcode-lab/stock-tui \
-  --ref main \
-  -f release_tag=v<VERSION> \
-  -f operation=publish-initial
-```
-
-After the first version appears on crates.io, configure its trusted publisher
-with owner `chatcode-lab`, repository `stock-tui`, workflow
-`publish-crate.yml`, and environment `crates-io`. Verify that exact binding
-without uploading another version. This also installs the published crate into
-a temporary directory and checks its reported version:
+Verify the exact OIDC binding without uploading another version. This also
+installs the published crate into a temporary directory and checks its reported
+version:
 
 ```bash
 gh workflow run publish-crate.yml \
@@ -182,9 +171,8 @@ gh workflow run publish-crate.yml \
   -f operation=verify-trusted
 ```
 
-Revoke the temporary crates.io token and remove `CRATES_TOKEN` from GitHub.
-Future releases use the short-lived OIDC credential issued by the official
-crates.io action:
+Publish subsequent releases with the short-lived OIDC credential issued by the
+official crates.io action:
 
 ```bash
 gh workflow run publish-crate.yml \
@@ -194,11 +182,10 @@ gh workflow run publish-crate.yml \
   -f operation=publish-trusted
 ```
 
-Once the OIDC path has been verified, enable crates.io's option to require
-trusted publishing for new versions. See the official
+See the official
 [trusted publishing documentation](https://crates.io/docs/trusted-publishing)
 for the current crates.io controls. Crate versions are immutable, so confirm
-the package summary and protected-environment review before approving either
+the package summary and protected-environment review before approving the
 publish job.
 
 ## Independent Verification

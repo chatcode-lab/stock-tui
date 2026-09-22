@@ -15,7 +15,6 @@ on:
         options:
           - verify
           - verify-trusted
-          - publish-initial
           - publish-trusted
 
 permissions:
@@ -154,43 +153,6 @@ jobs:
             printf -- '- Files: `%s`\n' \
               "$(wc -l < "$package_file_list" | tr -d '[:space:]')"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  publish-initial:
-    name: Publish initial crate with token
-    if: inputs.operation == 'publish-initial'
-    needs: package
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: crates-io
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ needs.package.outputs.commit }}
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-        with:
-          toolchain: "1.95"
-      - name: Publish to crates.io
-        shell: bash
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
-          EXPECTED_VERSION: ${{ needs.package.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
-            printf 'CRATES_TOKEN is not configured in the crates-io environment.\n' >&2
-            exit 1
-          fi
-          package_version="$(
-            cargo metadata --locked --no-deps --format-version=1 \
-              | jq -r --arg crate "$CRATE_NAME" \
-                  '.packages[] | select(.name == $crate) | .version'
-          )"
-          test "$package_version" = "$EXPECTED_VERSION"
-          cargo publish --locked --registry crates-io
 
   publish-trusted:
     name: Verify or publish with trusted publishing

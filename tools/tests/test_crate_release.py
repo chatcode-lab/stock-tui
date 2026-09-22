@@ -44,11 +44,12 @@ class CrateReleasePolicyTests(unittest.TestCase):
         self.assertIn("cargo package --locked", release_workflow)
         self.assertIn("crate_size > 10485760", release_workflow)
 
-    def test_publish_paths_use_protected_environment_and_distinct_auth(self) -> None:
+    def test_publish_path_uses_protected_environment_and_trusted_auth(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
 
-        self.assertEqual(workflow.count("environment: crates-io"), 2)
-        self.assertIn("CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}", workflow)
+        self.assertEqual(workflow.count("environment: crates-io"), 1)
+        self.assertNotIn("CRATES_TOKEN", workflow)
+        self.assertNotIn("publish-initial", workflow)
         self.assertIn("id-token: write", workflow)
         self.assertIn("rust-lang/crates-io-auth-action@", workflow)
         self.assertIn("- verify-trusted", workflow)
