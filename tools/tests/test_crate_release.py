@@ -51,6 +51,9 @@ class CrateReleasePolicyTests(unittest.TestCase):
         self.assertIn("CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}", workflow)
         self.assertIn("id-token: write", workflow)
         self.assertIn("rust-lang/crates-io-auth-action@", workflow)
+        self.assertIn("- verify-trusted", workflow)
+        self.assertIn("inputs.operation == 'verify-trusted'", workflow)
+        self.assertIn("Verify trusted publisher authentication", workflow)
         self.assertIn("CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}", workflow)
         self.assertNotIn("pull_request_target", workflow)
 

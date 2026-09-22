@@ -170,9 +170,20 @@ gh workflow run publish-crate.yml \
 
 After the first version appears on crates.io, configure its trusted publisher
 with owner `chatcode-lab`, repository `stock-tui`, workflow
-`publish-crate.yml`, and environment `crates-io`. Revoke the temporary
-crates.io token and remove `CRATES_TOKEN` from GitHub. Future releases use the
-short-lived OIDC credential issued by the official crates.io action:
+`publish-crate.yml`, and environment `crates-io`. Verify that exact binding
+without uploading another version:
+
+```bash
+gh workflow run publish-crate.yml \
+  --repo chatcode-lab/stock-tui \
+  --ref main \
+  -f release_tag=v<VERSION> \
+  -f operation=verify-trusted
+```
+
+Revoke the temporary crates.io token and remove `CRATES_TOKEN` from GitHub.
+Future releases use the short-lived OIDC credential issued by the official
+crates.io action:
 
 ```bash
 gh workflow run publish-crate.yml \
