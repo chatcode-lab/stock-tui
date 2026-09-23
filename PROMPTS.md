@@ -13,11 +13,11 @@ omitted. Attached StockTouch and work-in-progress screenshots are described
 but not republished here. Every commit link is immutable; links into private
 infrastructure repositories require collaborator access.
 
-The chronology covers product-development prompts through the `v0.2.7`
-release and subsequent UI refinements, including the provider, onboarding,
-market-cap, SEC catalog, private development-provider, UI refinement, and
-signed distribution work. It excludes session-management instructions and
-this document's own editorial requests.
+The chronology covers product-development prompts through the `v0.3.2`
+release and subsequent distribution hardening, including the provider,
+onboarding, market-cap, SEC catalog, private development-provider, UI
+refinement, signed releases, and package-manager work. It excludes
+session-management instructions and this document's own editorial requests.
 
 ## 1. Build a StockTouch-Inspired Market TUI
 
@@ -1873,6 +1873,199 @@ preflight, and the tag-triggered release workflow passed before publication.
 The five Linux, macOS, and Windows archives were checksum-verified, and both
 macOS binaries were signed and notarized.
 
+## 69. Install the Latest Release and Revisit Package Managers
+
+> Install the latest `stock-tui` release on this machine for the current user
+> only. Re-examine distribution through Homebrew, APT, or other popular
+> package managers; there may already be an issue tracking that work.
+
+**Relevant release and tracking issue**
+
+- [`085fab6` - Prepare stock-tui 0.3.1][commit-085fab6]
+- [stock-tui v0.3.1][release-v0.3.1]
+- [Package-manager distribution issue #9][issue-9]
+
+**Summary**
+
+The checksummed static Linux executable was installed under the user's local
+binary directory without requiring `sudo` or changing system packages. The
+existing distribution issue was re-audited rather than duplicated. The audit
+kept crates.io, a project-controlled Homebrew tap, and release-attached Debian
+packages as the first three channels; a permanently hosted APT repository,
+Homebrew Core, and official Debian inclusion remained demand-driven follow-up
+work because they carry materially higher policy and maintenance costs.
+
+## 70. Scope the First Three Distribution Channels
+
+> What work is required to complete the first three options: crates.io,
+> Homebrew, and Debian or Ubuntu packages?
+
+**Resulting committed changes**
+
+- [`a3d23c1` - Add package manager distribution][commit-a3d23c1]
+- [Package-manager distribution issue #9][issue-9]
+
+**Summary**
+
+The implementation plan separated the channels by their real delivery model.
+crates.io needed ownership, package-content checks, a protected publisher, and
+an installation smoke test. Homebrew needed a first-party tap, formula and
+bottle CI for Apple Silicon and Intel, immutable checksums, and automated
+version updates. Debian and Ubuntu needed architecture-correct `.deb` files,
+metadata and filesystem validation, install and removal tests, and release
+assets; repository-managed `apt upgrade` behavior was explicitly deferred
+until a signed APT repository is justified.
+
+## 71. Implement Distribution Through GitHub
+
+> I placed `CRATES_TOKEN` in the local `.env` file. Complete the remaining
+> work through the GitHub CLI, and identify any manual steps that still need
+> my input.
+
+**Committed changes**
+
+- [`a3d23c1` - Add package manager distribution][commit-a3d23c1]
+- [`d1e6968` - Fix release preflight checks][commit-d1e6968]
+- [`4c699ae` - Update the grouped Rust dependencies][commit-4c699ae]
+- [`4021adb` - Update the release publishing action][commit-4021adb]
+- [`54e0465` - Initialize the Homebrew tap][tap-commit-54e0465]
+- [`681fd22` - Harden Homebrew bottle workflows][tap-commit-681fd22]
+- [`b2c560f` - Add the Homebrew 0.3.2 formula][tap-commit-b2c560f]
+- [`bf191bb` - Publish the Homebrew 0.3.2 bottles][tap-commit-bf191bb]
+- [Successful v0.3.2 cross-platform CI][ci-run-35783321928]
+- [Successful v0.3.2 release preflight][release-preflight-run-35783362976]
+- [Successful v0.3.2 release workflow][release-run-35784431188]
+- [Successful initial crates.io publication][crate-run-35785175335]
+- [stock-tui v0.3.2][release-v0.3.2]
+- [stock-tui 0.3.2 on crates.io][crate-v0.3.2]
+- [Homebrew stock-tui 0.3.2 bottle release][homebrew-release-v0.3.2]
+
+**Summary**
+
+Version 0.3.2 added a protected crates.io workflow, strict crate-content
+checks, Cargo installation documentation, `amd64` and `arm64` Debian packages,
+container-backed package tests, and release validation for the expanded asset
+set. The release produced five platform archives, two `.deb` files, and one
+checksum manifest; the macOS executables were signed and notarized. The crate
+name was reserved by publishing version 0.3.2, and the temporary GitHub token
+secret copy was removed immediately after that successful publication. The
+bootstrap token itself remained valid and locally available until the trusted
+publisher was verified and the user revoked it.
+
+The first-party Homebrew tap added formula and bottle CI and initially
+published 0.3.2 bottles for Apple Silicon macOS and x86_64 Linux. The later
+audit identified the missing Intel path and the limitations of its generic
+formula update mechanism. The remaining manual security step was to register
+the GitHub workflow as a crates.io Trusted Publisher, then retire the bootstrap
+API token.
+
+## 72. Audit the Completed Distribution Work
+
+> Is everything configured and working correctly?
+
+**Follow-up committed changes**
+
+- [`2128053` - Add trusted publisher verification][commit-2128053]
+- [`95add22` - Verify package installation paths][commit-95add22]
+- [`c008a20` - Build Intel Homebrew bottles from release binaries][tap-commit-c008a20]
+- [`2a73483` - Let Homebrew infer the release version][tap-commit-2a73483]
+- [`a151716` - Add the complete 0.3.2_1 bottle set][tap-commit-a151716]
+- [`47be076` - Automate stock-tui formula updates][tap-commit-47be076]
+- [`7ce737d` - Use Homebrew Ruby for formula validation][tap-commit-7ce737d]
+- [Successful trusted-publisher identity check][crate-run-35786230749]
+- [Successful crates.io installation smoke test][crate-run-35786890931]
+- [Homebrew Intel follow-up PR #5][homebrew-pr-5]
+- [Successful Intel formula validation][homebrew-run-35787418551]
+- [Successful 0.3.2_1 bottle publication][homebrew-run-35790935558]
+- [Homebrew release updater PR #6][homebrew-pr-6]
+- [Successful release-updater checks][homebrew-run-35795707966]
+- [Homebrew portable-validation PR #7][homebrew-pr-7]
+- [Successful portable-validation unit tests][homebrew-run-35797233489]
+- [Successful portable-validation checks][homebrew-run-35797233419]
+- [Successful post-merge updater audit][homebrew-run-35846524015]
+- [Homebrew stock-tui 0.3.2_1 bottle release][homebrew-release-v0.3.2-1]
+
+**Summary**
+
+The audit verified the crates.io package, GitHub release checksums, Debian
+metadata and payloads, and macOS signatures and notarization. It also rejected
+two false-complete signals. crates.io still used the one-time bootstrap token
+until Trusted Publishing was configured, and Homebrew's nominal Intel job had
+skipped the formula because Homebrew's Rust dependency had no compatible Intel
+macOS bottle. OIDC verification and a real `cargo install --locked` smoke test
+were added, while the Intel bottle gap was isolated in the tap for a separate
+architecture-specific binary-formula correction.
+
+The corrected formula installs the signed upstream release binary selected by
+operating system and CPU, including Intel macOS, and publishes tested bottles
+for Apple Silicon, Intel, and Linux. A daily release-aware updater verifies the
+release manifest and GitHub asset metadata, validates the exact generated
+formula on all three platforms, and writes only after the reviewed base remains
+unchanged. Its first validation-only audit exposed a Linux runner assumption;
+the portable correction uses Homebrew's own Ruby and the repeated audit
+installed and tested the exact current formula on Apple Silicon, Intel macOS,
+and Linux without running its finalize job. The updater requires no additional
+package-manager credential.
+
+## 73. Configure the Trusted Publisher Workflow Name
+
+> What should I enter in the **Workflow filename** field when configuring the
+> crates.io Trusted Publisher?
+
+**Relevant committed change and verification**
+
+- [`2128053` - Add trusted publisher verification][commit-2128053]
+- [Successful trusted-publisher identity check][crate-run-35786230749]
+
+**Summary**
+
+The exact filename is `publish-crate.yml`, without the `.github/workflows/`
+prefix. The complete identity is the `chatcode-lab` owner, `stock-tui`
+repository, `publish-crate.yml` workflow, and `crates-io` GitHub environment.
+The workflow exposes a verification-only mode so that crates.io can validate
+that identity through GitHub OIDC without attempting to republish an existing
+version.
+
+## 74. Require Trusted Publishing and Retire the API Token
+
+> Should I require Trusted Publishing for every new version, revoke the
+> crates.io API key, and remove its local copy?
+
+**Relevant committed change and verification**
+
+- [`2128053` - Add trusted publisher verification][commit-2128053]
+- [Successful trusted-publisher identity check][crate-run-35786230749]
+
+**Summary**
+
+After the OIDC verification succeeded, the recommended final state was to
+require Trusted Publishing for new versions, revoke the bootstrap crates.io
+token, and remove the local `.env` copy. The temporary GitHub Actions secret
+had already been deleted. Once those steps were complete, future release
+publications would authenticate through the protected `crates-io` environment
+and workflow identity instead of a reusable bearer credential.
+
+## 75. Confirm the Trusted-Publishing Cutover
+
+> I enabled the requirement, revoked the key, and removed the local token.
+
+**Verification changes and runs**
+
+- [`77d7175` - Require trusted crate publishing][commit-77d7175]
+- [Successful final cross-platform CI][ci-run-35788125297]
+- [Successful final OIDC and crates.io installation verification][crate-run-35788135281]
+
+**Summary**
+
+The final verification authenticated to crates.io exclusively through GitHub
+OIDC, then installed the already published exact version with
+`cargo install --locked --version '=0.3.2' stock-tui` in a clean temporary
+root and checked the resulting executable's version. The same change removed
+the token-based publication operation and every active `CRATES_TOKEN` reference
+from the workflow and release guide. No crate was republished, the `crates-io`
+environment contains no secret, and neither the repository nor the working
+tree retained the revoked token.
+
 ## Maintenance Outside the Prompt Loop
 
 Not every repository change originated in a product prompt. GitHub Actions
@@ -1959,16 +2152,46 @@ implementation work.
 [commit-8d7e238]: https://github.com/chatcode-lab/stock-tui/commit/8d7e238cfa7d6218cc6633d408b740ee6cc2a3a4
 [commit-95d2a29]: https://github.com/chatcode-lab/stock-tui/commit/95d2a293aef52b148902d6706bc9214bee660f20
 [commit-085fab6]: https://github.com/chatcode-lab/stock-tui/commit/085fab6469d592088ca43a76a41466de9830f576
+[commit-a3d23c1]: https://github.com/chatcode-lab/stock-tui/commit/a3d23c1bf5675ed3c2425ac3339bd64a9b9220a5
+[commit-d1e6968]: https://github.com/chatcode-lab/stock-tui/commit/d1e6968d004b72a0430ac4def96d8b63a029e608
+[commit-4c699ae]: https://github.com/chatcode-lab/stock-tui/commit/4c699ae88c28303ffaa4feed46ea7d4fbe414d48
+[commit-4021adb]: https://github.com/chatcode-lab/stock-tui/commit/4021adb3583a025383ff4c8ff7cff9ad24d98283
+[commit-2128053]: https://github.com/chatcode-lab/stock-tui/commit/2128053cf2d0c71554547415f2ecd966e8053eec
+[commit-95add22]: https://github.com/chatcode-lab/stock-tui/commit/95add226648747f5e6c54f91c1ada88a0fb51d1f
+[commit-77d7175]: https://github.com/chatcode-lab/stock-tui/commit/77d71756c590eb3322b73a435d065ad2a5901cad
+[tap-commit-54e0465]: https://github.com/chatcode-lab/homebrew-tap/commit/54e0465080fc0580c4553c16ff94b277daf658fd
+[tap-commit-681fd22]: https://github.com/chatcode-lab/homebrew-tap/commit/681fd226457f37dc97422f0b4cb70fe96773d3b5
+[tap-commit-b2c560f]: https://github.com/chatcode-lab/homebrew-tap/commit/b2c560f2b9aadd7b9346846e50e86ab05168082f
+[tap-commit-bf191bb]: https://github.com/chatcode-lab/homebrew-tap/commit/bf191bb97e8db688167f309131f0fb28027f7310
+[tap-commit-c008a20]: https://github.com/chatcode-lab/homebrew-tap/commit/c008a20c149aa15a34d4027402d59b2ba1cdc633
+[tap-commit-2a73483]: https://github.com/chatcode-lab/homebrew-tap/commit/2a73483243471eb5cbf8ad4bf4ca66a5d88d758f
+[tap-commit-a151716]: https://github.com/chatcode-lab/homebrew-tap/commit/a1517165a524abc3900b240df5310731a48980f2
+[tap-commit-47be076]: https://github.com/chatcode-lab/homebrew-tap/commit/47be076e846ba207ea4a758d25bfb8e3478736fb
+[tap-commit-7ce737d]: https://github.com/chatcode-lab/homebrew-tap/commit/7ce737da582df9be1072001af50047b00e9b7f50
 [catalog-run-30590280654]: https://github.com/chatcode-lab/stock-tui/actions/runs/30590280654
 [catalog-run-30578835793]: https://github.com/chatcode-lab/stock-tui/actions/runs/30578835793
 [ci-run-30629067495]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629067495
 [ci-run-30909086660]: https://github.com/chatcode-lab/stock-tui/actions/runs/30909086660
 [ci-run-30909293682]: https://github.com/chatcode-lab/stock-tui/actions/runs/30909293682
 [ci-run-31738536270]: https://github.com/chatcode-lab/stock-tui/actions/runs/31738536270
+[ci-run-35783321928]: https://github.com/chatcode-lab/stock-tui/actions/runs/35783321928
+[ci-run-35788125297]: https://github.com/chatcode-lab/stock-tui/actions/runs/35788125297
 [release-preflight-run-30629238846]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629238846
 [release-preflight-run-31738698966]: https://github.com/chatcode-lab/stock-tui/actions/runs/31738698966
+[release-preflight-run-35783362976]: https://github.com/chatcode-lab/stock-tui/actions/runs/35783362976
 [release-run-30629889605]: https://github.com/chatcode-lab/stock-tui/actions/runs/30629889605
 [release-run-31739404103]: https://github.com/chatcode-lab/stock-tui/actions/runs/31739404103
+[release-run-35784431188]: https://github.com/chatcode-lab/stock-tui/actions/runs/35784431188
+[crate-run-35785175335]: https://github.com/chatcode-lab/stock-tui/actions/runs/35785175335
+[crate-run-35786230749]: https://github.com/chatcode-lab/stock-tui/actions/runs/35786230749
+[crate-run-35786890931]: https://github.com/chatcode-lab/stock-tui/actions/runs/35786890931
+[crate-run-35788135281]: https://github.com/chatcode-lab/stock-tui/actions/runs/35788135281
+[homebrew-run-35787418551]: https://github.com/chatcode-lab/homebrew-tap/actions/runs/35787418551
+[homebrew-run-35790935558]: https://github.com/chatcode-lab/homebrew-tap/actions/runs/35790935558
+[homebrew-run-35795707966]: https://github.com/chatcode-lab/homebrew-tap/actions/runs/35795707966
+[homebrew-run-35797233419]: https://github.com/chatcode-lab/homebrew-tap/actions/runs/35797233419
+[homebrew-run-35797233489]: https://github.com/chatcode-lab/homebrew-tap/actions/runs/35797233489
+[homebrew-run-35846524015]: https://github.com/chatcode-lab/homebrew-tap/actions/runs/35846524015
 [private-commit-a67e660]: https://github.com/chatcode-lab/stock-api/commit/a67e660f53e754c8e2bf45ba3b3a1ea8ab5fbd42
 [private-commit-59bd27f]: https://github.com/chatcode-lab/stock-api/commit/59bd27f4df6adc258ae1e2c310480f7570b739c1
 [private-commit-75e605b]: https://github.com/chatcode-lab/stock-api/commit/75e605bb71780af13826c0355b629ad1a7378ca4
@@ -1986,6 +2209,10 @@ implementation work.
 [pr-12]: https://github.com/chatcode-lab/stock-tui/pull/12
 [pr-13]: https://github.com/chatcode-lab/stock-tui/pull/13
 [pr-14]: https://github.com/chatcode-lab/stock-tui/pull/14
+[homebrew-pr-5]: https://github.com/chatcode-lab/homebrew-tap/pull/5
+[homebrew-pr-6]: https://github.com/chatcode-lab/homebrew-tap/pull/6
+[homebrew-pr-7]: https://github.com/chatcode-lab/homebrew-tap/pull/7
+[issue-9]: https://github.com/chatcode-lab/stock-tui/issues/9
 [issue-10]: https://github.com/chatcode-lab/stock-tui/issues/10
 [release-v0.1.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.0
 [release-v0.1.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.1.1
@@ -1999,3 +2226,7 @@ implementation work.
 [release-v0.2.7]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.2.7
 [release-v0.3.0]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.3.0
 [release-v0.3.1]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.3.1
+[release-v0.3.2]: https://github.com/chatcode-lab/stock-tui/releases/tag/v0.3.2
+[crate-v0.3.2]: https://crates.io/crates/stock-tui/0.3.2
+[homebrew-release-v0.3.2]: https://github.com/chatcode-lab/homebrew-tap/releases/tag/stock-tui-0.3.2
+[homebrew-release-v0.3.2-1]: https://github.com/chatcode-lab/homebrew-tap/releases/tag/stock-tui-0.3.2_1
