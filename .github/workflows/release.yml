@@ -193,7 +193,7 @@ jobs:
           assert manifest["artifact"]["payload_size_bytes"] == len(payload)
           assert manifest["artifact"]["payload_sha256"] == hashlib.sha256(payload).hexdigest()
           PY
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-sec-catalog
           path: data/sec_universe.json
@@ -300,7 +300,7 @@ jobs:
           Copy-Item README.md,LICENSE,CHANGELOG.md,config.example.toml,.env.example dist/
           & "./dist/${{ matrix.binary }}" --version
           Compress-Archive -Path dist/* -DestinationPath "stock-tui-v${packageVersion}-${{ matrix.target }}.zip"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -383,7 +383,7 @@ jobs:
             exit 1
           fi
           printf 'Archived executable satisfies Apple notarization requirement.\n'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
           path: stock-tui-v*-${{ matrix.target }}.tar.gz
