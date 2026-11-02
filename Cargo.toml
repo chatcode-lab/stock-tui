@@ -63,7 +63,7 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "stream",
 ] }
 rpassword = "7.5.4"
-rusqlite = { version = "0.40.1", features = ["bundled", "chrono", "serde_json"] }
+rusqlite = { version = "0.41.1", features = ["bundled", "chrono", "serde_json"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 secrecy = "0.10.3"
 serde = { version = "1.0.228", features = ["derive"] }
