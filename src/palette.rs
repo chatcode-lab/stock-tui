@@ -1,4 +1,4 @@
-use std::{env, f64};
+use std::env;
 
 use ratatui::style::Color;
 

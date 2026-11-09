@@ -354,11 +354,11 @@ fn make_bar(
 ) -> Bar {
     let open = model.price_days_ago(days_between(market_anchor, start));
     let close = model.price_days_ago(days_between(market_anchor, end));
-    let salt = end.timestamp().unsigned_abs()
+    let stream = end.timestamp().unsigned_abs()
         ^ hash64(timeframe)
         ^ u64::try_from(index).unwrap_or_default();
-    let wick = (0.0015 + unit(model.seed, salt) * 0.007) * volume_fraction.sqrt().max(0.3);
-    let activity = 0.68 + unit(model.seed, salt ^ 0x51f1) * 0.75;
+    let wick = (0.0015 + unit(model.seed, stream) * 0.007) * volume_fraction.sqrt().max(0.3);
+    let activity = 0.68 + unit(model.seed, stream ^ 0x51f1) * 0.75;
     let volume = model.daily_volume * volume_fraction * activity;
     let trade_count = match timeframe {
         "1Week" => model.daily_trades.saturating_mul(5),
@@ -481,17 +481,19 @@ fn hash64(value: &str) -> u64 {
     })
 }
 
-fn mixed(seed: u64, salt: u64) -> u64 {
+// Non-cryptographic mixing for reproducible simulated prices and volumes.
+// Each stream selects a demo series; these values never protect secrets.
+fn mixed(seed: u64, stream: u64) -> u64 {
     let mut value = seed
-        .wrapping_add(salt.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+        .wrapping_add(stream.wrapping_mul(0x9e37_79b9_7f4a_7c15))
         .wrapping_add(0x9e37_79b9_7f4a_7c15);
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     value ^ (value >> 31)
 }
 
-fn unit(seed: u64, salt: u64) -> f64 {
-    let upper = u32::try_from(mixed(seed, salt) >> 32).unwrap_or_default();
+fn unit(seed: u64, stream: u64) -> f64 {
+    let upper = u32::try_from(mixed(seed, stream) >> 32).unwrap_or_default();
     f64::from(upper) / f64::from(u32::MAX)
 }
 

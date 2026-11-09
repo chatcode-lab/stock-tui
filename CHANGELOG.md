@@ -7,6 +7,18 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Updated Rust dependencies and pinned GitHub Actions, including fixes for
+  Rustls, certificate verification/root trust, and Tokio advisories.
+- Clarified that deterministic demo mixing uses non-cryptographic streams and
+  extended configuration-output tests to cover both providers' credentials.
+
+### Fixed
+
+- Restored CI on current stable Rust by using the primitive floating-point
+  constants instead of the deprecated `std::f64` module.
+
 ## [0.3.2] - 2026-09-22
 
 ### Added
