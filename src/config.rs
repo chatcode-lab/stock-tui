@@ -1220,8 +1220,11 @@ token = "{secret}
 
     #[test]
     fn stock_api_debug_and_mode_do_not_leak_alpaca_configuration() {
-        let settings = Settings {
-            credentials: None,
+        let mut settings = Settings {
+            credentials: Some(Credentials {
+                key: SecretString::from("private-test-alpaca-key".to_owned()),
+                secret: SecretString::from("private-test-alpaca-secret".to_owned()),
+            }),
             credential_source: None,
             incomplete_environment_credentials: false,
             db_path: PathBuf::from("market.sqlite3"),
@@ -1254,6 +1257,16 @@ token = "{secret}
         assert!(!rendered.contains("data.alpaca.markets"));
         assert!(!rendered.contains("paper-api.alpaca.markets"));
         assert!(!rendered.contains("feed:"));
+
+        // --print-config uses this formatter for either selected provider.
+        for provider in [ProviderKind::Alpaca, ProviderKind::StockApi] {
+            settings.provider = provider;
+            let rendered = format!("{settings:#?}");
+            assert!(!rendered.contains("private-test-alpaca-key"));
+            assert!(!rendered.contains("private-test-alpaca-secret"));
+            assert!(!rendered.contains("private-test-token"));
+            assert!(!rendered.contains("stock_api_token"));
+        }
     }
 
     #[test]
