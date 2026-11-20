@@ -205,6 +205,22 @@ if [[ -n "$notary_response_path" ]]; then
 fi
 
 if [[ -z "$submission_id" ]]; then
+  # Keep the Apple response private. Only report a validated HTTP status code.
+  http_status="$(
+    awk 'match(tolower($0), /http([[:space:]]+status([[:space:]]+code)?)?[[:space:]:]+[45][0-9][0-9]/) {
+      print substr($0, RSTART + RLENGTH - 3, 3)
+      exit
+    }' "$notary_stderr_path" "$notary_result_path"
+  )"
+  if [[ -n "$http_status" ]]; then
+    printf 'Apple notarization returned HTTP %s.\n' "$http_status" >&2
+  elif grep -Eqi 'invalid credentials|authentication failed|unauthenticated' \
+    "$notary_stderr_path" "$notary_result_path"; then
+    printf 'Apple rejected notarization authentication.\n' >&2
+  elif grep -Eqi 'NSURLErrorDomain|timed out|could not connect' \
+    "$notary_stderr_path" "$notary_result_path"; then
+    printf 'The notarization submission failed at the network layer.\n' >&2
+  fi
   printf 'Apple notarization did not return a submission ID (exit %s).\n' \
     "$notary_exit" >&2
   exit 65
