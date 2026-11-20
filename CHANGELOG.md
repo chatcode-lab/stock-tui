@@ -7,15 +7,25 @@ pre-1.0 releases.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-20
+
+### Added
+
+- Discover eligible exchange-listed IPOs from SEC filings so they can enter
+  sector grids before their regular public-float data is available.
+
 ### Changed
 
 - Updated Rust dependencies and pinned GitHub Actions, including fixes for
-  Rustls, certificate verification/root trust, and Tokio advisories.
+  Rustls, certificate verification/root trust, Tokio, and a WSL2 browser
+  launch advisory.
 - Clarified that deterministic demo mixing uses non-cryptographic streams and
   extended configuration-output tests to cover both providers' credentials.
 
 ### Fixed
 
+- Restored share-count coverage for five issuers using reviewed SEC filings
+  and added a verified catalog entry for Anthropic.
 - Restored CI on current stable Rust by using the primitive floating-point
   constants instead of the deprecated `std::f64` module.
 
@@ -440,7 +450,8 @@ pre-1.0 releases.
 - Kept the Starred grid, detail rank, and adjacent-ticker navigation on the
   same globally sorted favorites list.
 
-[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/chatcode-lab/stock-tui/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/chatcode-lab/stock-tui/compare/v0.2.7...v0.3.0

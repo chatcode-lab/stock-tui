@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
 import urllib.error
+import zipfile
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -1642,6 +1644,206 @@ class WikidataCompanyProfileTests(unittest.TestCase):
 
             self.assertEqual(urlopen.call_count, 4)
             self.assertEqual(list(Path(directory).iterdir()), [])
+
+
+class ReviewedIpoTests(unittest.TestCase):
+    def test_anthropic_uses_the_completed_public_offering_and_common_share_basis(self) -> None:
+        cik = catalog.ANTHROPIC_IPO_CIK
+        as_of = date(2026, 11, 20)
+
+        row = catalog.reviewed_anthropic_ipo(
+            {cik: ticker_identity("ANT", 0)}, {}, {}, as_of
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual(row["sector"], "technology")
+        self.assertEqual(row["public_float"], 93_541_000_000)
+        self.assertEqual(row["shares_outstanding"], 13_366_642_274)
+        self.assertEqual(row["shares_as_of"], "2026-11-20")
+
+    def test_fallback_defers_to_regular_data_and_a_conflicting_listing(self) -> None:
+        cik = catalog.ANTHROPIC_IPO_CIK
+        as_of = date(2026, 11, 20)
+        sic = catalog.SicFact(7372, "", "", "10-K", "", "fixture")
+        public_float = catalog.FrameFact(80_000_000_000, as_of.isoformat(), "", "", "fixture")
+
+        self.assertIsNone(
+            catalog.reviewed_anthropic_ipo({}, {cik: sic}, {cik: public_float}, as_of)
+        )
+        self.assertIsNone(
+            catalog.reviewed_anthropic_ipo({1: ticker_identity("ANT", 0)}, {}, {}, as_of)
+        )
+        self.assertIsNone(catalog.reviewed_anthropic_ipo({}, {}, {}, date(2026, 11, 19)))
+        self.assertIsNone(catalog.reviewed_anthropic_ipo({}, {}, {}, date(2028, 6, 1)))
+
+
+class AutomaticIpoTests(unittest.TestCase):
+    # The figures and table shape follow Aspen Neuroscience's final prospectus.
+    PROSPECTUS = b"""
+    <p>This is the initial public offering of shares of common stock by Aspen.</p>
+    <p>There has been no public market for the common stock. It will list on
+    Nasdaq under the symbol &ldquo;ASPE.&rdquo;</p>
+    <table>
+      <tr><td>Initial public offering price</td><td>$</td><td>15.00</td>
+          <td>$</td><td>140,625,000</td></tr>
+    </table>
+    <h2>The Offering</h2>
+    <table>
+      <tr><td>Common stock to be outstanding immediately after this offering</td>
+          <td>29,078,600 shares (or 30,484,850 shares if the option is used).</td></tr>
+    </table>
+    """
+
+    def test_discovers_listed_ipo_and_builds_catalog_record_without_public_float(self) -> None:
+        cik = 2124080
+        as_of = date(2026, 11, 20)
+        accession = "0001193125-26-441782"
+        index_url = catalog.MASTER_INDEX_URL.format(year=2026, quarter=4)
+        submissions_url = catalog.SUBMISSIONS_URL.format(cik=cik)
+        filing_url = catalog.FILING_ARCHIVE_URL.format(
+            cik=cik, accession="000119312526441782", filename="elevation_424b4.htm"
+        )
+        zipped = io.BytesIO()
+        with zipfile.ZipFile(zipped, "w") as archive:
+            archive.writestr(
+                "master.idx",
+                "CIK|Company Name|Form Type|Date Filed|Filename\n"
+                "2124080|Aspen Neuroscience|424B4|2026-10-30|edgar/data/filing.txt\n"
+                "2124081|Not listed|424B4|2026-10-30|edgar/data/unlisted.txt\n",
+            )
+        payloads = {
+            index_url: zipped.getvalue(),
+            submissions_url: json.dumps({
+                "cik": "0002124080",
+                "sic": "2834",
+                "filings": {"recent": {
+                    "form": ["424B4", "S-1"],
+                    "filingDate": ["2026-10-30", "2026-10-09"],
+                    "fileNumber": ["333-299393", "333-299393"],
+                    "accessionNumber": [accession, "0001193125-26-410000"],
+                    "primaryDocument": ["elevation_424b4.htm", "registration.htm"],
+                }},
+            }).encode(),
+            filing_url: self.PROSPECTUS,
+        }
+        client = mock.Mock(spec=catalog.SecClient)
+        client.get.side_effect = lambda url, **_: payloads.get(url)
+        client.receipts = {url: "2026-11-20T00:00:00Z" for url in payloads}
+        identities = {cik: ticker_identity("ASPE", 0)}
+
+        companies, sources = catalog.load_ipo_companies(
+            client, identities, {}, {}, {2834: "Pharmaceutical Preparations"}, as_of
+        )
+
+        self.assertEqual(len(companies), 1)
+        company = companies[0]
+        self.assertEqual(company["symbol"], "ASPE")
+        self.assertEqual(company["sector"], "healthcare")
+        self.assertEqual(company["public_float"], 140_625_000)
+        self.assertEqual(company["shares_outstanding"], 29_078_600)
+        self.assertEqual(len(sources), 3)
+        self.assertEqual(company["provenance"]["shares_outstanding"]["accession"], accession)
+
+        baseline_codes = (2000, 4800, 2834, 1311, 7372, 6200, 4011, 1000, 4911)
+        baseline_identities = {
+            index: ticker_identity(f"EX{index}", index)
+            for index, _ in enumerate(baseline_codes, start=1)
+        }
+        baseline_sic = {
+            index: catalog.SicFact(code, accession, "2026-10-30", "10-K", "", "reported")
+            for index, code in enumerate(baseline_codes, start=1)
+        }
+        baseline_float = {
+            issuer: catalog.FrameFact(100_000_000, "2026-10-30", accession, "", "reported")
+            for issuer in baseline_identities
+        }
+        with mock.patch.object(catalog, "MIN_COMPANIES_PER_SECTOR", 1):
+            ranked = catalog.build_companies(
+                baseline_identities, baseline_sic, baseline_float, {},
+                ipo_companies=companies,
+            )
+        aspe = next(row for row in ranked if row["symbol"] == "ASPE")
+        self.assertEqual(aspe["rank"], 1)
+        self.assertEqual(catalog.runtime_company(aspe, 0)["shares_outstanding"], 29_078_600)
+
+        sic = catalog.SicFact(2834, accession, "2026-10-30", "10-K", "", "reported")
+        reported_float = catalog.FrameFact(148_000_000, "2026-10-30", accession, "", "reported")
+        companies, _ = catalog.load_ipo_companies(
+            client, identities, {cik: sic}, {cik: reported_float}, {}, as_of
+        )
+        self.assertEqual(companies, [])
+
+    def test_rejects_follow_on_mismatched_and_ambiguous_prospectuses(self) -> None:
+        for payload in (
+            self.PROSPECTUS.replace(b"initial public offering of shares", b"resale of shares"),
+            self.PROSPECTUS.replace(b"ASPE", b"ASPEX"),
+            self.PROSPECTUS.replace(b"140,625,000", b"140,625,001"),
+            self.PROSPECTUS + b"<p>Class B common stock retains separate voting rights.</p>",
+            self.PROSPECTUS + b"<tr>Common stock outstanding after this offering 30,000,000 shares</tr>",
+        ):
+            with self.subTest(payload=payload):
+                self.assertIsNone(catalog.parse_ipo_prospectus(payload, "ASPE", "Nasdaq"))
+
+    def test_registration_for_an_existing_public_issuer_does_not_count_as_an_ipo(self) -> None:
+        recent = {
+            "form": ["424B4", "S-1", "10-K"],
+            "filingDate": ["2026-10-30", "2026-10-09", "2026-03-15"],
+            "fileNumber": ["333-299393", "333-299393", "001-45900"],
+            "accessionNumber": [
+                "0001193125-26-441782", "0001193125-26-410000", "0001193125-26-123456",
+            ],
+            "primaryDocument": ["offering.htm", "registration.htm", "annual.htm"],
+        }
+
+        self.assertIsNone(catalog.select_ipo_prospectus(recent, date(2026, 11, 20)))
+
+
+class ReviewedCoverShareTests(unittest.TestCase):
+    def test_latest_filings_restore_share_coverage_for_every_failed_issuer(self) -> None:
+        expected = {
+            14693: ("BF-B", "0000014693-26-000052", "bfb-20260731", 458_864_265),
+            1403161: ("V", "0001403161-26-000134", "v-20260930", 1_854_387_244.16),
+            1560385: ("FWONA", "0001104659-26-123344", "lmca-20260930x10q", 250_799_756),
+            1846416: ("ONEN", "0001493152-26-052448", "form10-q", 108_258_978),
+            2030482: ("PLMK", "0001213900-26-120626", "ea0311037-10q_plumacq4", 10_702_491),
+        }
+        identities = {
+            cik: ticker_identity(symbol, index)
+            for index, (cik, (symbol, _, _, _)) in enumerate(expected.items())
+        }
+        submissions = {
+            cik: {
+                "accession": accession,
+                "instance": f"{document}_htm.xml",
+                "filed": "2026-11-16",
+                "form": "10-Q",
+            }
+            for cik, (_, accession, document, _) in expected.items()
+        }
+        facts: dict[int, catalog.SharesFact] = {}
+
+        sources = catalog.apply_reviewed_cover_share_fallbacks(identities, submissions, facts)
+        shares = catalog.merge_share_facts({}, facts, as_of=date(2026, 11, 20))
+
+        self.assertEqual(shares.keys(), expected.keys())
+        self.assertEqual(len(sources), len(expected))
+        for cik, (_, accession, _, value) in expected.items():
+            with self.subTest(cik=cik):
+                self.assertAlmostEqual(shares[cik].value, value, places=2)
+                self.assertEqual(shares[cik].accession, accession)
+                self.assertEqual(shares[cik].method, "sec_reviewed_periodic_cover")
+                self.assertIn(shares[cik].policy_source, [source["url"] for source in sources])
+
+        old_facts = dict(facts)
+        self.assertEqual(
+            catalog.apply_reviewed_cover_share_fallbacks(identities, submissions, facts), []
+        )
+        self.assertEqual(facts, old_facts)
+        submissions[1403161]["accession"] = "0001403161-26-000135"
+        identities[14693]["symbol"] = "BF-A"
+        facts = {}
+        catalog.apply_reviewed_cover_share_fallbacks(identities, submissions, facts)
+        self.assertNotIn(1403161, facts)
+        self.assertNotIn(14693, facts)
 
 
 class CanonicalTickerTests(unittest.TestCase):
