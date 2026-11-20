@@ -161,13 +161,22 @@ A live database is prepared in stages:
    remain available through their numeric public-float proxy, while catalog CI
    requires complete share coverage for the current sector top 100. Previously
    reconciled retention flags survive its upsert.
+   The builder can recover a missing share basis from reviewed counts in the
+   latest SEC filing. Each review applies to a single issuer, ticker, and
+   accession. A later filing must establish its own share basis.
+   The daily build checks recent SEC final prospectuses for exchange-listed
+   IPOs. It uses the offering size as a ranking proxy and a verified
+   post-offering share count as the initial market-cap basis. Offers with
+   ambiguous or multiple common share classes need review. Anthropic uses
+   the reviewed Class A and N totals. Regular SIC and public-float records
+   take precedence when both are available.
    When the local copy exceeds 12 hours by default, a background task checks
    the compact R2 catalog and keeps that cadence while the app remains open. A
    valid newer result is cached, applied to SQLite, and queues another provider
    universe reconciliation; network, schema, size, and downgrade failures keep
    the local result.
 3. Select up to 100 retained initial members per sector by estimated market cap
-   where available and numeric SEC public float otherwise. With no cached
+   where available and the numeric catalog ranking proxy otherwise. With no cached
    market caps this is equivalent to descending catalog proxy rank.
 4. Fetch the selected asset provider's active instrument list before requesting
    snapshots. Present catalog candidates are reactivated; missing candidates
@@ -186,7 +195,7 @@ A live database is prepared in stages:
    before multiplying price-equivalent common shares by current price. If
    required split coverage fails, leave the local estimate unavailable rather
    than multiply stale shares by a post-split price. Re-select 100 members per
-   sector by the resulting estimate or the numeric public-float proxy, and
+   sector by the resulting estimate or the numeric catalog proxy, and
    store a dated snapshot. The proxy affects selection but never populates the
    market-cap field shown in ticker statistics.
 7. Start adjusted history requests for those selected 900 companies and three
@@ -368,7 +377,7 @@ labels use the user's local timezone.
 
 Sort modes operate within each sector:
 
-- Market cap: descending estimated market cap, or numeric SEC public-float
+- Market cap: descending estimated market cap, or numeric catalog ranking
   proxy when the estimate is unavailable, then catalog rank and symbol.
 - Gainers: descending selected-period return.
 - Volume: descending cumulative share volume over the selected range; `1D`

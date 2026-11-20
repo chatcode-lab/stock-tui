@@ -131,6 +131,12 @@ audit JSON and profile snapshot are retained as private Actions artifacts for
 14 days. R2 stores the compact catalog and manifest plus stable and
 content-addressed profile snapshots.
 
+The builder also scans 550 days of SEC quarterly master indexes for final
+prospectuses on current NYSE, Nasdaq, and CBOE listings. The current and prior
+quarters are refreshed on each run. An eligible IPO can enter a sector using
+its offering size and post-offering common shares while regular SEC public-float
+data is pending. The build log identifies prospectuses that need a review.
+
 ## Validation
 
 Run the local checks without Cloudflare credentials:

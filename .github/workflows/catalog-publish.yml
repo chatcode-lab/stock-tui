@@ -37,7 +37,7 @@ jobs:
       SEC_CACHE_DIR: .cache/sec-catalog
       SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       REFRESH_COMPANY_PROFILES: ${{ github.event.schedule == '17 6 1 * *' || (github.event_name == 'workflow_dispatch' && inputs.refresh_company_profiles) }}
-      WRANGLER_VERSION: "4.114.0"
+      WRANGLER_VERSION: "4.166.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

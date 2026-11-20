@@ -1,6 +1,6 @@
 [package]
 name = "stock-tui"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 rust-version = "1.95"
 description = "A mouse-first terminal stock market heatmap inspired by StockTouch"
@@ -62,7 +62,7 @@ reqwest = { version = "0.13.4", default-features = false, features = [
   "rustls-no-provider",
   "stream",
 ] }
-rpassword = "7.5.4"
+rpassword = "7.5.5"
 rusqlite = { version = "0.42.0", features = ["bundled", "chrono", "serde_json"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 secrecy = "0.10.3"
@@ -83,7 +83,7 @@ tracing = "0.1.44"
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 unicode-width = "0.2.2"
-webbrowser = "1.2.0"
+webbrowser = "1.2.7"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["stdio", "termios"] }

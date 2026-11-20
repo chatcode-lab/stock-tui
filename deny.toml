@@ -1,6 +1,10 @@
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+  { id = "RUSTSEC-2026-0543", reason = "Informational maintenance notice. Chrono remains part of the stored timestamp and SQLite interfaces pending migration." },
+  { id = "RUSTSEC-2026-0555", reason = "Informational maintenance notice. Chrono-TZ remains in use for exchange session calculations pending migration." },
+]
 
 [bans]
 multiple-versions = "warn"

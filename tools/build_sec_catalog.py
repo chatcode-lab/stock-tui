@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build stock-tui's embedded issuer universe from official SEC data.
 
-The output deliberately stores SEC EntityPublicFloat as a ranking proxy, not as
-market capitalization. A runtime market cap requires a contemporaneous price
+The output stores SEC EntityPublicFloat or reviewed IPO offering size as a
+ranking proxy. A runtime market cap requires a contemporaneous price
 multiplied by shares outstanding.
 """
 
@@ -26,12 +26,17 @@ import urllib.request
 import zipfile
 import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable
 
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
+MASTER_INDEX_URL = (
+    "https://www.sec.gov/Archives/edgar/full-index/{year}/QTR{quarter}/master.zip"
+)
 WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 WIKIDATA_LICENSE_URL = (
     "https://creativecommons.org/publicdomain/zero/1.0/"
@@ -205,6 +210,29 @@ REVIEWED_LARGE_FLOAT_WITHOUT_AFS_CIKS: frozenset[int] = frozenset()
 SHARE_POLICY_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "sec_share_policies.json"
 )
+ANTHROPIC_IPO_CIK = 2130357
+ANTHROPIC_IPO_CLOSED = date(2026, 11, 20)
+ANTHROPIC_IPO_ACCESSION = "0001628280-26-074944"
+ANTHROPIC_IPO_PROSPECTUS = {
+    "id": "sec_anthropic_424b4_20261119",
+    "url": (
+        "https://www.sec.gov/Archives/edgar/data/2130357/000162828026074944/"
+        "anthropicpbc-424b4.htm"
+    ),
+    "reviewed_on": "2026-11-20",
+}
+ANTHROPIC_IPO_CLOSING_RELEASE = {
+    "id": "anthropic_ipo_close_20261120",
+    "url": "https://www.anthropic.com/news/ipo-close",
+    "reviewed_on": "2026-11-20",
+}
+RANKING_PROXY_DESCRIPTION = (
+    "SEC dei:EntityPublicFloat or IPO public offering size (USD), "
+    "descending within sector"
+)
+IPO_SECURITY = r"(?:common stock|ordinary shares)"
+IPO_NUMBER = r"(?:[0-9]{1,3}(?:,[0-9]{3}){1,4}|[0-9]{1,15})"
+IPO_DOLLARS = rf"(?:US\s*)?\$\s*({IPO_NUMBER}(?:\.[0-9]{{1,4}})?)(?![0-9.,])"
 SHARE_POLICY_PRICE_BASES = frozenset(
     {
         "canonical_common_unit",
@@ -475,6 +503,72 @@ class SharesFact:
     basis: str | None = None
     policy_source: str | None = None
     component_multipliers: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReviewedCoverShares:
+    symbol: str
+    accession: str
+    document: str
+    end: str
+    basis: str
+    classes: tuple[tuple[str, int, float], ...]
+
+
+# Counts verified on the filing covers. Keep these scoped to the exact latest
+# periodic accession so a new filing triggers validation against current facts.
+REVIEWED_COVER_SHARE_FALLBACKS = {
+    14693: ReviewedCoverShares(
+        "BF-B",
+        "0000014693-26-000052",
+        "bfb-20260731.htm",
+        "2026-08-31",
+        "Voting Class A and nonvoting Class B valued at the canonical Class B price",
+        (("Class A", 168_480_849, 1), ("Class B", 290_383_416, 1)),
+    ),
+    1403161: ReviewedCoverShares(
+        "V",
+        "0001403161-26-000134",
+        "v-20260930.htm",
+        "2026-10-29",
+        "Common classes converted into Class A using September 30 rates from Note 15",
+        (
+            ("Class A", 1_724_473_215, 1),
+            ("Class B-1", 2_180_148, 1.5400),
+            ("Class B-2", 486_669, 1.4924),
+            ("Class B-3", 60_589_871, 1.4773),
+            ("Class C", 9_080_220, 4),
+        ),
+    ),
+    1560385: ReviewedCoverShares(
+        "FWONA",
+        "0001104659-26-123344",
+        "lmca-20260930x10q.htm",
+        "2026-10-31",
+        "Post-reincorporation Series A, B, and C shares valued at the Series A price",
+        (
+            ("Series A", 23_991_058, 1),
+            ("Series B", 2_381_188, 1),
+            ("Series C", 224_427_510, 1),
+        ),
+    ),
+    1846416: ReviewedCoverShares(
+        "ONEN",
+        "0001493152-26-052448",
+        "form10-q.htm",
+        "2026-11-16",
+        "Post-combination Class A common shares outstanding",
+        (("Class A", 108_258_978, 1),),
+    ),
+    2030482: ReviewedCoverShares(
+        "PLMK",
+        "0001213900-26-120626",
+        "ea0311037-10q_plumacq4.htm",
+        "2026-11-16",
+        "Class A ordinary shares and the single one-for-one convertible Class B share",
+        (("Class A", 10_702_490, 1), ("Class B", 1, 1)),
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -2826,6 +2920,63 @@ def load_filing_cover_share_components(
     return candidates, sources
 
 
+def apply_reviewed_cover_share_fallbacks(
+    identities: dict[int, dict[str, Any]],
+    submissions: dict[int, dict[str, str | int]],
+    filing_facts: dict[int, SharesFact],
+) -> list[dict[str, str]]:
+    sources: list[dict[str, str]] = []
+    for cik, review in REVIEWED_COVER_SHARE_FALLBACKS.items():
+        if cik in filing_facts:
+            continue
+        submission = submissions.get(cik)
+        if (
+            submission is None
+            or submission["accession"] != review.accession
+            or submission["instance"] != extracted_instance_filename(review.document)
+            or identities.get(cik, {}).get("symbol") != review.symbol
+        ):
+            continue
+        accession = review.accession.replace("-", "")
+        source_id = f"sec_reviewed_cover_{accession}"
+        url = FILING_ARCHIVE_URL.format(
+            cik=cik, accession=accession, filename=review.document
+        )
+        filed = str(submission["filed"])
+        form = str(submission["form"])
+        components = tuple(
+            ShareComponent(
+                value=count,
+                end=review.end,
+                accession=review.accession,
+                filed=filed,
+                form=form,
+                quarters=0,
+                tag=SHARES_TAG,
+                taxonomy="dei/filing-cover",
+                segments=(("ClassOfStock", name),),
+                source=source_id,
+            )
+            for name, count, _ in review.classes
+        )
+        filing_facts[cik] = SharesFact(
+            value=sum(count * multiplier for _, count, multiplier in review.classes),
+            end=review.end,
+            accession=review.accession,
+            filed=filed,
+            form=form,
+            source=source_id,
+            method="sec_reviewed_periodic_cover",
+            confidence="medium",
+            components=components,
+            basis=review.basis,
+            policy_source=url,
+            component_multipliers=tuple(multiplier for _, _, multiplier in review.classes),
+        )
+        sources.append({"id": source_id, "url": url})
+    return sources
+
+
 def parse_filing_cover_share_components(
     payload: bytes,
     submission: dict[str, str | int],
@@ -3969,6 +4120,7 @@ def reviewed_multiclass_issuer(
 ) -> bool:
     return (
         cik in (reviewed_policies or {})
+        or cik in REVIEWED_COVER_SHARE_FALLBACKS
         or cik in REVIEWED_EQUAL_CLASS_MEMBERS
         or cik in REVIEWED_CLASS_CONVERSION_POLICIES
         or cik in REPORTED_EQUIVALENT_CLASS_POLICIES
@@ -4107,6 +4259,7 @@ def select_preferred_shares_fact(
     method_rank = {
         "filing_reviewed_fact_policy": 7,
         "filing_cover_reviewed_policy": 7,
+        "sec_reviewed_periodic_cover": 7,
         "filing_cover_single_class": 6,
         "fsds_reviewed_class_conversion": 6,
         "fsds_dei_cover_total": 5,
@@ -4346,12 +4499,362 @@ def shares_provenance(fact: SharesFact) -> dict[str, Any]:
     return provenance
 
 
+class ProspectusText(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.ignored_tag: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style"}:
+            self.ignored_tag = tag
+        elif tag == "tr" and self.ignored_tag is None:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == self.ignored_tag:
+            self.ignored_tag = None
+        elif tag == "tr" and self.ignored_tag is None:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self.ignored_tag is None and (text := " ".join(data.split())):
+            self.parts.append(text)
+
+
+def parse_ipo_prospectus(
+    payload: bytes, symbol: str, exchange: str
+) -> tuple[int, Decimal, int] | None:
+    parser = ProspectusText()
+    parser.feed(payload[: 4 * 1024 * 1024].decode("utf-8", errors="replace"))
+    rows = [" ".join(row.split()) for row in " ".join(parser.parts).splitlines()]
+    text = " ".join(rows)
+    cover = text[:10_000]
+    if (
+        not re.search(
+            rf"\bthis is (?:the|an) initial public offering of (?:shares of )?"
+            rf"(?:our )?{IPO_SECURITY}\b",
+            cover,
+            re.I,
+        )
+        or not re.search(
+            r"\bthere (?:has been|was|is) no (?:established )?public market\b",
+            cover,
+            re.I,
+        )
+        or not re.search(
+            rf'\bunder the (?:ticker )?symbol\s+["“]?{re.escape(symbol)}(?=["”\s.])',
+            cover,
+            re.I,
+        )
+        or not re.search(
+            rf"\b{re.escape(exchange)}\b",
+            cover,
+            re.I,
+        )
+    ):
+        return None
+
+    prices = {
+        (Decimal(price.replace(",", "")), Decimal(gross.replace(",", "")))
+        for row in rows
+        if row.lower().startswith("initial public offering price") and row in cover
+        for price, gross in re.findall(
+            rf"^initial public offering price\s+{IPO_DOLLARS}\s+{IPO_DOLLARS}(?:\s|$)",
+            row,
+            re.I,
+        )
+    }
+    totals = {
+        int(count.replace(",", ""))
+        for row in rows
+        for count in re.findall(
+            rf"^(?:shares of )?(?:our )?{IPO_SECURITY} (?:to be )?outstanding "
+            rf"(?:immediately )?(?:after|following) (?:this|the) offering "
+            rf"({IPO_NUMBER}) shares\b",
+            row,
+            re.I,
+        )
+    }
+    if len(prices) != 1 or len(totals) != 1:
+        return None
+    # A single, unqualified total is required. Share class conversions and
+    # multipliers need individual review when the issuer has multiple classes.
+    if re.search(rf"\bclass [a-z0-9-]+ {IPO_SECURITY}\b", text, re.I):
+        return None
+
+    (price, gross), = prices
+    outstanding, = totals
+    if (
+        not 0 < price <= MAX_UNREVIEWED_IMPLIED_SHARE_PRICE
+        or not 0 < gross <= MAX_REPORTED_PUBLIC_FLOAT
+    ):
+        return None
+    offered, remainder = divmod(gross, price)
+    if remainder or not 0 < offered <= outstanding <= 1_000_000_000_000:
+        return None
+    return int(offered), price, outstanding
+
+
+def load_recent_ipo_candidates(
+    client: SecClient, wanted: set[int], as_of: date
+) -> tuple[set[int], list[dict[str, str]]]:
+    start = as_of - timedelta(days=MAX_SHARE_FACT_AGE_DAYS)
+    cutoff = start.isoformat().encode()
+    through = as_of.isoformat().encode()
+    quarter = Quarter(as_of.year, (as_of.month - 1) // 3 + 1)
+    first_quarter = Quarter(start.year, (start.month - 1) // 3 + 1)
+    count = (
+        (quarter.year - first_quarter.year) * 4
+        + quarter.quarter - first_quarter.quarter + 1
+    )
+    candidates: set[int] = set()
+    sources: list[dict[str, str]] = []
+    for period in quarter_sequence(quarter, count):
+        url = MASTER_INDEX_URL.format(year=period.year, quarter=period.quarter)
+        payload = client.get(url, optional=True)
+        if payload is None:
+            continue
+        sources.append(
+            source_record(f"sec_master_index_{period.label().lower()}", url, client)
+        )
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            with archive.open("master.idx") as index:
+                for line in index:
+                    if b"|424B4|" not in line:
+                        continue
+                    fields = line.rstrip().split(b"|")
+                    if len(fields) != 5 or not fields[0].isdigit():
+                        continue
+                    cik = int(fields[0])
+                    if cik in wanted and cutoff <= fields[3] <= through:
+                        candidates.add(cik)
+    return candidates, sources
+
+
+def select_ipo_prospectus(
+    recent: dict[str, Any], as_of: date
+) -> tuple[str, str, str] | None:
+    keys = ("form", "filingDate", "fileNumber", "accessionNumber", "primaryDocument")
+    if not all(isinstance(recent.get(key), list) for key in keys):
+        return None
+    rows = list(zip(*(recent[key] for key in keys)))
+    registration_dates: dict[str, str] = {}
+    for form, filed, number, _, _ in rows:
+        if (
+            isinstance(form, str)
+            and form in {"S-1", "F-1", "S-1/A", "F-1/A"}
+            and isinstance(number, str)
+            and number.startswith("333-")
+            and eligible_frame_end(filed, as_of)
+        ):
+            registration_dates[number] = min(filed, registration_dates.get(number, filed))
+    first_periodic = min(
+        (
+            filed for form, filed, _, _, _ in rows
+            if isinstance(form, str) and form.removesuffix("/A") in ELIGIBLE_FILING_FORMS
+            and eligible_frame_end(filed, as_of)
+        ),
+        default=as_of.isoformat(),
+    )
+    cutoff = (as_of - timedelta(days=MAX_SHARE_FACT_AGE_DAYS)).isoformat()
+    offers = [
+        (filed, accession, document)
+        for form, filed, number, accession, document in rows
+        if form == "424B4"
+        and isinstance(number, str) and number in registration_dates
+        and eligible_frame_end(filed, as_of)
+        and max(cutoff, registration_dates[number]) <= filed <= first_periodic
+        and isinstance(accession, str) and valid_accession(accession)
+        and isinstance(document, str) and safe_filing_filename(document)
+        and document.lower().endswith((".htm", ".html"))
+    ]
+    return min(offers, default=None)
+
+
+def load_ipo_companies(
+    client: SecClient,
+    identities: dict[int, dict[str, Any]],
+    sic_facts: dict[int, SicFact],
+    float_facts: dict[int, FrameFact],
+    sic_descriptions: dict[int, str],
+    as_of: date,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    wanted = (
+        identities.keys()
+        - (sic_facts.keys() & float_facts.keys())
+        - {ANTHROPIC_IPO_CIK}
+    )
+    candidates, sources = load_recent_ipo_candidates(client, wanted, as_of)
+    companies: list[dict[str, Any]] = []
+    for cik in sorted(candidates):
+        identity = identities[cik]
+        submissions_url = SUBMISSIONS_URL.format(cik=cik)
+        submissions = client.get(submissions_url, optional=True)
+        if submissions is None:
+            continue
+        response = json_payload(submissions, submissions_url)
+        if normalize_sec_cik(response.get("cik")) != f"{cik:010d}":
+            continue
+        sic_text = str(response.get("sic") or "")
+        if len(sic_text) != 4 or not sic_text.isascii() or not sic_text.isdigit():
+            continue
+        sic = int(sic_text)
+        description = sic_descriptions.get(sic)
+        if sic == 6770 or description is None:
+            continue
+        filings = response.get("filings")
+        recent = filings.get("recent") if isinstance(filings, dict) else None
+        offer = select_ipo_prospectus(recent, as_of) if isinstance(recent, dict) else None
+        if offer is None:
+            continue
+        filed, accession, document = offer
+        url = FILING_ARCHIVE_URL.format(
+            cik=cik, accession=accession.replace("-", ""),
+            filename=urllib.parse.quote(document, safe="._-"),
+        )
+        payload = client.get(url, optional=True)
+        if payload is None:
+            continue
+        terms = parse_ipo_prospectus(payload, identity["symbol"], identity["exchange"])
+        if terms is None:
+            print(
+                f"IPO prospectus needs review: {identity['symbol']} ({accession})",
+                file=sys.stderr,
+            )
+            continue
+        offered, price, outstanding = terms
+        source_id = f"sec_ipo_prospectus_{accession.replace('-', '')}"
+        submissions_source = f"sec_submissions_{cik:010d}"
+        company = ipo_catalog_company(
+            cik, identity, sic, description, offered * price, outstanding,
+            {"source": "sec_company_tickers_exchange"},
+            {"source": submissions_source},
+            {
+                "source": source_id, "end": filed, "confidence": "low",
+                "method": "ipo_public_offering_size",
+                "offered_shares": offered, "offer_price_usd": float(price),
+            },
+            {
+                "source": source_id, "accession": accession, "end": filed,
+                "filed": filed, "form": "424B4", "confidence": "medium",
+                "method": "ipo_prospectus_post_offering_shares",
+            },
+        )
+        companies.append(company)
+        sources.extend((
+            source_record(source_id, url, client),
+            source_record(submissions_source, submissions_url, client),
+        ))
+    return companies, sources
+
+
+def ipo_catalog_company(
+    cik: int,
+    identity: dict[str, Any],
+    sic: int,
+    description: str,
+    offering_size: Decimal | int,
+    outstanding: int,
+    identity_provenance: dict[str, Any],
+    sic_provenance: dict[str, Any],
+    proxy: dict[str, Any],
+    shares: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "cik": f"{cik:010d}",
+        "symbol": identity["symbol"],
+        "name": identity["name"],
+        "exchange": identity["exchange"],
+        "sic": sic,
+        "sic_description": description,
+        "sector": sector_for_sic(sic),
+        # Schema v2 readers consume the ranking proxy from public_float.
+        "public_float": float(offering_size),
+        "proxy_source": proxy["source"],
+        "proxy_as_of": proxy["end"],
+        "proxy_confidence": proxy["confidence"],
+        "shares_outstanding": outstanding,
+        "shares_source": shares["source"],
+        "shares_as_of": shares["end"],
+        "shares_method": shares["method"],
+        "shares_confidence": shares["confidence"],
+        "as_of": proxy["end"],
+        "quality": "ipo_prospectus",
+        "provenance": {
+            "identity": identity_provenance,
+            "sic": sic_provenance,
+            "public_float": proxy,
+            "shares_outstanding": shares,
+        },
+    }
+
+
+def reviewed_anthropic_ipo(
+    identities: dict[int, dict[str, Any]],
+    sic_facts: dict[int, SicFact],
+    float_facts: dict[int, FrameFact],
+    as_of: date,
+) -> dict[str, Any] | None:
+    cik = ANTHROPIC_IPO_CIK
+    age_days = (as_of - ANTHROPIC_IPO_CLOSED).days
+    if not 0 <= age_days <= MAX_SHARE_FACT_AGE_DAYS:
+        return None
+    if cik in sic_facts and cik in float_facts:
+        return None
+    identity = identities.get(cik)
+    if identity is not None and (
+        identity["symbol"] != "ANT" or identity["exchange"] != "Nasdaq"
+    ):
+        return None
+    if any(other != cik and row["symbol"] == "ANT" for other, row in identities.items()):
+        return None
+
+    # The closing release confirms full exercise of the option. Only Class A
+    # shares sold to the public contribute to the offering-size ranking proxy.
+    offered_shares, offer_price = 1_127_000_000, 83
+    # Post-close Class A and Class N have equal economic rights. The cap basis
+    # excludes special governance classes, unconverted notes and equity awards.
+    class_a_shares, class_n_shares = 7_730_103_996, 5_636_538_278
+    closed = ANTHROPIC_IPO_CLOSED.isoformat()
+    proxy = {
+        "source": ANTHROPIC_IPO_CLOSING_RELEASE["id"],
+        "end": closed,
+        "confidence": "low",
+        "method": "ipo_public_offering_size",
+        "offered_class_a_shares": offered_shares,
+        "offer_price_usd": offer_price,
+    }
+    shares = {
+        "source": ANTHROPIC_IPO_PROSPECTUS["id"],
+        "accession": ANTHROPIC_IPO_ACCESSION,
+        "end": closed,
+        "filed": "2026-11-19",
+        "form": "424B4",
+        "method": "ipo_prospectus_common_share_sum",
+        "confidence": "medium",
+        "class_a_shares": class_a_shares,
+        "class_n_shares": class_n_shares,
+        "closing_confirmation": ANTHROPIC_IPO_CLOSING_RELEASE["id"],
+    }
+    return ipo_catalog_company(
+        cik, {"symbol": "ANT", "name": "Anthropic, PBC", "exchange": "Nasdaq"},
+        7372, "Prepackaged Software", offered_shares * offer_price,
+        class_a_shares + class_n_shares,
+        {"source": proxy["source"]},
+        {"source": shares["source"], "accession": ANTHROPIC_IPO_ACCESSION},
+        proxy, shares,
+    )
+
+
 def build_companies(
     identities: dict[int, dict[str, Any]],
     sic_facts: dict[int, SicFact],
     float_facts: dict[int, FrameFact],
     shares_facts: dict[int, SharesFact],
     sic_descriptions: dict[int, str] | None = None,
+    *,
+    ipo_companies: Iterable[dict[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     sic_descriptions = sic_descriptions or {}
     by_sector: dict[str, list[dict[str, Any]]] = {sector: [] for sector in SECTORS}
@@ -4411,6 +4914,30 @@ def build_companies(
             }
         )
 
+    for ipo in ipo_companies:
+        company = dict(ipo)
+        shares = shares_facts.get(int(company["cik"]))
+        if (
+            shares is not None
+            and shares.end > company["shares_as_of"]
+            and company["shares_method"] == "ipo_prospectus_post_offering_shares"
+        ):
+            company.update(
+                shares_outstanding=shares.value,
+                shares_source=shares.source,
+                shares_as_of=shares.end,
+                shares_method=shares.method,
+                shares_confidence=shares.confidence,
+                provenance={
+                    **company["provenance"],
+                    "shares_outstanding": shares_provenance(shares),
+                },
+            )
+        by_sector[company["sector"]].append(company)
+    return rank_companies(by_sector)
+
+
+def rank_companies(by_sector: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
     selected: list[dict[str, Any]] = []
     used_symbols: set[str] = set()
     for sector in SECTORS:
@@ -4496,6 +5023,8 @@ def unresolved_share_reasons(
             reason = "multi_class_unreviewed"
         else:
             reason = "no_recent_unambiguous_price_equivalent_share_basis"
+        if submission := latest_submissions.get(cik):
+            reason = f"{reason}, latest SEC accession {submission['accession']}"
         reasons[cik] = reason
     return reasons
 
@@ -5020,12 +5549,21 @@ def main() -> int:
         reviewed_policies,
         generated_on,
     )
+    ipo_companies, ipo_sources = load_ipo_companies(
+        client, identities, sic_facts, float_facts, sic_descriptions, generated_on
+    )
+    if anthropic := reviewed_anthropic_ipo(
+        identities, sic_facts, float_facts, generated_on
+    ):
+        ipo_companies.append(anthropic)
+        ipo_sources.extend((ANTHROPIC_IPO_PROSPECTUS, ANTHROPIC_IPO_CLOSING_RELEASE))
     initial_companies = build_companies(
         identities,
         sic_facts,
         float_facts,
         initial_shares_facts,
         sic_descriptions,
+        ipo_companies=ipo_companies,
     )
     cover_targets = {
         int(company["cik"])
@@ -5037,6 +5575,11 @@ def main() -> int:
         cik
         for cik in identities
         if reviewed_multiclass_issuer(cik, reviewed_policies)
+    )
+    cover_targets.update(
+        int(company["cik"])
+        for company in ipo_companies
+        if company["shares_method"] == "ipo_prospectus_post_offering_shares"
     )
     latest_submissions, submission_sources = load_latest_inline_submissions(
         client,
@@ -5070,6 +5613,9 @@ def main() -> int:
         )
         if selected is not None:
             filing_shares_facts[cik] = selected
+    reviewed_cover_sources = apply_reviewed_cover_share_fallbacks(
+        identities, latest_submissions, filing_shares_facts
+    )
     shares_facts = merge_share_facts(
         frame_shares_facts,
         filing_shares_facts,
@@ -5083,6 +5629,7 @@ def main() -> int:
         float_facts,
         shares_facts,
         sic_descriptions,
+        ipo_companies=ipo_companies,
     )
     unresolved_reasons = unresolved_share_reasons(
         companies,
@@ -5109,7 +5656,9 @@ def main() -> int:
     sources.extend(fsds_shares_sources)
     sources.extend(submission_sources)
     sources.extend(cover_sources)
+    sources.extend(reviewed_cover_sources)
     sources.append(company_profile_source)
+    sources.extend(ipo_sources)
     coverage = share_coverage(companies, unresolved_reasons)
     catalog = {
         "schema_version": SCHEMA_VERSION,
@@ -5129,11 +5678,11 @@ def main() -> int:
                 "prefer common-shaped symbols, then a concise source-prefix base, "
                 "then SEC order"
             ),
-            "ranking_proxy": "SEC dei:EntityPublicFloat (USD), descending within sector",
+            "ranking_proxy": RANKING_PROXY_DESCRIPTION,
             "market_cap_warning": (
-                "EntityPublicFloat is issuer-level reported public float, not market "
-                "capitalization. Compute market cap only from shares outstanding and a "
-                "contemporaneous market price."
+                "Compute market cap only from shares outstanding and a "
+                "contemporaneous market price. Public float and IPO offering size "
+                "are ranking inputs."
             ),
             "sector_mapping": "SEC SIC mapped to StockTouch's nine legacy sectors",
             "sic_descriptions": (
@@ -5164,9 +5713,10 @@ def main() -> int:
                     "public float and an SEC shares estimate were available"
                 ),
                 "public_float_only": "ranking fact available; shares fact unavailable",
+                "ipo_prospectus": "prospectus offering size and a common-share basis",
             },
             "shares_fallback": (
-                "Recent filing-level SEC cover facts with exact reviewed class "
+                "Recent SEC cover facts with accession-scoped reviewed counts or exact class "
                 "signatures; SEC DEI issuer total; reviewed DEI class sum; US-GAAP "
                 "common-stock issuer total; reviewed equal-economic class sum; "
                 "filer-reported equivalent class; basic weighted-average common "
@@ -5185,7 +5735,7 @@ def main() -> int:
                 "issuer exceptions. Screening does not alter reported SEC values."
             ),
         },
-        "sources": sources,
+        "sources": list({source["id"]: source for source in sources}.values()),
         "companies": companies,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
